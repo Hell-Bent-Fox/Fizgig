@@ -75,6 +75,10 @@ QWEN_IMAGE_21 = FamilyDescription(
 
     driver="fizgig.qwen_image21.driver:QwenImage21Driver",
     modelspec_arch="Qwen-Image-2.1",
+    training_adapter="qwen21_training_adapter",
+    training_adapter_note=("Keeps Qwen 2.1 LoRA training stable: frozen at 1.0 for every training step, off for "
+                           "previews and never in your saved file. Without it Qwen 2.1 LoRAs collapse or wobble "
+                           "(likeness 77 with it vs 56 without in Fizgig's A/B)."),
     implementation="https://github.com/QwenLM/Qwen-Image",
     precisions=("bf16",),             # int8 / nf4 bases not built yet; bf16 needs ~24 GB+
     optimizers=("adamw", "adamw8bit"),

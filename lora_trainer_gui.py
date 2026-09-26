@@ -4090,7 +4090,10 @@ class LoRATrainerGUI:
                            for k in ("base_dit", "distilled_dit", "vae", "text_encoder"))
             krea_ok = all(self.prefs_vars[k].get().strip()
                           for k in ("krea2_raw_dit", "krea2_vae", "krea2_text_encoder"))
-            if klein_ok or krea_ok:
+            # standard-layer families count too: any one fully set up satisfies the prompt
+            described_ok = any(all(self.prefs_vars[k].get().strip() for k in _d.required_pref_keys)
+                               for _d in DESCRIBED_FAMILIES.values())
+            if klein_ok or krea_ok or described_ok:
                 self._setup_prompt_frame.pack_forget()
             else:
                 self._setup_prompt_frame.pack(fill=tk.X, pady=(20, 0),
@@ -4098,7 +4101,8 @@ class LoRATrainerGUI:
 
         # Re-check whenever a model path (either family) changes
         for _mk in ("base_dit", "distilled_dit", "vae", "text_encoder",
-                    "krea2_raw_dit", "krea2_vae", "krea2_text_encoder"):
+                    "krea2_raw_dit", "krea2_vae", "krea2_text_encoder",
+                    *[k for _d in DESCRIBED_FAMILIES.values() for k in _d.required_pref_keys]):
             self.prefs_vars[_mk].trace_add("write", _check_model_paths)
 
         # Initial check (deferred so tools_card exists)
@@ -5480,6 +5484,20 @@ class LoRATrainerGUI:
             foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT, wraplength=720)
         self._minimax_clipstill_hint.grid(row=47, column=0, columnspan=2, sticky=tk.W,
                                           padx=5, pady=(0, 4))
+        # --- Training adapter — standard-layer families (the description names the adapter file) ----
+        self.entries["FAMILY_TRAINING_ADAPTER"] = tk.BooleanVar(
+            value=bool(self.settings.get("FAMILY_TRAINING_ADAPTER", True)))
+        self._family_adapter_cb = ttk.Checkbutton(
+            training_content, text="Training adapter (recommended)",
+            variable=self.entries["FAMILY_TRAINING_ADAPTER"])
+        self._family_adapter_cb.grid(row=48, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(8, 0))
+        self._family_adapter_hint = ttk.Label(
+            training_content, text="", foreground=COLORS["text_explain"], font=HINT_FONT,
+            justify=tk.LEFT, wraplength=720)
+        self._family_adapter_hint.grid(row=49, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(0, 4))
+        for _w in (self._family_adapter_cb, self._family_adapter_hint):
+            _w._fizgig_described_family = "*"   # standard-layer widget: old-family goldens set it aside
+            _w.grid_remove()
 
         # Answers "when do changes take effect?" (issue #40) right where people wonder it.
         ttk.Label(training_content,
@@ -7364,6 +7382,9 @@ class LoRATrainerGUI:
         "RESUME_TRAINING",
     }
 
+    # Training-tab settings that belong to standard-layer (described) families only.
+    _FAMILY_ENTRY_KEYS = frozenset({"FAMILY_TRAINING_ADAPTER"})
+
     def _collect_preset_values(self):
         """Snapshot every user-editable value on the Training tab into a preset dict.
 
@@ -7375,9 +7396,12 @@ class LoRATrainerGUI:
         preset = {}
 
         # Everything in self.entries that's on the Training tab
+        _described = self._family_desc() is not None
         for key, entry in self.entries.items():
             if key in self._NON_TRAINING_ENTRY_KEYS:
                 continue
+            if key in self._FAMILY_ENTRY_KEYS and not _described:
+                continue        # standard-layer settings travel with described families only
             try:
                 if isinstance(entry, (tk.BooleanVar, tk.StringVar, tk.IntVar, tk.DoubleVar)):
                     preset[key] = entry.get()
@@ -8774,7 +8798,8 @@ class LoRATrainerGUI:
         # samples. `native` = "not Klein" (hide Klein-only); `is_krea2` still gates the Krea-2-only
         # widgets, so MiniMax (is_krea2 False) hides them too.
         is_minimax = self._is_minimax_arch()
-        native = is_krea2 or is_minimax
+        desc = self._family_desc()      # standard-layer family, or None (Klein / Krea 2 / H3)
+        native = is_krea2 or is_minimax or desc is not None
 
         # The single-frame preview caveat belongs to MiniMax only — show it under the Base Model
         # selector when that family is picked, hide it otherwise.
@@ -8996,6 +9021,19 @@ class LoRATrainerGUI:
         self._set_training_section_visible("optimizer", "scheduler", True)
         self._set_training_section_visible("timestep", "optimizer", not native)
         self._apply_refmod_visibility()
+        self._generic_training_visibility(desc)
+
+    def _generic_training_visibility(self, desc):
+        """Standard layer: after the shared 'not Klein' hiding above, apply what the family's description
+        declares. A no-op apart from hiding the generic widgets when desc is None (the old families)."""
+        has_adapter = bool(desc is not None and desc.training_adapter)
+        for w in (self._family_adapter_cb, self._family_adapter_hint):
+            self._set_widget_visible(w, has_adapter)
+        if has_adapter:
+            self._family_adapter_hint.config(text=desc.training_adapter_note)
+        if desc is not None and len(desc.network_types) <= 1:
+            for w in (self.labels["NETWORK_TYPE"], self._network_type_rowf):
+                self._set_widget_visible(w, False)
 
     def _apply_refmod_visibility(self):
         """MiniMax H3 RefMod: the Training tab is Output + the RefMod card. Every other
@@ -9067,7 +9105,7 @@ class LoRATrainerGUI:
                 if past_output and id(w) not in sec_ids:
                     anchor = w
                     break
-            native = self._is_krea2_arch() or self._is_minimax_arch()
+            native = self._is_krea2_arch() or self._is_minimax_arch() or self._family_desc() is not None
             for key in ("training", "memory", "timestep", "optimizer", "scheduler"):
                 sec = secs.get(key)
                 if sec is None:
