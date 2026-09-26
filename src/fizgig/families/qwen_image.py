@@ -2,7 +2,7 @@
 
 Facts from the phase-0 research (26 Sep 2026; full notes in the Desktop fizgig_family_descriptions
 RESEARCH_qwen_image_2_1_*.md files). Sources are cited per value. Training entry points stay None until
-the model package existed; they are set now (phase 3, 26 Sep), which puts the family in the Training tab.
+the generic trainer drives this family through its driver, which keeps it out of the Training tab until then.
 """
 from fizgig.families.description import (
     FamilyDescription, LoRAFormat, ModelFile, SamplingSettings, SpeedLoRA,
@@ -72,9 +72,6 @@ QWEN_IMAGE_21 = FamilyDescription(
                "Viggle r128 header",
     ),
 
-    train_script="src/fizgig/scripts/qwen21_train.py",
-    cache_latents_script="src/fizgig/scripts/qwen21_cache_latents.py",
-    cache_text_script="src/fizgig/scripts/qwen21_cache_text.py",
     precisions=("bf16",),             # int8 / nf4 bases not built yet; bf16 needs ~24 GB+
     optimizers=("adamw", "adamw8bit"),
 

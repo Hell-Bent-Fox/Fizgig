@@ -117,7 +117,7 @@ RESOLUTION_STEPS = 16  # Klein 9B resolution step
 # spatial patch) or the latent can't be patchified exactly. MiniMax H3 is 16x VAE with a 2x2
 # patch = 32; on a 16 grid, half the buckets produce an odd latent that the trainer then has to
 # crop (losing up to 16 px of edge). The reference trainers bucket at 32 for exactly this reason.
-BUCKET_RESO_STEPS = {ARCHITECTURE_MINIMAX: 32, "qwenimage21": 32}   # Qwen 2.1: 16x VAE, 2x2 token grouping
+BUCKET_RESO_STEPS = {ARCHITECTURE_MINIMAX: 32}
 
 # Pixel -> stored-latent spatial factor per architecture. Klein's FLUX.2 AE packs 2x2
 # space-to-channel after its /8 encoder, so cached latents are pixel/16; Krea 2's
@@ -126,7 +126,7 @@ BUCKET_RESO_STEPS = {ARCHITECTURE_MINIMAX: 32, "qwenimage21": 32}   # Qwen 2.1: 
 # cache: a 448x544 bucket stores `latent_28x34`). Missing here, latent_cache_matches_reso could
 # only ever return None for H3 — so --skip_existing re-encoded every image anyway, which is
 # exactly the "it re-caches everything" symptom.
-LATENT_SPATIAL_FACTOR = {"klein9b": 16, "krea2": 8, ARCHITECTURE_MINIMAX: 16, "qwenimage21": 16}
+LATENT_SPATIAL_FACTOR = {"klein9b": 16, "krea2": 8, ARCHITECTURE_MINIMAX: 16}
 
 
 # ---------------------------------------------------------------------------

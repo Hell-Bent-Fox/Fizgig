@@ -33,10 +33,11 @@ from fizgig.dataset.config import (BlueprintGenerator, ConfigSanitizer, generate
 from fizgig.krea2.trainer import AdaptiveLR
 from fizgig.qwen_image21 import sampling as S
 from fizgig.qwen_image21.lora import QwenLoRA
-from fizgig.training.metadata import (ARCHITECTURE_QWEN21, build_metadata, latest_sample_image, resolve_title,
+from fizgig.training.metadata import (build_metadata, latest_sample_image, resolve_title,
                                       thumbnail_data_uri)
 from fizgig.training.train_utils import LossRecorder, prune_state_dirs
 
+ARCHITECTURE_QWEN21 = "qwenimage21"   # interim: moves to the family driver (standard layer)
 logger = logging.getLogger(__name__)
 
 ADAPTER = "training_adapter"

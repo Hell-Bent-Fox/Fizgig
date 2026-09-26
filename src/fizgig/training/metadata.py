@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 ARCHITECTURE_KLEIN_9B = "klein9b"
 ARCHITECTURE_KLEIN_9B_FULL = "klein_9b"
 ARCHITECTURE_KREA2 = "krea2"  # Krea 2 single-stream MMDiT (Qwen-Image VAE + Qwen3-VL-4B)
-ARCHITECTURE_QWEN21 = "qwenimage21"  # Qwen Image 2.1 (64-ch 16x VAE + Qwen3-VL-8B); families/qwen_image.py arch_id
 # NOTE: no underscore — the dataset cache filename is {basename}_{WxH}_{arch}.safetensors, parsed
 # by split("_") with the size at tokens[-2]. An arch string with an underscore (e.g. "minimax_h3")
 # shifts that index and breaks size parsing, so the cache-facing id is a single token (same reason
@@ -33,8 +32,6 @@ IMPL_KLEIN = "https://github.com/black-forest-labs/flux2"
 ARCH_KREA2 = "Krea-2"
 IMPL_KREA2 = "https://github.com/krea-ai/krea-2"
 ARCH_MINIMAX = "MiniMax-H3"
-ARCH_QWEN21 = "Qwen-Image-2.1"
-IMPL_QWEN21 = "https://github.com/QwenLM/Qwen-Image"
 IMPL_MINIMAX = "https://github.com/MiniMax-AI/MiniMax-H3"
 
 ADAPTER_LORA = "lora"
@@ -125,9 +122,6 @@ def build_metadata(
     elif architecture == ARCHITECTURE_MINIMAX:
         arch = ARCH_MINIMAX
         impl = IMPL_MINIMAX
-    elif architecture == ARCHITECTURE_QWEN21:
-        arch = ARCH_QWEN21
-        impl = IMPL_QWEN21
     else:
         raise ValueError(f"Unknown architecture: {architecture}")
 

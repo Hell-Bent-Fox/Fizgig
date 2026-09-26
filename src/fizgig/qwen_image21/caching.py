@@ -16,8 +16,8 @@ from safetensors.torch import save_file
 
 from fizgig.dataset.image_dataset import ItemInfo, dtype_to_str
 from fizgig.qwen_image21 import sampling as S
-from fizgig.training.metadata import ARCHITECTURE_QWEN21
 
+ARCHITECTURE_QWEN21 = "qwenimage21"   # interim: moves to the family driver (standard layer)
 logger = logging.getLogger(__name__)
 
 

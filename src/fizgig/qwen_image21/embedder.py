@@ -24,6 +24,21 @@ TEMPLATE_T2I = (f"<|im_start|>system\n{SYS_PROMPT}<|im_end|>\n"
                 "<|im_start|>assistant\n")
 
 
+def _disable_broken_hf_transfer():
+    """Pod images often export HF_HUB_ENABLE_HF_TRANSFER=1 without the hf_transfer package; huggingface_hub then
+    refuses every download (here: the tokenizer files). Fall back to the normal downloader instead."""
+    if os.environ.get("HF_HUB_ENABLE_HF_TRANSFER", "0") not in ("", "0", "false", "False"):
+        try:
+            import hf_transfer  # noqa: F401
+        except ImportError:
+            os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+            try:
+                from huggingface_hub import constants
+                constants.HF_HUB_ENABLE_HF_TRANSFER = False
+            except Exception:
+                pass
+
+
 def _text_encoder_config(config_path=None) -> dict:
     here = os.path.join(os.path.dirname(__file__), "qwen3vl_8b_config.json")
     with open(config_path or here, encoding="utf-8") as f:
@@ -39,6 +54,7 @@ class Qwen21TextEncoder:
         from fizgig.krea2.safetensors_utils import load_split_weights
 
         self.device, self.dtype = torch.device(device), dtype
+        _disable_broken_hf_transfer()
         # Default: the official repo's processor/ files (a few MB, cached by huggingface_hub; the fetcher
         # warms the cache so this works offline).
         self.tokenizer = (AutoTokenizer.from_pretrained(tokenizer_dir) if tokenizer_dir else
