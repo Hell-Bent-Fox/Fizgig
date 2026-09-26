@@ -25,6 +25,7 @@ class ModelFile:
     size_gb: float = 0.0
     note: str = ""                    # one plain line shown under the row
     local_name: str = ""              # name in models/ when the repo's own is generic (diffusion_pytorch_model...)
+    role: str = ""                    # "dit" | "vae" | "text_encoder" | "training_adapter" | "speed_lora" | ""
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,9 @@ class FamilyDescription:
     preview_width: int = 1024
     preview_height: int = 1024
 
+    # built-in Training-tab presets: ((name, {GUI setting key: value}), ...); the first is applied on a first visit
+    presets: tuple = ()
+
     # workbench tabs that support this family: {"repair": "module.Class", ...}; absent = hidden
     workbench: dict = field(default_factory=dict)
 
@@ -158,6 +162,10 @@ class FamilyDescription:
     @property
     def required_pref_keys(self) -> tuple:
         return tuple(f.pref_key for f in self.model_files if f.required)
+
+    def pref_for(self, role: str) -> str:
+        """Pref key of the model file with this role ("" if the family has none)."""
+        return next((f.pref_key for f in self.model_files if f.role == role), "")
 
     def block_ids(self) -> list:
         return [f"{self.block_prefix}_{i}" for i in range(self.n_blocks)]
@@ -224,6 +232,10 @@ class FamilyDescription:
                 problems.append(f"speed LoRA {sl.name!r} is missing repo/file/source")
         if self.driver and ":" not in self.driver:
             problems.append("driver must be 'module.path:ClassName'")
+        if self.driver and not all(self.pref_for(r) for r in ("dit", "vae", "text_encoder")):
+            problems.append("a trainable family needs model files with roles dit, vae and text_encoder")
+        if self.training_adapter and self.pref_for("training_adapter") != self.training_adapter:
+            problems.append("training_adapter must name the model file whose role is training_adapter")
         if self.driver and not (self.modelspec_arch and self.implementation):
             problems.append("a trainable family needs modelspec_arch and implementation for LoRA metadata")
         return problems

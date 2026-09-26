@@ -6311,6 +6311,9 @@ class LoRATrainerGUI:
         """Return the built-in preset dict for an architecture. Krea 2 gets its single
         defaults entry (Klein's block/timestep/adaptive presets don't apply); everything
         else gets the full Klein built-in set."""
+        desc = self._family_desc(arch)
+        if desc is not None:            # standard layer: the family's own presets, from its description
+            return dict(desc.presets)
         cfg = ARCHITECTURES.get(arch, {})
         if cfg.get("is_refmod"):
             return REFMOD_BUILT_IN_PRESETS
@@ -7384,6 +7387,21 @@ class LoRATrainerGUI:
 
     # Training-tab settings that belong to standard-layer (described) families only.
     _FAMILY_ENTRY_KEYS = frozenset({"FAMILY_TRAINING_ADAPTER"})
+
+    def _generic_validate_paths(self, desc):
+        """Standard layer: every required model file of a described family (plus its training adapter when the
+        toggle is on) must be set on Preferences and exist."""
+        errors = []
+        need = [f for f in desc.model_files if f.required]
+        if desc.training_adapter and self.entries["FAMILY_TRAINING_ADAPTER"].get():
+            need += [f for f in desc.model_files if f.pref_key == desc.training_adapter]
+        for f in need:
+            path = self._krea2_pref(f.pref_key)
+            if not path:
+                errors.append(f"{f.label} path is empty (set it on the Preferences tab)")
+            elif not os.path.exists(path):
+                errors.append(f"{f.label} file does not exist: {path}")
+        return errors
 
     def _collect_preset_values(self):
         """Snapshot every user-editable value on the Training tab into a preset dict.
@@ -31514,7 +31532,11 @@ class LoRATrainerGUI:
         elif not os.path.exists(dataset_config):
             errors.append(f"Dataset config file does not exist: {dataset_config}")
 
-        if config.get("is_minimax"):
+        _desc = self._family_desc()
+        if _desc is not None:
+            # standard layer: the family's required files come from its description
+            errors.extend(self._generic_validate_paths(_desc))
+        elif config.get("is_minimax"):
             # MiniMax H3 reads its three model paths from Preferences (minimax_*). All are
             # required: the DiT to train (pruned int8 or bf16), the video VAE + Qwen3-VL-32B TE.
             for pref_key, label in (
@@ -32109,6 +32131,9 @@ class LoRATrainerGUI:
             "MINIMAX_TRAIN_ADALN": bool(self.entries["MINIMAX_TRAIN_ADALN"].get()),
             "MINIMAX_TRAIN_REFINER": bool(self.entries["MINIMAX_TRAIN_REFINER"].get()),
             "MINIMAX_ADAPTER": str(self.entries["MINIMAX_ADAPTER"].get()),
+            # standard-layer settings ride only with described families
+            **({"FAMILY_TRAINING_ADAPTER": bool(self.entries["FAMILY_TRAINING_ADAPTER"].get())}
+               if self._family_desc() is not None else {}),
             # experiment/tread: both ticks must be copied here or the builder reads a stale value
             "MINIMAX_TREAD": bool(self.entries["MINIMAX_TREAD"].get()),
             "MINIMAX_CLIP_STILL": bool(self.entries["MINIMAX_CLIP_STILL"].get()),
@@ -32383,6 +32408,8 @@ class LoRATrainerGUI:
         # pause exit-handler: an FT pause leaves a full checkpoint rather than a state dir,
         # and the Tk checkbox can be flipped mid-run, so the truth is recorded at launch.
         self._launched_ft_family = None
+        if (_desc := self._family_desc()) is not None:
+            return self._generic_train_command(_desc)
         if config.get("is_krea2"):
             if bool(getattr(self, "krea2_finetune_var", None) and self.krea2_finetune_var.get()):
                 self._launched_ft_family = "krea2"
@@ -32720,6 +32747,8 @@ class LoRATrainerGUI:
 
     def build_cache_latents_command(self, config):
         """Build the cache latents command based on architecture"""
+        if (_desc := self._family_desc()) is not None:
+            return self._generic_cache_command(_desc, "latents")
         if config.get("is_krea2"):
             return self._build_krea2_cache_command("krea2_cache_latents.py",
                                                    "--vae", self._krea2_pref("krea2_vae"))
@@ -32777,6 +32806,8 @@ class LoRATrainerGUI:
 
     def build_cache_text_command(self, config):
         """Build the cache text encoder command based on architecture"""
+        if (_desc := self._family_desc()) is not None:
+            return self._generic_cache_command(_desc, "text")
         if config.get("is_krea2"):
             return self._build_krea2_cache_command("krea2_cache_text.py",
                                                    "--text_encoder", self._krea2_pref("krea2_text_encoder"))
@@ -32899,6 +32930,96 @@ class LoRATrainerGUI:
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
         return path
+
+    def _generic_cache_command(self, desc, stage):
+        """Standard layer: families/cache.py for any described family (latents with its VAE, text with its
+        text encoder)."""
+        model = self._krea2_pref(desc.pref_for("vae" if stage == "latents" else "text_encoder"))
+        cmd = [self._venv_python(), os.path.join(FIZGIG_DIR, desc.cache_script), "--family", desc.key,
+               "--stage", stage, "--dataset_config", self.settings["DATASET_CONFIG"], "--model", model]
+        if stage == "latents":
+            cmd.append("--skip_existing")   # validated against the current bucket (see the H3 note)
+        return cmd
+
+    def _generic_train_command(self, desc):
+        """Standard layer: families/train.py for any described family. Model paths come from the description's
+        roles, training settings from the shared Training-tab knobs, previews from the Samples tab."""
+        st = self.settings
+        cmd = [self._venv_python(), os.path.join(FIZGIG_DIR, desc.train_script), "--family", desc.key,
+               "--dit", self._krea2_pref(desc.pref_for("dit")),
+               "--dataset_config", st["DATASET_CONFIG"],
+               "--output_dir", st["LORA_OUTPUT_DIR"], "--output_name", st["LORA_NAME"],
+               "--network_dim", str(st["NETWORK_DIM"]), "--network_alpha", str(st["NETWORK_ALPHA"]),
+               "--learning_rate", str(st["LEARNING_RATE"]), "--max_train_epochs", str(st["MAX_TRAIN_EPOCHS"]),
+               "--save_every_n_epochs", str(st["SAVE_EVERY_N_EPOCHS"]), "--seed", str(st["SEED"])]
+        cmd += self._state_flags()
+        if (st.get("RESUME_TRAINING") or "").strip():
+            cmd += ["--resume", st["RESUME_TRAINING"].strip()]
+        if desc.training_adapter and st.get("FAMILY_TRAINING_ADAPTER", True):
+            cmd += ["--training_adapter", self._krea2_pref(desc.training_adapter)]
+        ctx = (st.get("CONTEXT_LORA_PATH") or "").strip()
+        if ctx:
+            cmd += ["--context_lora_path", ctx,
+                    "--context_lora_strength", (st.get("CONTEXT_LORA_STRENGTH") or "1.0").strip() or "1.0"]
+        if st.get("ADAPTIVE_LR"):
+            cmd += ["--adaptive_lr",
+                    "--adaptive_lr_min", str(st.get("ADAPTIVE_LR_MIN", "1e-4")).split(" ")[0],
+                    "--adaptive_lr_max", str(st.get("ADAPTIVE_LR_MAX", "2e-4")).split(" ")[0]]
+        else:
+            sched = (st.get("LR_SCHEDULER") or "constant").strip() or "constant"
+            if sched != "constant":
+                cmd += ["--lr_scheduler", sched]
+            try:
+                if int(float(str(st.get("LR_WARMUP_STEPS", "") or 0))) > 0:
+                    cmd += ["--lr_warmup_steps", str(int(float(st["LR_WARMUP_STEPS"])))]
+            except ValueError:
+                pass
+        try:
+            if abs(float(str(st.get("MAX_GRAD_NORM", "") or 1.0)) - 1.0) > 1e-9:
+                cmd += ["--max_grad_norm", str(float(st["MAX_GRAD_NORM"]))]
+        except ValueError:
+            pass
+        if str(st.get("OPTIMIZER_TYPE", "") or "").strip():
+            cmd += ["--optimizer_type", str(st["OPTIMIZER_TYPE"]).strip()]
+        if str(st.get("OPTIMIZER_ARGS", "") or "").strip():
+            cmd += ["--optimizer_args", str(st["OPTIMIZER_ARGS"]).strip()]
+        for key, flag in (("METADATA_TITLE", "--metadata_title"), ("METADATA_AUTHOR", "--metadata_author"),
+                          ("METADATA_DESCRIPTION", "--metadata_description"),
+                          ("METADATA_LICENSE", "--metadata_license"), ("METADATA_TAGS", "--metadata_tags"),
+                          ("METADATA_THUMBNAIL", "--metadata_thumbnail")):
+            val = str(st.get(key, "") or "").strip()
+            if val:
+                cmd += [flag, val]
+        trig = str(st.get("METADATA_TRIGGER_PHRASE", "") or "").strip() or (
+            self.caption_trigger_var.get().strip() if hasattr(self, "caption_trigger_var") else "")
+        if trig and trig.lower() != "trigger_word":
+            cmd += ["--metadata_trigger_phrase", trig]
+        if self.sample_enabled_var.get():
+            prompts = self._write_krea2_sample_prompts(filename=f"{desc.key}_prompts.txt")
+            every = self.sample_every_n_epochs_var.get().strip()
+            if prompts and every.isdigit() and int(every) > 0:
+                cmd += ["--sample_prompts", prompts, "--sample_every_n_epochs", every,
+                        "--vae", self._krea2_pref(desc.pref_for("vae")),
+                        "--text_encoder", self._krea2_pref(desc.pref_for("text_encoder")),
+                        "--sample_width", self.sample_width_var.get().strip() or str(desc.preview_width),
+                        "--sample_height", self.sample_height_var.get().strip() or str(desc.preview_height)]
+                if self.sample_steps_var.get().strip():
+                    cmd += ["--sample_steps", self.sample_steps_var.get().strip()]
+                try:
+                    cfg = float(self.sample_cfg_scale_var.get().strip() or desc.preview_cfg)
+                except ValueError:
+                    cfg = desc.preview_cfg
+                cmd += ["--sample_cfg_scale", str(cfg)]
+                neg = self.sample_negative_var.get().strip() if getattr(self, "sample_negative_var", None) else ""
+                if neg and cfg > 1.0:
+                    cmd += ["--sample_negative", neg]
+                try:
+                    cmd += ["--sample_seed", str(int(self.sample_seed_var.get().strip()))]
+                except ValueError:
+                    pass
+                if getattr(self, "sample_at_first_var", None) and self.sample_at_first_var.get():
+                    cmd.append("--sample_at_first")
+        return cmd
 
     def _build_krea2_train_command(self):
         """Build the native Krea 2 training command (RAW base, fp8 Turbo previews).

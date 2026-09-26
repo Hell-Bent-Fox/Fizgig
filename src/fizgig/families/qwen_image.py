@@ -26,24 +26,24 @@ QWEN_IMAGE_21 = FamilyDescription(
     model_files=(
         ModelFile("qwen21_dit", "Qwen Image 2.1 DiT", True, _COMFY,
                   "diffusion_models/qwen_image_2.1_bf16.safetensors", 14.23,
-                  "bf16 base for training. ComfyUI's single file ships the MLP pre-fused (gate_up)."),
+                  "bf16 base for training. ComfyUI's single file ships the MLP pre-fused (gate_up).", role="dit"),
         ModelFile("qwen21_vae", "Qwen Image 2.1 VAE", True, "Qwen/Qwen-Image-2.1",
                   "vae/diffusion_pytorch_model.safetensors", 1.35,
                   "Its own VAE (64 latent channels, 16x, RGBA), the diffusers-format file from the official "
                   "repo. Not the Krea 2 / Qwen-Image VAE.",
-                  local_name="qwen_image_2.1_vae_diffusers.safetensors"),
+                  local_name="qwen_image_2.1_vae_diffusers.safetensors", role="vae"),
         ModelFile("qwen21_text_encoder", "Qwen3-VL-8B text encoder", True, _COMFY,
                   "text_encoders/qwen3vl_8b_bf16.safetensors", 17.53,
-                  "Used for caching only, then unloaded before training steps."),
+                  "Used for caching only, then unloaded before training steps.", role="text_encoder"),
         ModelFile("qwen21_training_adapter", "Fizgig training adapter", False,
               "shootthesound/Fizgig-Qwen-Image-2.1-Training-Adapter",
               "fizgig_qwen_image_2.1_training_adapter.safetensors", 0.08,
               "Frozen during training, off in previews and saved LoRAs. Without it Qwen 2.1 LoRAs collapse or "
-              "wobble; with it likeness was 77 vs 56 in Fizgig's A/B."),
+              "wobble; with it likeness was 77 vs 56 in Fizgig's A/B.", role="training_adapter"),
     ModelFile("qwen21_turbo_lora", "Viggle turbo LoRA (previews)", False,
                   "Viggle/Qwen-Image-2.1-viggle-turbo",
                   "Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r128.safetensors", 0.68,
-                  "Optional: fast in-training previews. Applied unmerged."),
+                  "Optional: fast in-training previews. Applied unmerged.", role="speed_lora"),
     ),
     text_encoder_label="Qwen3-VL-8B",
     vae_label="Qwen Image 2.1 VAE",
@@ -128,6 +128,17 @@ QWEN_IMAGE_21 = FamilyDescription(
     preview_width=1024,
     preview_height=1024,
 
+    presets=(
+        # The recipe measured on 26 Sep 2026 (170-image face set): portrait likeness 76-77 from epoch 6 on, best
+        # around step 2700 (~16 epochs at 170 images). Rank 32, Fizgig adapter on, Adaptive LR 1e-4..2e-4.
+        ("✨ Qwen 2.1 Standard (rank 32, training adapter, adaptive LR)", {
+            "NETWORK_DIM": 32, "NETWORK_ALPHA": 32, "LEARNING_RATE": 1e-4,
+            "MAX_TRAIN_EPOCHS": 16, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42,
+            "ADAPTIVE_LR": True, "ADAPTIVE_LR_MIN": "1e-4", "ADAPTIVE_LR_MAX": "2e-4",
+            "OPTIMIZER_TYPE": "adamw", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
+            "DATASET_MEGAPIXELS": "1.0", "FAMILY_TRAINING_ADAPTER": True,
+        }),
+    ),
     workbench={},                     # no workbench tab yet: training first (Peter, #155)
 
     notes=(
