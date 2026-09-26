@@ -37,6 +37,7 @@ class SamplingSettings:
     sampler: str = "euler"
     scheduler: str = "simple"
     sigmas: Optional[tuple] = None    # explicit schedule when the model needs one
+    options: tuple = ()               # driver-specific sampler options as (name, value) pairs
     negative_prompt: bool = False     # whether a negative prompt does anything at this CFG
     note: str = ""
     source: str = ""
@@ -52,6 +53,7 @@ class SpeedLoRA:
     strength: float
     settings: SamplingSettings
     load_unmerged: bool = False       # merging into the weights loses part of it
+    pref_key: str = ""                # the model file (Preferences row) holding it
     community_settings: tuple = ()    # (description, source) pairs: how people actually use it
     caveats: tuple = ()
     source: str = ""
@@ -66,8 +68,17 @@ class LoRAFormat:
     block_modules: tuple              # per-block Linears the LoRA targets
     alpha_key: str = "{prefix}.alpha"
     kohya: bool = False               # True = the lora_unet_ convention used by Klein/Krea 2/H3
+    file_prefix: str = ""             # what precedes a module path in every key, e.g. "transformer."
     note: str = ""
     source: str = ""
+
+    def module_of(self, key: str) -> Optional[str]:
+        """Dotted module path of a down-weight key ('transformer.modulation.1.lora_A.weight' -> 'modulation.1'),
+        None for any other key."""
+        tail = f".{self.down}.weight"
+        if not (key.startswith(self.file_prefix) and key.endswith(tail)):
+            return None
+        return key[len(self.file_prefix):-len(tail)]
 
     def key(self, block: int, module: str, which: str) -> str:
         """which: "down" or "up"."""
@@ -124,6 +135,7 @@ class FamilyDescription:
     preview_cfg: float = 1.0
     preview_width: int = 1024
     preview_height: int = 1024
+    preview_speed_lora: str = ""      # name of the SpeedLoRA previews use when its file is set in Preferences
 
     # built-in Training-tab presets: ((name, {GUI setting key: value}), ...); the first is applied on a first visit
     presets: tuple = ()
@@ -169,6 +181,10 @@ class FamilyDescription:
 
     def block_ids(self) -> list:
         return [f"{self.block_prefix}_{i}" for i in range(self.n_blocks)]
+
+    def preview_speed(self):
+        """The SpeedLoRA used for in-training previews, or None."""
+        return next((sl for sl in self.speed_loras if sl.name == self.preview_speed_lora), None)
 
     def default_sampling(self) -> Optional[SamplingSettings]:
         return self.sampling[0] if self.sampling else None

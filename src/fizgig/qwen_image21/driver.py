@@ -75,11 +75,15 @@ class QwenImage21Driver(FamilyDriver):
 
     # ---- sampling -------------------------------------------------------------------------------
     @torch.no_grad()
-    def generate(self, dit, cond, width, height, *, steps, seed, cfg=1.0, neg_cond=None):
+    def generate(self, dit, cond, width, height, *, steps, seed, cfg=1.0, neg_cond=None, sigmas=None, options=()):
         device = next(dit.parameters()).device
         neg = neg_cond["hidden_states"] if (neg_cond is not None and cfg > 1.0) else None
+        opts = dict(options)
+        shift_terminal = opts.get("shift_terminal", S.SHIFT_TERMINAL)
+        if sigmas is not None and len(sigmas) != steps:
+            sigmas = None                   # an explicit schedule only applies at its own step count
         return S.sample(dit, cond["hidden_states"], height, width, steps=steps, seed=seed, cfg=cfg, neg_emb=neg,
-                        device=device)
+                        device=device, sigmas=sigmas, shift_terminal=shift_terminal)
 
     @torch.no_grad()
     def decode(self, vae, latents, width, height):

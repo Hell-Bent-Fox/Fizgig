@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 ADAPTER = "training_adapter"
 CONTEXT = "context"
+SPEED = "speed_lora"
 
 
 class _Collator:
@@ -110,30 +111,99 @@ def _load_state(state_dir, net, optimizer, device):
     return int(meta.get("epoch", 0)), int(meta.get("global_step", 0)), meta
 
 
+def _preview_vram(tag, reset_peak=False):
+    """One line of VRAM state at a preview waypoint (the same lines Krea 2 logs, #123)."""
+    try:
+        if not torch.cuda.is_available():
+            return
+        if reset_peak:
+            torch.cuda.reset_peak_memory_stats()
+        a = torch.cuda.memory_allocated() / 1024 ** 3
+        r = torch.cuda.memory_reserved() / 1024 ** 3
+        pk = torch.cuda.max_memory_reserved() / 1024 ** 3
+        f = torch.cuda.mem_get_info()[0] / 1024 ** 3
+        logger.info(f"[preview-vram] {tag}: allocated {a:.2f} GB, reserved {r:.2f} GB (peak {pk:.2f} GB), "
+                    f"free {f:.2f} GB")
+    except Exception:
+        pass
+
+
+def _small_card_previews():
+    """Cards under 20 GB get the low-memory preview treatment (Krea 2's rule): the training DiT parks on CPU for
+    the VAE decode and the preview canvas caps at 768 px. FIZGIG_PREVIEW_LOWMEM=1/0 forces it; FIZGIG_SIM_VRAM_GB
+    simulates a smaller card."""
+    ov = os.environ.get("FIZGIG_PREVIEW_LOWMEM", "").strip()
+    if ov in ("0", "1"):
+        return ov == "1"
+    try:
+        if not torch.cuda.is_available():
+            return False
+        sim = os.environ.get("FIZGIG_SIM_VRAM_GB", "").strip()
+        total = float(sim) if sim else torch.cuda.get_device_properties(0).total_memory / 1e9
+        return total < 20.0
+    except Exception:
+        return False
+
+
+def _cap_canvas(width, height, cap=768):
+    long = max(width, height)
+    if long <= cap:
+        return width, height
+    s = cap / long
+    return max(64, int(width * s) // 32 * 32), max(64, int(height * s) // 32 * 32)
+
+
 @torch.no_grad()
 def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_name, steps, cfg, neg, width,
-                     height, seed, ema=None):
-    """Previews on the live model with the training adapter OFF (the deployment setup). File names match the
-    other trainers so the GUI gallery reads them: <name>_e<epoch>_<idx>_<timestamp>_<seed>.png"""
+                     height, seed, ema=None, speed=None, lowmem=False):
+    """Previews on the RESIDENT training model: training adapter OFF (the deployment setup), the family's speed
+    LoRA ON if one is loaded (it lives on CPU between previews). On small cards the DiT parks on CPU for the
+    decode. File names match the other trainers so the GUI gallery reads them:
+    <name>_e<epoch>_<idx>_<timestamp>_<seed>.png. `speed` is the speed LoRA's SamplingSettings or None."""
     os.makedirs(out_dir, exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    device = next(iter(dit.parameters())).device
+    _preview_vram("preview start", reset_peak=True)
     net.set_enabled(ADAPTER, False)
+    if speed is not None:
+        net.move_adapter(SPEED, device)
+        net.set_enabled(SPEED, True)
     if ema is not None:
         ema.swap_in()
     was_training = dit.training
     dit.eval()
     paths = []
     try:
+        lats = []
         for i, cond in enumerate(encoded):
-            lat = driver.generate(dit, cond, width, height, steps=steps, seed=seed + i, cfg=cfg, neg_cond=neg)
+            if speed is not None:
+                lats.append(driver.generate(dit, cond, width, height, steps=steps, seed=seed + i, cfg=speed.cfg,
+                                            sigmas=speed.sigmas, options=speed.options))
+            else:
+                lats.append(driver.generate(dit, cond, width, height, steps=steps, seed=seed + i, cfg=cfg,
+                                            neg_cond=neg))
+        if lowmem:                          # #123: never hold the training DiT and the VAE decode together
+            _preview_vram("before decode")
+            dit.to("cpu")
+            torch.cuda.empty_cache()
+            _preview_vram("DiT parked for the decode")
+        for i, lat in enumerate(lats):
             p = os.path.join(out_dir, f"{output_name}_e{epoch:06d}_{i:02d}_{ts}_{seed + i}.png")
             driver.decode(vae, lat, width, height).save(p)
             paths.append(p)
     finally:
+        if lowmem:
+            dit.to(device)
+            _preview_vram("after decode, DiT restored")
         if ema is not None:
             ema.swap_out()
+        if speed is not None:
+            net.set_enabled(SPEED, False)
+            net.move_adapter(SPEED, "cpu")
         net.set_enabled(ADAPTER, True)
         dit.train(was_training)
+        torch.cuda.empty_cache()
+        _preview_vram("after preview cleanup")
     logger.info(f"[sample] epoch {epoch}: {len(paths)} preview(s) -> {out_dir}")
     return paths
 
@@ -143,6 +213,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  save_state_on_train_end=False, keep_last_n_states=2, seed=42, precision="bf16",
                  training_adapter=None, training_adapter_strength=1.0,
                  context_lora_path=None, context_lora_strength=1.0, min_timestep=0.0, max_timestep=1.0,
+                 speed_lora=None,
                  vae_path=None, te_path=None, sample_prompts=None, sample_every_n_epochs=0, sample_width=None,
                  sample_height=None, sample_steps=None, sample_cfg_scale=None, sample_negative=None,
                  sample_at_first=False, sample_seed=42,
@@ -157,10 +228,19 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         raise RuntimeError(f"unknown or untrainable family {family!r}")
     driver = desc.load_driver()
     arch = desc.arch_id
-    sample_steps = sample_steps or desc.preview_steps
+    speed_desc = desc.preview_speed() if speed_lora else None
+    if speed_lora and speed_desc is None:
+        logger.warning(f"[sample] {desc.display_name} declares no preview speed LoRA - ignoring --speed_lora")
+        speed_lora = None
+    sample_steps = sample_steps or (speed_desc.settings.steps if speed_desc else desc.preview_steps)
     sample_cfg_scale = desc.preview_cfg if sample_cfg_scale is None else sample_cfg_scale
     sample_width = sample_width or desc.preview_width
     sample_height = sample_height or desc.preview_height
+    lowmem = _small_card_previews()
+    if lowmem and max(sample_width, sample_height) > 768:
+        sample_width, sample_height = _cap_canvas(sample_width, sample_height)
+        logger.info(f"[preview] card under 20 GB: preview canvas capped to {sample_width}x{sample_height} and the "
+                    f"DiT parks on CPU for the decode (#123). FIZGIG_PREVIEW_LOWMEM=0 turns this off.")
     device = torch.device("cuda")
     torch.manual_seed(seed)
     os.makedirs(output_dir, exist_ok=True)
@@ -216,6 +296,12 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         n = net.add_file(context_lora_path, CONTEXT, context_lora_strength)
         logger.info(f"[context] {os.path.basename(context_lora_path)} frozen + active at {context_lora_strength:g} "
                     f"({n} Linears)")
+    if speed_lora and encoded is not None:
+        n = net.add_file(speed_lora, SPEED, speed_desc.strength)
+        net.set_enabled(SPEED, False)
+        net.move_adapter(SPEED, "cpu")
+        logger.info(f"[sample] {speed_desc.name}: {n} Linears, on CPU between previews, on only while they render "
+                    f"({sample_steps} steps)")
     net.add_trainable(network_dim, network_alpha)
     params = net.parameters()
     logger.info(f"LoRA rank {network_dim} alpha {network_alpha:g}: {len(net.trainable_modules())} modules, "
@@ -285,7 +371,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             return
         _render_previews(driver, dit, net, vae, encoded, sample_dir, epoch, output_name=output_name,
                          steps=sample_steps, cfg=sample_cfg_scale, neg=neg, width=sample_width, height=sample_height,
-                         seed=sample_seed, ema=ema)
+                         seed=sample_seed, ema=ema,
+                         speed=speed_desc.settings if (speed_lora and speed_desc) else None, lowmem=lowmem)
         last_prompt[0] = sample_prompts[-1] if sample_prompts else None
 
     def state(epoch):
@@ -378,6 +465,8 @@ def setup_parser():
     p.add_argument("--training_adapter_strength", type=float, default=1.0)
     p.add_argument("--context_lora_path", default=None)
     p.add_argument("--context_lora_strength", type=float, default=1.0)
+    p.add_argument("--speed_lora", default=None,
+                   help="The family's preview speed LoRA (description.preview_speed_lora): previews only")
     p.add_argument("--min_timestep", type=float, default=0.0, help="Noise band floor (0-1)")
     p.add_argument("--max_timestep", type=float, default=1.0, help="Noise band ceiling (0-1)")
     p.add_argument("--vae", default=None)
@@ -430,7 +519,8 @@ def main():
         save_state_on_train_end=a.save_state_on_train_end, keep_last_n_states=a.keep_last_n_states, seed=a.seed,
         training_adapter=a.training_adapter, training_adapter_strength=a.training_adapter_strength,
         context_lora_path=a.context_lora_path, context_lora_strength=a.context_lora_strength,
-        min_timestep=a.min_timestep, max_timestep=a.max_timestep, vae_path=a.vae, te_path=a.text_encoder,
+        min_timestep=a.min_timestep, max_timestep=a.max_timestep, speed_lora=a.speed_lora,
+        vae_path=a.vae, te_path=a.text_encoder,
         sample_prompts=prompts, sample_every_n_epochs=a.sample_every_n_epochs, sample_width=a.sample_width,
         sample_height=a.sample_height, sample_steps=a.sample_steps, sample_cfg_scale=a.sample_cfg_scale,
         sample_negative=a.sample_negative, sample_at_first=a.sample_at_first, sample_seed=a.sample_seed,

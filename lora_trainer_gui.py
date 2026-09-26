@@ -13429,9 +13429,19 @@ class LoRATrainerGUI:
             self.use_distilled_check.configure(
                 state=tk.DISABLED, text=f"Use Distilled model for samples — Klein only ({desc.display_name} previews "
                                         f"run on the model being trained)")
+        sp = desc.preview_speed()
+        speed_on = bool(sp and sp.pref_key and self._krea2_pref(sp.pref_key)
+                        and os.path.exists(self._krea2_pref(sp.pref_key)))
+        want = sp.settings.steps if speed_on else desc.preview_steps
+        other = desc.preview_steps if speed_on else (sp.settings.steps if sp else None)
+        if hasattr(self, "sample_steps_var") and self.sample_steps_var.get().strip() in ("", str(other)):
+            self.sample_steps_var.set(str(want))       # only switch between the two defaults, never a user value
         if hasattr(self, "sample_steps_note"):
             self.sample_steps_note.configure(
-                text=f"{desc.display_name}: {desc.preview_steps} steps at CFG {desc.preview_cfg:g} by default")
+                text=(f"{desc.display_name}: {sp.settings.steps} steps with the {sp.name} (set in Preferences), "
+                      f"on the model being trained" if speed_on else
+                      f"{desc.display_name}: {desc.preview_steps} steps at CFG {desc.preview_cfg:g}"
+                      + (f" - set the {sp.name} in Preferences for {sp.settings.steps}-step previews" if sp else "")))
         if hasattr(self, "krea2_engine_frame"):
             self.krea2_engine_frame.grid_remove()
             self.krea2_engine_note.grid_remove()
@@ -33031,6 +33041,10 @@ class LoRATrainerGUI:
         if trig and trig.lower() != "trigger_word":
             cmd += ["--metadata_trigger_phrase", trig]
         if self.sample_enabled_var.get():
+            sp = desc.preview_speed()
+            speed_path = self._krea2_pref(sp.pref_key) if sp and sp.pref_key else ""
+            if speed_path and os.path.exists(speed_path):
+                cmd += ["--speed_lora", speed_path]
             prompts = self._write_krea2_sample_prompts(filename=f"{desc.key}_prompts.txt")
             every = self.sample_every_n_epochs_var.get().strip()
             if prompts and every.isdigit() and int(every) > 0:

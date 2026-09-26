@@ -52,9 +52,11 @@ class FamilyLoRA:
     """A DiT's adapter set. `wrapped` maps the module name (relative to the DiT) -> LoRALinear."""
 
     def __init__(self, dit, driver):
+        self.dit = dit
         self.driver = driver
         self.desc = driver.description
         targets = set(driver.lora_target_names(dit))
+        self.targets = targets
         self.wrapped = {}
         for name, mod in list(dit.named_modules()):
             for cname, child in list(mod.named_children()):
@@ -79,6 +81,8 @@ class FamilyLoRA:
     def add_trainable(self, rank, alpha, blocks=None):
         """blocks: optional set of block indices to train (None = all)."""
         for full, w in self.wrapped.items():
+            if full not in self.targets:
+                continue                    # extra Linears wrapped for a frozen file are never trained
             if blocks is None or self.driver.block_of(full) in blocks:
                 w.add(TRAINABLE, rank, alpha, True)
         self.rank, self.alpha = rank, alpha
@@ -90,22 +94,49 @@ class FamilyLoRA:
         return [p for m in self.trainable_modules() for p in m.parameters()]
 
     # ---- frozen file adapters -------------------------------------------------------------------
+    def _wrap(self, full):
+        """Wrap one more Linear by dotted name (for frozen files that reach beyond the LoRA targets, e.g. a speed
+        LoRA that also patches the modulation / timestep layers). Returns the LoRALinear or None."""
+        if full in self.wrapped:
+            return self.wrapped[full]
+        parent_name, _, leaf = full.rpartition(".")
+        parent = self.dit.get_submodule(parent_name) if parent_name else self.dit
+        child = getattr(parent, leaf, None)
+        if not isinstance(child, nn.Linear):
+            return None
+        w = LoRALinear(child)
+        setattr(parent, leaf, w)
+        self.wrapped[full] = w
+        return w
+
     def add_file(self, path, name, strength=1.0):
-        """Attach a LoRA file frozen. Returns the number of Linears it covered (0 = wrong format)."""
+        """Attach a LoRA file frozen, on every Linear the file names (in the family's key format). Returns the
+        number of Linears covered (0 = wrong format)."""
         from safetensors.torch import load_file
+        f = self.desc.lora
         sd = load_file(path)
         n = 0
-        for full, w in self.wrapped.items():
-            ka, kb, kal = self._keys(full)
-            if ka not in sd:
+        for key in list(sd):
+            full = f.module_of(key)
+            if full is None:
                 continue
-            A, B = sd[ka], sd[kb]
+            w = self._wrap(full)
+            if w is None:
+                continue
+            A, B = sd[key], sd[f"{f.file_prefix}{full}.{f.up}.weight"]
             r = A.shape[0]
-            alpha = float(sd[kal].item()) if kal in sd else r
+            ak = f.alpha_key.format(prefix=f"{f.file_prefix}{full}")
+            alpha = float(sd[ak].item()) if ak in sd else r
             w.add(name, r, alpha, False, A, B, strength)
             n += 1
         self._base_scale[name] = {full: w.scales[name] for full, w in self.wrapped.items() if name in w.adapters}
         return n
+
+    def move_adapter(self, name, device):
+        """Move one frozen adapter's weights (e.g. a speed LoRA parked on CPU between previews)."""
+        for w in self.wrapped.values():
+            if name in w.adapters:
+                w.adapters[name].to(device)
 
     def set_enabled(self, name, enabled: bool):
         """Frozen adapters only: switch a named adapter on (its loaded strength) or off."""

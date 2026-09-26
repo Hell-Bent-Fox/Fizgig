@@ -66,6 +66,7 @@ QWEN_IMAGE_21 = FamilyDescription(
                        "img_mlp.gate_layer", "img_mlp.proj", "img_mlp.out"),
         alpha_key="{prefix}.alpha",
         kohya=False,
+        file_prefix="transformer.",
         note="Approved exception to the kohya-key rule (Peter, 26 Sep 2026): ComfyUI maps "
              "gate_layer/proj onto the halves of its fused gate_up only for bare or transformer.-prefixed "
              "keys; lora_unet_ / diffusion_model. keys silently drop the MLP input on the fused checkpoint.",
@@ -108,8 +109,10 @@ QWEN_IMAGE_21 = FamilyDescription(
                                       sigmas=(1.0, 0.9375, 0.875, 0.75, 0.5, 0.25),
                                       note="shift_terminal must be null; 8 steps for small text. "
                                            "Add or remove steps only at the high-noise end.",
+                                      options=(("shift_terminal", None),),
                                       source=_VIGGLE),
             load_unmerged=True,
+            pref_key="qwen21_turbo_lora",
             community_settings=(
                 ("8-20 steps at strength 0.3-0.8 as a clean-up rather than a speed-up; CFG 1-2 works "
                  "when the strength is lowered", _REDDIT),
@@ -121,8 +124,9 @@ QWEN_IMAGE_21 = FamilyDescription(
             source=_VIGGLE,
         ),
     ),
-    # Previews on the live training DiT at the template's settings until the turbo path is measured
-    # on Fizgig (Krea 2 pattern: live training model, family turbo LoRA, no model swap).
+    # Previews on the live training DiT: with the Viggle turbo LoRA (6 steps, its own sigmas) when its file is set,
+    # else the template's 25 steps (Krea 2 pattern: live training model, family turbo LoRA, no model swap).
+    preview_speed_lora="Viggle turbo v0.2.1 (6-step)",
     preview_steps=25,
     preview_cfg=1.0,
     preview_width=1024,

@@ -57,8 +57,10 @@ class FamilyDriver:
 
     # ---- sampling -------------------------------------------------------------------------------
     def generate(self, dit, cond: dict, width: int, height: int, *, steps: int, seed: int, cfg: float = 1.0,
-                 neg_cond: Optional[dict] = None):
-        """Denoise one image from noise; returns latents in the driver's own layout (fed to decode)."""
+                 neg_cond: Optional[dict] = None, sigmas=None, options=()):
+        """Denoise one image from noise; returns latents in the driver's own layout (fed to decode).
+        sigmas / options: an explicit schedule and driver-specific sampler options (e.g. from a speed LoRA's
+        SamplingSettings); a driver ignores what it doesn't use."""
         raise NotImplementedError
 
     def decode(self, vae, latents, width: int, height: int):
