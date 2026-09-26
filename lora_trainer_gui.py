@@ -450,6 +450,24 @@ ARCHITECTURES["MiniMax H3 RefMod"] = {
     "supports_samples": False,
 }
 
+# Families added through the standard layer (src/fizgig/families): an entry each, built from the family's
+# description. The GUI reaches them only through the _family_desc() hooks; Klein / Krea 2 / H3 never do.
+def _load_described_families():
+    try:
+        _src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
+        if _src not in sys.path:
+            sys.path.insert(0, _src)
+        from fizgig.families.registry import training_families
+        return {d.gui_label: d for d in training_families()}
+    except Exception as e:          # a broken family must never take the GUI down
+        print(f"[families] described families not loaded: {e}")
+        return {}
+
+
+DESCRIBED_FAMILIES = _load_described_families()
+for _label, _desc in DESCRIBED_FAMILIES.items():
+    ARCHITECTURES[_label] = _desc.architecture_entry()
+
 # Saved configs written before 3.6.1 carry the old label. Every lookup here is a .get() that
 # falls back to Klein, so without an alias a MiniMax preset would silently come back as a Klein
 # one - wrong family, no error. The alias points at the same config; _canon_arch maps it forward
@@ -1634,6 +1652,12 @@ def _auto_detect_blocks_to_swap() -> int:
     except Exception:
         pass
     return 0  # safe fallback
+
+
+# Model-path prefs of families added through the standard layer, from their descriptions.
+for _desc in DESCRIBED_FAMILIES.values():
+    for _k in _desc.pref_keys:
+        DEFAULT_PREFS.setdefault(_k, "")
 
 
 def load_prefs() -> dict:
@@ -8098,6 +8122,11 @@ class LoRATrainerGUI:
 
     def _is_krea2_arch(self) -> bool:
         return ARCHITECTURES.get(self.architecture_var.get(), {}).get("is_krea2", False)
+
+    def _family_desc(self, arch=None):
+        """The FamilyDescription behind the selected (or given) Base Model, or None for Klein / Krea 2 / H3.
+        Every standard-layer hook starts with this, so the old families never enter the generic paths."""
+        return DESCRIBED_FAMILIES.get(arch if arch is not None else self.architecture_var.get())
 
     def _is_minimax_arch(self) -> bool:
         return ARCHITECTURES.get(self.architecture_var.get(), {}).get("is_minimax", False)
@@ -19127,6 +19156,33 @@ class LoRATrainerGUI:
             self.prefs_vars[k].trace_add("write", _refresh_badge)
         return content, 1
 
+    def _generic_prefs_section(self, parent, d):
+        """Standard layer: a family's model-path section built from its description (rows, Download links,
+        the fetch button) - no per-family Preferences code."""
+        self._PREFS_FAMILY_KEYS = {**self._PREFS_FAMILY_KEYS, d.key: d.required_pref_keys}
+        self._PREFS_FAMILY_NAMES = {**self._PREFS_FAMILY_NAMES, d.key: d.display_name}
+        title = f"{d.display_name}{' (experimental)' if d.experimental else ''} model paths"
+        card, row = self._prefs_family_section(
+            parent, d.key, title,
+            f"The files {d.display_name} training needs. Required rows must be filled; the rest are optional.")
+        _w = card
+        while _w is not None and not isinstance(_w, CollapsibleFrame):
+            _w = _w.master
+        if _w is not None:
+            _w._fizgig_described_family = d.key     # lets the old-family golden snapshots set this section aside
+        for f in d.model_files:
+            hint = ("" if f.required else "OPTIONAL — ") + (f.note or "")
+            url = f"https://huggingface.co/{f.repo}/blob/main/{f.path}" if (f.repo and f.path) else None
+            note = f"~{f.size_gb:g} GB — {f.repo} → {os.path.basename(f.path)}" if url else None
+            row = self._add_pref_row(card, row, f"{f.label}:", f.pref_key, hint, download_url=url,
+                                     download_note=note)
+        total = sum(f.size_gb for f in d.model_files if f.required)
+        self._add_fetch_models_row(
+            card, row, d.key,
+            f"Fetches the required files above (~{total:.0f} GB) and fills in these paths for you, plus the small "
+            f"helper models. Optional files are left out unless you tick below.",
+            optional_label="Include the optional files")
+
     def create_prefs_tab(self):
         """Create the Preferences tab (Start-tab styled)."""
         scrollable_frame, _ = self.create_scrollable_frame(self.prefs_tab)
@@ -19389,6 +19445,10 @@ class LoRATrainerGUI:
             "reference DiT is left out unless you tick it above: another 21 GB, and it is only "
             "used by identity mode.",
             optional_label="Include the reference DiT (+21 GB)")
+
+        # Families added through the standard layer: one section each, generated from the description.
+        for _desc in DESCRIBED_FAMILIES.values():
+            self._generic_prefs_section(outer, _desc)
 
         # Card 1b: which GPU. Only when the machine actually has more than one - a chooser with a
         # single entry is noise, and the whole feature is a no-op there.
