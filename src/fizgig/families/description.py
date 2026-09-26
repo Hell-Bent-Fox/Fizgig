@@ -1,0 +1,207 @@
+"""FamilyDescription: everything Fizgig needs to know about one model family, in one object.
+
+Adding a family used to mean threading it through the GUI by hand (predicates, if-chains, Preferences
+blocks, preset dicts, command builders). A description holds the family's facts once; the GUI's generic
+paths read it. Klein, Krea 2 and MiniMax H3 are NOT described here: they keep their existing code paths
+untouched until this system has proven itself on a new family (Peter, 25 Sep 2026).
+
+Every value that came from outside Fizgig carries its source (`source=` fields), so a later reader can
+re-check it when the upstream model or a speed LoRA moves on.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+@dataclass(frozen=True)
+class ModelFile:
+    """One file the user points Fizgig at in Preferences."""
+    pref_key: str                     # prefs.json key, e.g. "qwen21_dit"
+    label: str                        # Preferences row label
+    required: bool = True             # training cannot start without it
+    repo: str = ""                    # Hugging Face repo for the Download link
+    path: str = ""                    # file path inside the repo
+    size_gb: float = 0.0
+    note: str = ""                    # one plain line shown under the row
+
+
+@dataclass(frozen=True)
+class SamplingSettings:
+    """A complete, citable way to sample the family: steps, CFG, sampler, schedule."""
+    name: str
+    steps: int
+    cfg: float
+    sampler: str = "euler"
+    scheduler: str = "simple"
+    sigmas: Optional[tuple] = None    # explicit schedule when the model needs one
+    negative_prompt: bool = False     # whether a negative prompt does anything at this CFG
+    note: str = ""
+    source: str = ""
+
+
+@dataclass(frozen=True)
+class SpeedLoRA:
+    """A Turbo / Lightning / distill LoRA for the family, with the settings it actually wants."""
+    name: str
+    repo: str
+    file: str
+    pairs_with: str                   # which base it was trained against
+    strength: float
+    settings: SamplingSettings
+    load_unmerged: bool = False       # merging into the weights loses part of it
+    community_settings: tuple = ()    # (description, source) pairs: how people actually use it
+    caveats: tuple = ()
+    source: str = ""
+
+
+@dataclass(frozen=True)
+class LoRAFormat:
+    """How this family's LoRA keys are written so ComfyUI (and diffusers) load every module."""
+    key_template: str                 # e.g. "transformer.transformer_blocks.{block}.{module}.{ab}.weight"
+    down: str                         # "lora_A" / "lora_down"
+    up: str                           # "lora_B" / "lora_up"
+    block_modules: tuple              # per-block Linears the LoRA targets
+    alpha_key: str = "{prefix}.alpha"
+    kohya: bool = False               # True = the lora_unet_ convention used by Klein/Krea 2/H3
+    note: str = ""
+    source: str = ""
+
+    def key(self, block: int, module: str, which: str) -> str:
+        """which: "down" or "up"."""
+        ab = self.down if which == "down" else self.up
+        return self.key_template.format(block=block, module=module, ab=ab)
+
+
+@dataclass(frozen=True)
+class FamilyDescription:
+    # identity
+    key: str                          # family key (the workbench vocabulary), e.g. "qwen_image21"
+    arch_id: str                      # architecture id used in cache filenames, e.g. "qwenimage21"
+    display_name: str                 # "Qwen Image 2.1"
+    gui_label: str                    # Base Model selector entry
+    lora_name_suffix: str
+    aliases: tuple = ()
+    experimental: bool = True
+
+    # model files (Preferences rows, in display order)
+    model_files: tuple = ()
+    text_encoder_label: str = ""
+    vae_label: str = ""
+
+    # latent rules
+    latent_channels: int = 16
+    spatial_factor: int = 8
+    bucket_step: int = 64             # training buckets snap to this many pixels
+    image_channels: int = 3           # 4 = RGBA
+    native_megapixels: float = 1.0
+
+    # block layout (Repair Studio / block targeting)
+    n_blocks: int = 0
+    block_prefix: str = ""            # "transformer_blocks"
+    block_note: str = ""
+
+    # LoRA
+    lora: Optional[LoRAFormat] = None
+
+    # training entry points; None = not built yet (the family stays hidden from training)
+    train_script: Optional[str] = None
+    cache_latents_script: Optional[str] = None
+    cache_text_script: Optional[str] = None
+    precisions: tuple = ()            # base precisions offered, e.g. ("bf16", "int8", "nf4")
+    optimizers: tuple = ("adamw8bit", "adamw")
+    network_types: tuple = ("lora",)
+
+    # sampling
+    sampling: tuple = ()              # SamplingSettings without any speed LoRA (first = default)
+    speed_loras: tuple = ()           # SpeedLoRA entries
+    preview_steps: int = 20
+    preview_cfg: float = 1.0
+    preview_width: int = 1024
+    preview_height: int = 1024
+
+    # workbench tabs that support this family: {"repair": "module.Class", ...}; absent = hidden
+    workbench: dict = field(default_factory=dict)
+
+    # things a user or a later session must know, with sources
+    notes: tuple = ()
+
+    # ---- derived ------------------------------------------------------------------------------
+    @property
+    def training_ready(self) -> bool:
+        return bool(self.train_script and self.cache_latents_script and self.cache_text_script)
+
+    @property
+    def pref_keys(self) -> tuple:
+        return tuple(f.pref_key for f in self.model_files)
+
+    @property
+    def required_pref_keys(self) -> tuple:
+        return tuple(f.pref_key for f in self.model_files if f.required)
+
+    def block_ids(self) -> list:
+        return [f"{self.block_prefix}_{i}" for i in range(self.n_blocks)]
+
+    def default_sampling(self) -> Optional[SamplingSettings]:
+        return self.sampling[0] if self.sampling else None
+
+    def architecture_entry(self) -> dict:
+        """The ARCHITECTURES-shaped dict the GUI's existing config readers expect, so start_training,
+        the Samples tab and validation can read a description family without KeyErrors. Klein-shaped
+        keys that do not apply are filled with the neutral values the Krea 2 entry uses."""
+        s = self.default_sampling()
+        return {
+            "family_key": self.key,
+            "is_description_family": True,
+            "train_script": self.train_script,
+            "cache_latents_script": self.cache_latents_script,
+            "cache_text_script": self.cache_text_script,
+            "network_module": "fizgig.networks.lora_klein",   # unused: the family trainer builds its own net
+            "use_fizgig_venv": True,
+            "timestep_sampling": "shift",
+            "discrete_flow_shift": None,
+            "weighting_scheme": "none",
+            "blocks_swap_max": max(0, self.n_blocks - 2),
+            "fp8_text_encoder_flag": None,
+            "uses_clip": False,
+            "uses_t5": False,
+            "uses_text_encoder": True,
+            "uses_model_type": False,
+            "uses_model_version": False,
+            "model_version": self.arch_id,
+            "vae_label": self.vae_label,
+            "text_encoder_label": self.text_encoder_label,
+            "is_distilled": False,
+            "supports_weighting_scheme": False,
+            "supports_discrete_flow_shift": False,
+            "supports_samples": True,
+            "sample_cfg_default": self.preview_cfg,
+            "sample_flow_shift_default": None,
+            "sample_steps_default": self.preview_steps if self.preview_steps else (s.steps if s else 20),
+            "sample_width_default": self.preview_width,
+            "sample_height_default": self.preview_height,
+            "lora_name_suffix": self.lora_name_suffix,
+        }
+
+    def validate(self) -> list:
+        """Internal consistency problems (empty list = fine). Cheap; run by the registry and tests."""
+        problems = []
+        if not (self.key and self.arch_id and self.display_name and self.gui_label):
+            problems.append("identity fields must all be set")
+        keys = [f.pref_key for f in self.model_files]
+        if len(keys) != len(set(keys)):
+            problems.append("duplicate pref keys")
+        if self.n_blocks <= 0 or not self.block_prefix:
+            problems.append("block layout missing")
+        if self.lora is None:
+            problems.append("LoRA format missing")
+        if not self.sampling:
+            problems.append("no sampling settings")
+        if self.bucket_step % self.spatial_factor:
+            problems.append("bucket_step must be a multiple of spatial_factor")
+        for sl in self.speed_loras:
+            if not (sl.repo and sl.file and sl.source):
+                problems.append(f"speed LoRA {sl.name!r} is missing repo/file/source")
+        if any(bool(x) != bool(self.train_script) for x in (self.cache_latents_script, self.cache_text_script)):
+            problems.append("training scripts must be all set or all None")
+        return problems
