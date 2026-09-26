@@ -12976,7 +12976,10 @@ class LoRATrainerGUI:
         if self.sample_enabled_var.get():
             try:
                 cfg = ARCHITECTURES.get(self.architecture_var.get(), {})
-                self._apply_samples_klein_only(cfg.get("is_krea2", False))
+                if self._family_desc() is not None:
+                    self._generic_samples_ui(self._family_desc())
+                else:
+                    self._apply_samples_klein_only(cfg.get("is_krea2", False))
                 self._on_distilled_samples_toggled()
             except Exception:
                 pass
@@ -13252,7 +13255,10 @@ class LoRATrainerGUI:
                 self.sample_cfg_scale_entry.configure(state=tk.NORMAL)
 
             # Grey out / relabel the Klein-only sample controls when Krea 2 is selected.
-            self._apply_samples_klein_only(config.get("is_krea2", False))
+            if self._family_desc() is not None:
+                self._generic_samples_ui(self._family_desc())
+            else:
+                self._apply_samples_klein_only(config.get("is_krea2", False))
             # ...then let MiniMax override the wording that is still Klein's. Runs AFTER, so the
             # Klein/Krea 2 paths above are untouched.
             self._apply_samples_minimax(bool(config.get("is_minimax")))
@@ -13413,6 +13419,36 @@ class LoRATrainerGUI:
             self.cache_sample_model_label.configure(
                 text=("Cache sample model in RAM (Klein only):" if is_krea2 else "Cache sample model in RAM:"),
                 foreground=label_fg)
+
+    def _generic_samples_ui(self, desc):
+        """Standard layer: the Samples tab for a described family. Previews render on the live training model at
+        the family's settings, so Klein's sample-model choices, Krea 2's engine row and the edit-reference picker
+        don't apply."""
+        muted = COLORS["text_muted"]
+        if hasattr(self, "use_distilled_check"):
+            self.use_distilled_check.configure(
+                state=tk.DISABLED, text=f"Use Distilled model for samples — Klein only ({desc.display_name} previews "
+                                        f"run on the model being trained)")
+        if hasattr(self, "sample_steps_note"):
+            self.sample_steps_note.configure(
+                text=f"{desc.display_name}: {desc.preview_steps} steps at CFG {desc.preview_cfg:g} by default")
+        if hasattr(self, "krea2_engine_frame"):
+            self.krea2_engine_frame.grid_remove()
+            self.krea2_engine_note.grid_remove()
+        if hasattr(self, "sample_ref_entry"):
+            self.sample_ref_entry.configure(state=tk.DISABLED)
+        for attr in ("sample_ref_browse_btn", "sample_ref_clear_btn"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.configure(state=tk.DISABLED)
+        if hasattr(self, "sample_ref_label"):
+            self.sample_ref_label.configure(foreground=muted)
+        if hasattr(self, "sample_ref_note"):
+            self.sample_ref_note.configure(text=f"Not used for {desc.display_name} previews.")
+        if hasattr(self, "cache_sample_model_combo"):
+            self.cache_sample_model_combo.configure(state=tk.DISABLED)
+        if hasattr(self, "cache_sample_model_label"):
+            self.cache_sample_model_label.configure(text="Cache sample model in RAM (Klein only):", foreground=muted)
 
     def update_sample_output_label(self):
         """Update the sample output path label to show actual path"""
