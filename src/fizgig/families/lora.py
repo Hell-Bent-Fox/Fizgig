@@ -70,12 +70,11 @@ class FamilyLoRA:
         self._base_scale = {}
 
     def _keys(self, full):
-        """(down key, up key, alpha key) for a wrapped module, in the family's file format."""
+        """(down key, up key, alpha key) of any wrapped module, in the family's file format. Built from the module
+        path alone, so modules outside the blocks (e.g. a speed LoRA's modulation layers) never need a block number."""
         f = self.desc.lora
-        block = self.driver.block_of(full)
-        module = full[len(self.desc.block_prefix) + 1:].split(".", 1)[1]
-        prefix = self.desc.lora_prefix(block, module)
-        return f.key(block, module, "down"), f.key(block, module, "up"), f.alpha_key.format(prefix=prefix)
+        stem = f"{f.file_prefix}{full}"
+        return f"{stem}.{f.down}.weight", f"{stem}.{f.up}.weight", f.alpha_key.format(prefix=stem)
 
     # ---- trainable ------------------------------------------------------------------------------
     def add_trainable(self, rank, alpha, blocks=None):
@@ -166,8 +165,10 @@ class FamilyLoRA:
         sd = load_file(path)
         n = 0
         for full, w in self.wrapped.items():
+            if TRAINABLE not in w.adapters:
+                continue                # frozen-only wraps (training adapter, speed LoRA extras) hold nothing to load
             ka, kb, _ = self._keys(full)
-            if TRAINABLE in w.adapters and ka in sd:
+            if ka in sd:
                 a, b = w.adapters[TRAINABLE]
                 a.weight.copy_(sd[ka].to(a.weight.dtype))
                 b.weight.copy_(sd[kb].to(b.weight.dtype))
