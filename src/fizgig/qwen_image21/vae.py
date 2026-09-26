@@ -1622,3 +1622,20 @@ class AutoencoderKLQwenImage21(ModelMixin, AutoencoderMixin, ConfigMixin, FromOr
             z = posterior.mode()
         dec = self.decode(z, return_dict=return_dict)
         return dec
+
+
+def load_qwen21_vae(path, device="cuda", dtype=torch.bfloat16):
+    """The diffusers-format VAE file (Qwen/Qwen-Image-2.1 vae/diffusion_pytorch_model.safetensors) with the
+    vendored vae_config.json."""
+    import inspect
+    import json as _json
+    import os as _os
+
+    from safetensors.torch import load_file
+
+    with open(_os.path.join(_os.path.dirname(__file__), "vae_config.json"), encoding="utf-8") as f:
+        cfg = _json.load(f)
+    params = inspect.signature(AutoencoderKLQwenImage21.__init__).parameters
+    vae = AutoencoderKLQwenImage21(**{k: v for k, v in cfg.items() if k in params})
+    vae.load_state_dict(load_file(path))
+    return vae.to(device, dtype).eval().requires_grad_(False)

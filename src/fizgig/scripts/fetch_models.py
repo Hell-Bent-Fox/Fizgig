@@ -7,6 +7,7 @@ writes the paths into prefs.json for you.
     python -m fizgig.scripts.fetch_models --family krea2      # ~45 GB, no HF account needed
     python -m fizgig.scripts.fetch_models --family klein      # ~39 GB, needs an HF token
     python -m fizgig.scripts.fetch_models --family minimax    # ~47 GB, no HF account needed
+    python -m fizgig.scripts.fetch_models --family qwen21     # ~33 GB, no HF account needed
     python -m fizgig.scripts.fetch_models --family tools      # ~1.6 GB helper models
     python -m fizgig.scripts.fetch_models --all
 
@@ -114,6 +115,22 @@ FAMILIES = {
                "Reference DiT (ref2va) — reference distillation only", optional=True),
         _CAPTION_TE,
     ],
+    "qwen21": [
+        Weight("qwen21_dit", "Comfy-Org/Qwen-Image-2.1",
+               "diffusion_models/qwen_image_2.1_bf16.safetensors", 14.2,
+               "Qwen Image 2.1 DiT (bf16) — what training runs on"),
+        Weight("qwen21_text_encoder", "Comfy-Org/Qwen-Image-2.1",
+               "text_encoders/qwen3vl_8b_bf16.safetensors", 17.5,
+               "Qwen3-VL-8B text encoder — caching and preview prompts"),
+        Weight("qwen21_vae", "Qwen/Qwen-Image-2.1",
+               "vae/diffusion_pytorch_model.safetensors", 1.35,
+               "Qwen Image 2.1 VAE (the official diffusers file)"),
+        # Optional until the repo is published: a missing repo must not fail the family's download.
+        Weight("qwen21_training_adapter", "shootthesound/Fizgig-Qwen-Image-2.1-Training-Adapter",
+               "fizgig_qwen_image_2.1_training_adapter.safetensors", 0.08,
+               "Fizgig training adapter — keeps Qwen 2.1 LoRA training stable", optional=True),
+        _CAPTION_TE,
+    ],
     "klein": [
         Weight("base_dit", "black-forest-labs/FLUX.2-klein-base-9b-fp8",
                "flux-2-klein-base-9b-fp8.safetensors", 9.5,
@@ -146,6 +163,7 @@ TOOLS = [
     # encoding work offline" and "the first use needs internet for a vocab file".
     ("hf-config:Qwen/Qwen3-VL-4B-Instruct", 0.02, "Qwen3-VL tokenizer — Krea 2 offline"),
     ("hf-config:Qwen/Qwen3-8B", 0.02, "Qwen3 tokenizer — Klein offline"),
+    ("hf-config:Qwen/Qwen-Image-2.1", 0.02, "Qwen Image 2.1 tokenizer — offline caching"),
 ]
 
 
@@ -428,7 +446,7 @@ def fetch(families, models_dir=None, repo_dir=REPO_DIR, token=None, include_opti
 def main():
     p = argparse.ArgumentParser(
         description="Download Fizgig's model files and write them into Preferences.")
-    p.add_argument("--family", action="append", choices=["krea2", "klein", "minimax", "tools"],
+    p.add_argument("--family", action="append", choices=["krea2", "klein", "minimax", "qwen21", "tools"],
                    help="Repeatable. Krea 2 needs no HF account; Klein is gated.")
     p.add_argument("--all", action="store_true", help="Every family, including the helper models.")
     p.add_argument("--include-optional", action="store_true",

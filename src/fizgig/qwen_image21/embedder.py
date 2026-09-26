@@ -17,6 +17,7 @@ import torch
 
 logger = logging.getLogger(__name__)
 
+TOKENIZER_REPO = "Qwen/Qwen-Image-2.1"
 SYS_PROMPT = "Comprehend and analyze the provided prompt."
 TEMPLATE_T2I = (f"<|im_start|>system\n{SYS_PROMPT}<|im_end|>\n"
                 "<|im_start|>user\n{}<|im_end|>\n"
@@ -30,7 +31,7 @@ def _text_encoder_config(config_path=None) -> dict:
 
 
 class Qwen21TextEncoder:
-    def __init__(self, model_path, tokenizer_dir, device="cuda", dtype=torch.bfloat16, config_path=None):
+    def __init__(self, model_path, tokenizer_dir=None, device="cuda", dtype=torch.bfloat16, config_path=None):
         from accelerate import init_empty_weights
         from transformers import AutoTokenizer, Qwen3VLConfig, Qwen3VLForConditionalGeneration
 
@@ -38,7 +39,10 @@ class Qwen21TextEncoder:
         from fizgig.krea2.safetensors_utils import load_split_weights
 
         self.device, self.dtype = torch.device(device), dtype
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir)
+        # Default: the official repo's processor/ files (a few MB, cached by huggingface_hub; the fetcher
+        # warms the cache so this works offline).
+        self.tokenizer = (AutoTokenizer.from_pretrained(tokenizer_dir) if tokenizer_dir else
+                          AutoTokenizer.from_pretrained(TOKENIZER_REPO, subfolder="processor"))
         config = Qwen3VLConfig.from_dict(_text_encoder_config(config_path))
         with init_empty_weights():
             model = Qwen3VLForConditionalGeneration._from_config(config)

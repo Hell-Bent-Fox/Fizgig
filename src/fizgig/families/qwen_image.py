@@ -2,7 +2,7 @@
 
 Facts from the phase-0 research (26 Sep 2026; full notes in the Desktop fizgig_family_descriptions
 RESEARCH_qwen_image_2_1_*.md files). Sources are cited per value. Training entry points stay None until
-the model package exists (phase 3), which keeps the family out of the Training tab until then.
+the model package existed; they are set now (phase 3, 26 Sep), which puts the family in the Training tab.
 """
 from fizgig.families.description import (
     FamilyDescription, LoRAFormat, ModelFile, SamplingSettings, SpeedLoRA,
@@ -27,13 +27,19 @@ QWEN_IMAGE_21 = FamilyDescription(
         ModelFile("qwen21_dit", "Qwen Image 2.1 DiT", True, _COMFY,
                   "diffusion_models/qwen_image_2.1_bf16.safetensors", 14.23,
                   "bf16 base for training. ComfyUI's single file ships the MLP pre-fused (gate_up)."),
-        ModelFile("qwen21_vae", "Qwen Image 2.1 VAE", True, _COMFY,
-                  "vae/qwen_image_2.1_vae_bf16.safetensors", 0.68,
-                  "Its own VAE: 64 latent channels, 16x, RGBA. Not the Krea 2 / Qwen-Image VAE."),
+        ModelFile("qwen21_vae", "Qwen Image 2.1 VAE", True, "Qwen/Qwen-Image-2.1",
+                  "vae/diffusion_pytorch_model.safetensors", 1.35,
+                  "Its own VAE (64 latent channels, 16x, RGBA), the diffusers-format file from the official "
+                  "repo. Not the Krea 2 / Qwen-Image VAE."),
         ModelFile("qwen21_text_encoder", "Qwen3-VL-8B text encoder", True, _COMFY,
                   "text_encoders/qwen3vl_8b_bf16.safetensors", 17.53,
                   "Used for caching only, then unloaded before training steps."),
-        ModelFile("qwen21_turbo_lora", "Viggle turbo LoRA (previews)", False,
+        ModelFile("qwen21_training_adapter", "Fizgig training adapter", False,
+              "shootthesound/Fizgig-Qwen-Image-2.1-Training-Adapter",
+              "fizgig_qwen_image_2.1_training_adapter.safetensors", 0.08,
+              "Frozen during training, off in previews and saved LoRAs. Without it Qwen 2.1 LoRAs collapse or "
+              "wobble; with it likeness was 77 vs 56 in Fizgig's A/B."),
+    ModelFile("qwen21_turbo_lora", "Viggle turbo LoRA (previews)", False,
                   "Viggle/Qwen-Image-2.1-viggle-turbo",
                   "Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r128.safetensors", 0.68,
                   "Optional: fast in-training previews. Applied unmerged."),
@@ -66,7 +72,11 @@ QWEN_IMAGE_21 = FamilyDescription(
                "Viggle r128 header",
     ),
 
-    precisions=("bf16", "int8", "nf4"),
+    train_script="src/fizgig/scripts/qwen21_train.py",
+    cache_latents_script="src/fizgig/scripts/qwen21_cache_latents.py",
+    cache_text_script="src/fizgig/scripts/qwen21_cache_text.py",
+    precisions=("bf16",),             # int8 / nf4 bases not built yet; bf16 needs ~24 GB+
+    optimizers=("adamw", "adamw8bit"),
 
     sampling=(
         SamplingSettings("ComfyUI template", steps=25, cfg=1.0, sampler="euler", scheduler="simple",
@@ -116,9 +126,11 @@ QWEN_IMAGE_21 = FamilyDescription(
     workbench={},                     # no workbench tab yet: training first (Peter, #155)
 
     notes=(
-        ("Fine-tuning is reported to degrade the model; unsolved upstream. SimpleTuner trains with a frozen "
-         "'training assistant' LoRA (like Fizgig's H3 adapter). Baseline A/B before trusting a recipe.",
-         "SimpleTuner SEGMENTED_CHECKPOINTING.md + Qwen-Image-2.1-training-assistant-v2 card; DiffSynth #1706"),
+        ("A plain LoRA is unstable: collapse to texture at lr 5e-4 (~step 300), wobble at 1e-4, a no-adapter "
+         "Adaptive-LR run fell to 37 likeness at step 2000. Loss does not show it. Train with the frozen "
+         "training adapter: 77.4 likeness (Fizgig adapter) vs 76.4 (SimpleTuner v2) vs 55.8 (none), and far "
+         "better detail with Fizgig's (Peter's eye). Adaptive LR 1e-4..2e-4; ~2750 steps on a 170-image set.",
+         "Fizgig lab A/B 26 Sep 2026 (Desktop qwen_ab_results); SimpleTuner assistant-v2 card"),
         ("Text encoder conditioning is the LAST layer BEFORE the final RMSNorm, with a fixed system-prompt "
          "template whose tokens are dropped. transformers >= 5 returns the normed state unless hooked.",
          "diffusers pipeline_qwenimage21.py L206-310"),
