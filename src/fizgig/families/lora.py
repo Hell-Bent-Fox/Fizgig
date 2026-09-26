@@ -1,21 +1,18 @@
-"""Qwen Image 2.1 LoRA: wraps the block Linears, trains one adapter and runs frozen ones alongside.
+"""The standard layer's LoRA: wraps a family's target Linears, trains one adapter and runs frozen ones alongside.
 
-Keys follow the family's approved exception to the kohya rule (families/qwen_image.py LoRAFormat):
-`transformer.transformer_blocks.{N}.{module}.lora_A/lora_B.weight` + `.alpha`. ComfyUI maps
-gate_layer/proj onto the halves of its fused gate_up only for bare or `transformer.`-prefixed keys.
+Which Linears (driver.lora_target_names) and how keys are written (description.lora: key template, down/up
+names, alpha key) come from the family - so every described family gets the same adapter machinery and its own
+ComfyUI-compatible file format.
 
 Each wrapped Linear computes W x + sum_i s_i * B_i(A_i(x)), s_i = alpha_i / rank_i * strength_i.
 The trainable adapter is named "lora"; frozen ones (the training adapter, a context LoRA) get their own
 names and can be switched off (scale 0) without being unloaded, which is how previews run adapter-off.
 """
 import math
-import re
 
 import torch
 import torch.nn as nn
 
-TARGET_RE = re.compile(r"transformer_blocks\.(\d+)\.(attn\.to_q|attn\.to_k|attn\.to_v|attn\.to_out\.0|"
-                       r"img_mlp\.gate_layer|img_mlp\.proj|img_mlp\.out)")
 TRAINABLE = "lora"
 
 
@@ -51,25 +48,38 @@ class LoRALinear(nn.Module):
         return out
 
 
-class QwenLoRA:
-    """The wrapped DiT's adapter set. `wrapped` maps 'transformer_blocks.N.module' -> LoRALinear."""
+class FamilyLoRA:
+    """A DiT's adapter set. `wrapped` maps the module name (relative to the DiT) -> LoRALinear."""
 
-    def __init__(self, dit):
+    def __init__(self, dit, driver):
+        self.driver = driver
+        self.desc = driver.description
+        targets = set(driver.lora_target_names(dit))
         self.wrapped = {}
         for name, mod in list(dit.named_modules()):
             for cname, child in list(mod.named_children()):
                 full = f"{name}.{cname}" if name else cname
-                if isinstance(child, nn.Linear) and TARGET_RE.fullmatch(full):
+                if isinstance(child, nn.Linear) and full in targets:
                     w = LoRALinear(child)
                     setattr(mod, cname, w)
                     self.wrapped[full] = w
+        if not self.wrapped:
+            raise RuntimeError(f"{self.desc.display_name}: none of the driver's LoRA targets exist in this model")
         self._base_scale = {}
+
+    def _keys(self, full):
+        """(down key, up key, alpha key) for a wrapped module, in the family's file format."""
+        f = self.desc.lora
+        block = self.driver.block_of(full)
+        module = full[len(self.desc.block_prefix) + 1:].split(".", 1)[1]
+        prefix = self.desc.lora_prefix(block, module)
+        return f.key(block, module, "down"), f.key(block, module, "up"), f.alpha_key.format(prefix=prefix)
 
     # ---- trainable ------------------------------------------------------------------------------
     def add_trainable(self, rank, alpha, blocks=None):
         """blocks: optional set of block indices to train (None = all)."""
         for full, w in self.wrapped.items():
-            if blocks is None or int(full.split(".")[1]) in blocks:
+            if blocks is None or self.driver.block_of(full) in blocks:
                 w.add(TRAINABLE, rank, alpha, True)
         self.rank, self.alpha = rank, alpha
 
@@ -86,12 +96,12 @@ class QwenLoRA:
         sd = load_file(path)
         n = 0
         for full, w in self.wrapped.items():
-            ka = f"transformer.{full}.lora_A.weight"
+            ka, kb, kal = self._keys(full)
             if ka not in sd:
                 continue
-            A, B = sd[ka], sd[f"transformer.{full}.lora_B.weight"]
+            A, B = sd[ka], sd[kb]
             r = A.shape[0]
-            alpha = float(sd[f"transformer.{full}.alpha"].item()) if f"transformer.{full}.alpha" in sd else r
+            alpha = float(sd[kal].item()) if kal in sd else r
             w.add(name, r, alpha, False, A, B, strength)
             n += 1
         self._base_scale[name] = {full: w.scales[name] for full, w in self.wrapped.items() if name in w.adapters}
@@ -108,9 +118,10 @@ class QwenLoRA:
         for full, w in self.wrapped.items():
             if TRAINABLE in w.adapters:
                 a, b = w.adapters[TRAINABLE]
-                sd[f"transformer.{full}.lora_A.weight"] = a.weight.detach().to("cpu", dtype).contiguous()
-                sd[f"transformer.{full}.lora_B.weight"] = b.weight.detach().to("cpu", dtype).contiguous()
-                sd[f"transformer.{full}.alpha"] = torch.tensor(float(self.alpha))
+                ka, kb, kal = self._keys(full)
+                sd[ka] = a.weight.detach().to("cpu", dtype).contiguous()
+                sd[kb] = b.weight.detach().to("cpu", dtype).contiguous()
+                sd[kal] = torch.tensor(float(self.alpha))
         return sd
 
     def save(self, path, metadata=None, dtype=torch.bfloat16):
@@ -124,10 +135,10 @@ class QwenLoRA:
         sd = load_file(path)
         n = 0
         for full, w in self.wrapped.items():
-            ka = f"transformer.{full}.lora_A.weight"
+            ka, kb, _ = self._keys(full)
             if TRAINABLE in w.adapters and ka in sd:
                 a, b = w.adapters[TRAINABLE]
                 a.weight.copy_(sd[ka].to(a.weight.dtype))
-                b.weight.copy_(sd[f"transformer.{full}.lora_B.weight"].to(b.weight.dtype))
+                b.weight.copy_(sd[kb].to(b.weight.dtype))
                 n += 1
         return n

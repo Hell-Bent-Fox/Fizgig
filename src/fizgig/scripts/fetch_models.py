@@ -40,11 +40,11 @@ EMIT_PROGRESS = False
 class Weight:
     """One .safetensors file: where it lives on HF, where it goes, which pref points at it."""
 
-    def __init__(self, pref_key, repo, path_in_repo, gb, note, optional=False, gated=False):
+    def __init__(self, pref_key, repo, path_in_repo, gb, note, optional=False, gated=False, local_name=None):
         self.pref_key = pref_key
         self.repo = repo
         self.path_in_repo = path_in_repo
-        self.filename = os.path.basename(path_in_repo)
+        self.filename = local_name or os.path.basename(path_in_repo)   # local_name: see ModelFile.local_name
         self.gb = gb
         self.note = note
         self.optional = optional
@@ -130,6 +130,25 @@ FAMILIES = {
         _CAPTION_TE,
     ],
 }
+
+
+
+def _described_families():
+    """Families added through the standard layer (fizgig.families): their download lists come from their
+    descriptions (model_files), never from a hand-written list here. Not part of --all (opt-in)."""
+    try:
+        sys.path.insert(0, os.path.join(REPO_DIR, "src"))
+        from fizgig.families.registry import FAMILIES as _REG
+    except Exception:
+        return {}
+    return {d.key: [Weight(f.pref_key, f.repo, f.path, f.size_gb, f.label + (" — " + f.note if f.note else ""),
+                           optional=not f.required, local_name=f.local_name or None)
+                    for f in d.model_files if f.repo and f.path]
+            for d in _REG.values() if d.training_ready}
+
+
+DESCRIBED = _described_families()
+FAMILIES.update(DESCRIBED)
 
 # Loaded by name at runtime, so there is no pref to write — see the module docstring.
 TOOLS = [
@@ -428,7 +447,7 @@ def fetch(families, models_dir=None, repo_dir=REPO_DIR, token=None, include_opti
 def main():
     p = argparse.ArgumentParser(
         description="Download Fizgig's model files and write them into Preferences.")
-    p.add_argument("--family", action="append", choices=["krea2", "klein", "minimax", "tools"],
+    p.add_argument("--family", action="append", choices=["krea2", "klein", "minimax", "tools", *DESCRIBED],
                    help="Repeatable. Krea 2 needs no HF account; Klein is gated.")
     p.add_argument("--all", action="store_true", help="Every family, including the helper models.")
     p.add_argument("--include-optional", action="store_true",

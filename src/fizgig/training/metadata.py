@@ -85,6 +85,14 @@ def precalculate_safetensors_hashes(state_dict):
     return f"0x{hash_sha256.hexdigest()}"
 
 
+def _described_family(architecture):
+    try:
+        from fizgig.families.registry import by_arch_id
+        return by_arch_id(architecture)
+    except Exception:
+        return None
+
+
 def build_metadata(
     state_dict: Optional[dict],
     architecture: str,
@@ -122,6 +130,11 @@ def build_metadata(
     elif architecture == ARCHITECTURE_MINIMAX:
         arch = ARCH_MINIMAX
         impl = IMPL_MINIMAX
+    elif _described_family(architecture) is not None:
+        # families added through the standard layer (fizgig.families) carry their own modelspec names
+        _fam = _described_family(architecture)
+        arch = _fam.modelspec_arch
+        impl = _fam.implementation
     else:
         raise ValueError(f"Unknown architecture: {architecture}")
 

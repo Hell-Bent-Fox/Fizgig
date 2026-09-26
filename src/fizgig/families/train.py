@@ -1,0 +1,448 @@
+"""Standard-layer LoRA trainer for any described family (fizgig.families), driven through the family's driver.
+
+    python src/fizgig/families/train.py --family qwen_image21 --dit ... --dataset_config ... --output_dir ...
+
+The loop is family-agnostic: Fizgig dataset + bucketing (batch 1), frozen adapters (the family's training adapter,
+a context LoRA) active during training and OFF for previews and saves, Adaptive LR or a step scheduler, gradient
+clipping, optional EMA, per-epoch checkpoints in the family's LoRA key format with SAI metadata, resumable state
+dirs and the GUI's pause contract. Everything model-specific (loading, noise/target/timesteps, forward, sampling,
+decoding, which Linears a LoRA wraps) comes from the driver.
+
+Why training adapters exist: on Qwen Image 2.1 a plain LoRA collapsed at lr 5e-4 and wobbled at 1e-4; with the same
+Adaptive LR a no-adapter run fell to 37 likeness at step 2000 while Fizgig's adapter held 74-77 (26 Sep 2026).
+"""
+import argparse
+import datetime
+import json
+import logging
+import math
+import os
+import sys
+import time
+from multiprocessing import Value
+
+import torch
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+from fizgig.dataset.config import (BlueprintGenerator, ConfigSanitizer,  # noqa: E402
+                                   generate_dataset_group_by_blueprint, load_user_config)
+from fizgig.families.lora import FamilyLoRA  # noqa: E402
+from fizgig.families.registry import get as get_family  # noqa: E402
+from fizgig.krea2.trainer import AdaptiveLR  # noqa: E402
+from fizgig.training.metadata import (build_metadata, latest_sample_image, resolve_title,  # noqa: E402
+                                      thumbnail_data_uri)
+from fizgig.training.train_utils import LossRecorder, prune_state_dirs  # noqa: E402
+
+logger = logging.getLogger(__name__)
+
+ADAPTER = "training_adapter"
+CONTEXT = "context"
+
+
+class _Collator:
+    def __init__(self, shared_epoch, dataset):
+        self.shared_epoch = shared_epoch
+        self.dataset = dataset
+
+    def __call__(self, examples):
+        wi = torch.utils.data.get_worker_info()
+        ds = wi.dataset if wi is not None else self.dataset
+        ds.set_current_epoch(self.shared_epoch.value)
+        return examples[0]
+
+
+def _step_scheduler(optimizer, kind, warmup, total, cycles=1, power=1.0):
+    def f(s):
+        if warmup and s < warmup:
+            return (s + 1) / warmup
+        if kind in ("constant", "constant_with_warmup"):
+            return 1.0
+        prog = min(1.0, (s - warmup) / max(1, total - warmup))
+        if kind == "cosine":
+            return 0.5 * (1 + math.cos(math.pi * prog))
+        if kind == "cosine_with_restarts":
+            return 0.5 * (1 + math.cos(math.pi * ((prog * cycles) % 1.0)))
+        if kind == "linear":
+            return 1.0 - prog
+        if kind == "polynomial":
+            return (1.0 - prog) ** power
+        return 1.0
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, f)
+
+
+def _save_state(output_dir, output_name, net, optimizer, *, epoch, global_step, arch_id, extra=None, ema=None):
+    state_dir = os.path.join(output_dir, f"{output_name}-{epoch:06d}-state")
+    os.makedirs(state_dir, exist_ok=True)
+    net.save(os.path.join(state_dir, "lora.safetensors"), dtype=torch.float32)
+    torch.save(optimizer.state_dict(), os.path.join(state_dir, "optimizer.pt"))
+    if ema is not None:
+        torch.save(ema.state_dict(), os.path.join(state_dir, "ema.pt"))
+    rng = {"torch": torch.get_rng_state()}
+    if torch.cuda.is_available():
+        rng["cuda"] = torch.cuda.get_rng_state_all()
+    torch.save(rng, os.path.join(state_dir, "rng.pt"))
+    with open(os.path.join(state_dir, "training_state.json"), "w", encoding="utf-8") as f:   # commit marker, last
+        json.dump({"epoch": epoch, "global_step": global_step, "architecture": arch_id, **(extra or {})}, f)
+    logger.info(f"[state] saved -> {state_dir}")
+    return state_dir
+
+
+def _load_state(state_dir, net, optimizer, device):
+    for need in ("lora.safetensors", "training_state.json"):
+        if not os.path.isfile(os.path.join(state_dir, need)):
+            raise RuntimeError(f"[resume] {state_dir} is not a saved training state (missing {need}). Pick the "
+                               f"folder named like '<lora name>-000012-state'.")
+    if net.load_trainable(os.path.join(state_dir, "lora.safetensors")) == 0:
+        raise RuntimeError(f"[resume] {state_dir} matched none of this LoRA's modules - different rank or "
+                           f"target modules?")
+    optimizer.load_state_dict(torch.load(os.path.join(state_dir, "optimizer.pt"), map_location=device))
+    rng_path = os.path.join(state_dir, "rng.pt")
+    if os.path.exists(rng_path):
+        rng = torch.load(rng_path)
+        torch.set_rng_state(rng["torch"])
+        if "cuda" in rng and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(rng["cuda"])
+    with open(os.path.join(state_dir, "training_state.json"), encoding="utf-8") as f:
+        meta = json.load(f)
+    return int(meta.get("epoch", 0)), int(meta.get("global_step", 0)), meta
+
+
+@torch.no_grad()
+def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_name, steps, cfg, neg, width,
+                     height, seed, ema=None):
+    """Previews on the live model with the training adapter OFF (the deployment setup). File names match the
+    other trainers so the GUI gallery reads them: <name>_e<epoch>_<idx>_<timestamp>_<seed>.png"""
+    os.makedirs(out_dir, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    net.set_enabled(ADAPTER, False)
+    if ema is not None:
+        ema.swap_in()
+    was_training = dit.training
+    dit.eval()
+    paths = []
+    try:
+        for i, cond in enumerate(encoded):
+            lat = driver.generate(dit, cond, width, height, steps=steps, seed=seed + i, cfg=cfg, neg_cond=neg)
+            p = os.path.join(out_dir, f"{output_name}_e{epoch:06d}_{i:02d}_{ts}_{seed + i}.png")
+            driver.decode(vae, lat, width, height).save(p)
+            paths.append(p)
+    finally:
+        if ema is not None:
+            ema.swap_out()
+        net.set_enabled(ADAPTER, True)
+        dit.train(was_training)
+    logger.info(f"[sample] epoch {epoch}: {len(paths)} preview(s) -> {out_dir}")
+    return paths
+
+
+def train_family(family, dit_path, dataset_config, output_dir, output_name, *, network_dim=32, network_alpha=32,
+                 learning_rate=1e-4, max_train_epochs=16, save_every_n_epochs=1, save_state=False,
+                 save_state_on_train_end=False, keep_last_n_states=2, seed=42, precision="bf16",
+                 training_adapter=None, training_adapter_strength=1.0,
+                 context_lora_path=None, context_lora_strength=1.0, min_timestep=0.0, max_timestep=1.0,
+                 vae_path=None, te_path=None, sample_prompts=None, sample_every_n_epochs=0, sample_width=None,
+                 sample_height=None, sample_steps=None, sample_cfg_scale=None, sample_negative=None,
+                 sample_at_first=False, sample_seed=42,
+                 metadata_title=None, metadata_author=None, metadata_description=None, metadata_license=None,
+                 metadata_tags=None, metadata_trigger_phrase=None, metadata_thumbnail=None,
+                 resume_state_dir=None, adaptive_lr=False, adaptive_lr_min=1e-4, adaptive_lr_max=2e-4,
+                 max_grad_norm=1.0, ema_decay=0.0, optimizer_type="adamw", optimizer_args="",
+                 lr_scheduler="constant", lr_warmup_steps=0, lr_scheduler_num_cycles=1, lr_scheduler_power=1.0,
+                 gradient_checkpointing=True):
+    desc = get_family(family)
+    if desc is None or not desc.training_ready:
+        raise RuntimeError(f"unknown or untrainable family {family!r}")
+    driver = desc.load_driver()
+    arch = desc.arch_id
+    sample_steps = sample_steps or desc.preview_steps
+    sample_cfg_scale = desc.preview_cfg if sample_cfg_scale is None else sample_cfg_scale
+    sample_width = sample_width or desc.preview_width
+    sample_height = sample_height or desc.preview_height
+    device = torch.device("cuda")
+    torch.manual_seed(seed)
+    os.makedirs(output_dir, exist_ok=True)
+
+    # ---- data ------------------------------------------------------------------------------------
+    shared_epoch = Value("i", 0)
+    blueprint = BlueprintGenerator(ConfigSanitizer()).generate(
+        load_user_config(dataset_config), argparse.Namespace(), architecture=arch)
+    group = generate_dataset_group_by_blueprint(blueprint.dataset_group, training=True, num_timestep_buckets=None,
+                                                shared_epoch=shared_epoch)
+    if group.num_train_items == 0:
+        raise RuntimeError("No training items - run the cache stages (families/cache.py) first.")
+    for ds in group.datasets:
+        if getattr(ds, "batch_size", 1) != 1:
+            raise RuntimeError(f"{desc.display_name} trains at batch size 1 here (conditioning lengths differ per "
+                               f"image). Set Batch Size to 1.")
+    loader = DataLoader(group, batch_size=1, shuffle=True, collate_fn=_Collator(shared_epoch, group), num_workers=0)
+    steps_per_epoch = len(loader)
+    logger.info(f"{desc.display_name} training: {group.num_train_items} items, {max_train_epochs} epochs, "
+                f"{steps_per_epoch} steps/epoch")
+
+    # ---- previews: encode prompts once, keep the VAE ---------------------------------------------
+    encoded = neg = vae = None
+    sample_dir = os.path.join(output_dir, "sample")
+    if sample_prompts and sample_every_n_epochs and te_path and vae_path:
+        logger.info("[sample] encoding %d preview prompt(s) with %s", len(sample_prompts), desc.text_encoder_label)
+        te = driver.load_text_encoder(te_path, device)
+        encoded = driver.encode_text(te, sample_prompts)
+        if sample_cfg_scale > 1.0:
+            neg = driver.encode_text(te, [sample_negative or ""])[0]
+        driver.unload_text_encoder(te)
+        del te
+        torch.cuda.empty_cache()
+        vae = driver.load_vae(vae_path, device)
+    elif sample_prompts and sample_every_n_epochs:
+        logger.warning("[sample] previews need the text encoder and VAE paths - previews are off for this run")
+
+    # ---- model ----------------------------------------------------------------------------------
+    logger.info(f"Loading {desc.display_name} DiT ({precision}) from {dit_path}")
+    dit = driver.load_dit(dit_path, device, precision)
+    if gradient_checkpointing:
+        driver.enable_gradient_checkpointing(dit, True)
+    net = FamilyLoRA(dit, driver)
+    if training_adapter:
+        n = net.add_file(training_adapter, ADAPTER, training_adapter_strength)
+        if n == 0:
+            raise RuntimeError(f"Training adapter {training_adapter} matched no {desc.display_name} modules.")
+        logger.info(f"[adapter] training adapter ON ({n} Linears, strength {training_adapter_strength:g}) - frozen, "
+                    f"off in previews, not saved into the LoRA")
+    else:
+        logger.warning("[adapter] no training adapter for this run")
+    if context_lora_path:
+        n = net.add_file(context_lora_path, CONTEXT, context_lora_strength)
+        logger.info(f"[context] {os.path.basename(context_lora_path)} frozen + active at {context_lora_strength:g} "
+                    f"({n} Linears)")
+    net.add_trainable(network_dim, network_alpha)
+    params = net.parameters()
+    logger.info(f"LoRA rank {network_dim} alpha {network_alpha:g}: {len(net.trainable_modules())} modules, "
+                f"{sum(p.numel() for p in params) / 1e6:.1f}M trainable params")
+
+    from fizgig.training.optimizers import create_optimizer
+    if adaptive_lr:
+        learning_rate = math.sqrt(adaptive_lr_min * adaptive_lr_max)
+        logger.info(f"[adaptive_lr] ENABLED - start_lr={learning_rate:.3e} min_lr={adaptive_lr_min:.3e} "
+                    f"max_lr={adaptive_lr_max:.3e} (the Learning Rate box is ignored)")
+    optimizer, opt_label = create_optimizer(optimizer_type, params, learning_rate, optimizer_args)
+    adaptive = AdaptiveLR(adaptive_lr_min, adaptive_lr_max) if adaptive_lr else None
+    ema = None
+    if ema_decay and ema_decay > 0:
+        from fizgig.training.ema import EMAWeights
+        ema = EMAWeights(net, float(ema_decay))
+        logger.info(f"[ema] ON at decay {ema_decay:g} - checkpoints and previews use the running average")
+
+    start_epoch = global_step = 0
+    if resume_state_dir:
+        start_epoch, global_step, meta = _load_state(resume_state_dir, net, optimizer, device)
+        if adaptive:
+            adaptive.load_state_dict(meta.get("adaptive_lr_state"))
+        if ema is not None and os.path.exists(os.path.join(resume_state_dir, "ema.pt")):
+            ema.load_state_dict(torch.load(os.path.join(resume_state_dir, "ema.pt"), map_location="cpu"))
+        logger.info(f"[resume] from {resume_state_dir}: continuing at epoch {start_epoch + 1}/{max_train_epochs}")
+    scheduler = None
+    if not adaptive:
+        scheduler = _step_scheduler(optimizer, lr_scheduler, lr_warmup_steps, steps_per_epoch * max_train_epochs,
+                                    lr_scheduler_num_cycles, lr_scheduler_power)
+        for _ in range(global_step):
+            scheduler.step()
+
+    last_prompt = [None]
+
+    def metadata(epoch):
+        thumb = None if (metadata_thumbnail or "").lower() in ("off", "none") else (
+            metadata_thumbnail or latest_sample_image(output_dir))
+        md = build_metadata(None, arch, time.time(),
+                            title=metadata_title if metadata_title is not None else resolve_title(
+                                output_name, metadata_trigger_phrase),
+                            author=metadata_author,
+                            description=metadata_description if metadata_description is not None else last_prompt[0],
+                            license=metadata_license, tags=metadata_tags, trigger_phrase=metadata_trigger_phrase,
+                            thumbnail=thumbnail_data_uri(thumb))
+        md.update({"ss_network_module": f"fizgig.families ({desc.key}, lora)", "ss_network_dim": str(network_dim),
+                   "ss_network_alpha": str(network_alpha), "ss_architecture": arch, "ss_epoch": str(epoch),
+                   "ss_optimizer": opt_label, "ss_learning_rate": f"{learning_rate:g}",
+                   "ss_training_adapter": os.path.basename(training_adapter) if training_adapter else "none"})
+        if context_lora_path:
+            md.update({"ss_context_lora": os.path.basename(context_lora_path),
+                       "ss_context_lora_strength": str(context_lora_strength)})
+        return md
+
+    def save_lora(path, epoch):
+        if ema is not None:
+            ema.swap_in()
+        try:
+            net.save(path, metadata(epoch))
+        finally:
+            if ema is not None:
+                ema.swap_out()
+        logger.info(f"[save] {path}")
+
+    def previews(epoch):
+        if encoded is None:
+            return
+        _render_previews(driver, dit, net, vae, encoded, sample_dir, epoch, output_name=output_name,
+                         steps=sample_steps, cfg=sample_cfg_scale, neg=neg, width=sample_width, height=sample_height,
+                         seed=sample_seed, ema=ema)
+        last_prompt[0] = sample_prompts[-1] if sample_prompts else None
+
+    def state(epoch):
+        _save_state(output_dir, output_name, net, optimizer, epoch=epoch, global_step=global_step, arch_id=arch,
+                    ema=ema, extra={"adaptive_lr_state": adaptive.state_dict()} if adaptive else None)
+
+    if sample_at_first and start_epoch == 0:
+        previews(0)
+
+    # ---- train ----------------------------------------------------------------------------------
+    gen = torch.Generator().manual_seed(seed + start_epoch)
+    pause_flag = os.path.join(output_dir, ".pause_requested")
+    recorder = LossRecorder()
+    progress = tqdm(total=steps_per_epoch * max_train_epochs, initial=global_step, desc="steps", smoothing=0)
+    dit.train()
+    for epoch in range(start_epoch, max_train_epochs):
+        shared_epoch.value = epoch + 1
+        t0 = time.time()
+        for i, batch in enumerate(loader):
+            latents = batch["latents"].to(device)
+            cond = {k[len("cond__"):]: v.to(device) for k, v in batch.items() if k.startswith("cond__")}
+            loss, _info = driver.training_loss(dit, latents, cond, gen, min_t=min_timestep, max_t=max_timestep)
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            if max_grad_norm:
+                torch.nn.utils.clip_grad_norm_(params, max_grad_norm)
+            optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
+            if ema is not None:
+                ema.update()
+            global_step += 1
+            recorder.add(epoch=epoch, step=i, loss=loss.item())
+            progress.set_postfix(avr_loss=f"{recorder.moving_average:.4f}", refresh=False)
+            progress.update(1)
+
+        logger.info(f"epoch {epoch + 1}/{max_train_epochs}  avr_loss={recorder.moving_average:.4f}  step={global_step}  "
+                    f"{(time.time() - t0) / max(1, steps_per_epoch):.2f}s/step  "
+                    f"lr={optimizer.param_groups[0]['lr']:.3e}")
+        if adaptive:
+            adaptive.epoch_boundary(epoch, recorder.moving_average, net.trainable_modules(), optimizer)
+
+        done = epoch + 1
+        cadence = bool(save_every_n_epochs) and done % save_every_n_epochs == 0 and done < max_train_epochs
+        if cadence:
+            save_lora(os.path.join(output_dir, f"{output_name}-{done:06d}.safetensors"), done)
+        state_saved = False
+        if save_state and cadence:
+            state(done)
+            prune_state_dirs(output_dir, output_name, keep_last_n_states)
+            state_saved = True
+        if sample_every_n_epochs and done % sample_every_n_epochs == 0:
+            previews(done)
+        if os.path.exists(pause_flag) and done < max_train_epochs:
+            if state_saved:
+                logger.info(f"[pause] requested - state for epoch {done} already saved; exiting cleanly")
+            else:
+                logger.info(f"[pause] requested - saving state at epoch {done} and exiting cleanly")
+                state(done)
+            progress.close()
+            sys.exit(0)
+
+    progress.close()
+    final = os.path.join(output_dir, f"{output_name}.safetensors")
+    save_lora(final, max_train_epochs)
+    if save_state_on_train_end:
+        state(max_train_epochs)
+    logger.info(f"Training complete -> {final}")
+    return final
+
+
+def setup_parser():
+    p = argparse.ArgumentParser(description="LoRA training for a described model family (standard layer)")
+    p.add_argument("--family", required=True, help="family key, e.g. qwen_image21")
+    p.add_argument("--dit", required=True)
+    p.add_argument("--dataset_config", required=True)
+    p.add_argument("--output_dir", required=True)
+    p.add_argument("--output_name", required=True)
+    p.add_argument("--precision", default="bf16")
+    p.add_argument("--network_dim", type=int, default=32)
+    p.add_argument("--network_alpha", type=float, default=32)
+    p.add_argument("--learning_rate", type=float, default=1e-4)
+    p.add_argument("--max_train_epochs", type=int, default=16)
+    p.add_argument("--save_every_n_epochs", type=int, default=1)
+    p.add_argument("--save_state", action="store_true")
+    p.add_argument("--save_state_on_train_end", action="store_true")
+    p.add_argument("--keep_last_n_states", type=int, default=2)
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--training_adapter", default=None, help="Frozen training adapter (off in previews and saves)")
+    p.add_argument("--training_adapter_strength", type=float, default=1.0)
+    p.add_argument("--context_lora_path", default=None)
+    p.add_argument("--context_lora_strength", type=float, default=1.0)
+    p.add_argument("--min_timestep", type=float, default=0.0, help="Noise band floor (0-1)")
+    p.add_argument("--max_timestep", type=float, default=1.0, help="Noise band ceiling (0-1)")
+    p.add_argument("--vae", default=None)
+    p.add_argument("--text_encoder", default=None)
+    p.add_argument("--sample_prompts", default=None, help="One prompt per line")
+    p.add_argument("--sample_every_n_epochs", type=int, default=0)
+    p.add_argument("--sample_width", type=int, default=None)
+    p.add_argument("--sample_height", type=int, default=None)
+    p.add_argument("--sample_steps", type=int, default=None)
+    p.add_argument("--sample_cfg_scale", type=float, default=None)
+    p.add_argument("--sample_negative", default=None)
+    p.add_argument("--sample_at_first", action="store_true")
+    p.add_argument("--sample_seed", type=int, default=42)
+    for k in ("title", "author", "description", "license", "tags", "trigger_phrase", "thumbnail"):
+        p.add_argument(f"--metadata_{k}", default=None)
+    p.add_argument("--trigger_word", default=None, help="Recorded as the trigger phrase when none is given")
+    p.add_argument("--resume", default=None)
+    p.add_argument("--adaptive_lr", action="store_true")
+    p.add_argument("--adaptive_lr_min", type=float, default=1e-4)
+    p.add_argument("--adaptive_lr_max", type=float, default=2e-4)
+    p.add_argument("--max_grad_norm", type=float, default=1.0)
+    p.add_argument("--ema_decay", type=float, default=0.0)
+    p.add_argument("--optimizer_type", default="adamw")
+    p.add_argument("--optimizer_args", default="")
+    p.add_argument("--lr_scheduler", default="constant",
+                   choices=["constant", "constant_with_warmup", "cosine", "cosine_with_restarts", "linear",
+                            "polynomial"])
+    p.add_argument("--lr_warmup_steps", type=int, default=0)
+    p.add_argument("--lr_scheduler_num_cycles", type=int, default=1)
+    p.add_argument("--lr_scheduler_power", type=float, default=1.0)
+    return p
+
+
+def main():
+    if (sys.platform != "win32" and not os.environ.get("PYTORCH_CUDA_ALLOC_CONF")
+            and os.environ.get("FIZGIG_NO_EXPANDABLE") != "1"):
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    os.environ.setdefault("KMP_BLOCKTIME", "0")
+    os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+    logging.basicConfig(level=logging.INFO)
+    a = setup_parser().parse_args()
+    prompts = None
+    if a.sample_prompts and os.path.exists(a.sample_prompts):
+        with open(a.sample_prompts, encoding="utf-8") as f:
+            prompts = [ln.strip() for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
+    train_family(
+        a.family, a.dit, a.dataset_config, a.output_dir, a.output_name, precision=a.precision,
+        network_dim=a.network_dim, network_alpha=a.network_alpha, learning_rate=a.learning_rate,
+        max_train_epochs=a.max_train_epochs, save_every_n_epochs=a.save_every_n_epochs, save_state=a.save_state,
+        save_state_on_train_end=a.save_state_on_train_end, keep_last_n_states=a.keep_last_n_states, seed=a.seed,
+        training_adapter=a.training_adapter, training_adapter_strength=a.training_adapter_strength,
+        context_lora_path=a.context_lora_path, context_lora_strength=a.context_lora_strength,
+        min_timestep=a.min_timestep, max_timestep=a.max_timestep, vae_path=a.vae, te_path=a.text_encoder,
+        sample_prompts=prompts, sample_every_n_epochs=a.sample_every_n_epochs, sample_width=a.sample_width,
+        sample_height=a.sample_height, sample_steps=a.sample_steps, sample_cfg_scale=a.sample_cfg_scale,
+        sample_negative=a.sample_negative, sample_at_first=a.sample_at_first, sample_seed=a.sample_seed,
+        metadata_title=a.metadata_title, metadata_author=a.metadata_author,
+        metadata_description=a.metadata_description, metadata_license=a.metadata_license,
+        metadata_tags=a.metadata_tags, metadata_trigger_phrase=a.metadata_trigger_phrase or a.trigger_word,
+        metadata_thumbnail=a.metadata_thumbnail, resume_state_dir=a.resume, adaptive_lr=a.adaptive_lr,
+        adaptive_lr_min=a.adaptive_lr_min, adaptive_lr_max=a.adaptive_lr_max, max_grad_norm=a.max_grad_norm,
+        ema_decay=a.ema_decay, optimizer_type=a.optimizer_type, optimizer_args=a.optimizer_args,
+        lr_scheduler=a.lr_scheduler, lr_warmup_steps=a.lr_warmup_steps,
+        lr_scheduler_num_cycles=a.lr_scheduler_num_cycles, lr_scheduler_power=a.lr_scheduler_power)
+
+
+if __name__ == "__main__":
+    main()

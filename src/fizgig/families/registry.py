@@ -28,6 +28,15 @@ def by_gui_label(label: str) -> Optional[FamilyDescription]:
     return None
 
 
+def by_arch_id(arch_id: str) -> Optional[FamilyDescription]:
+    """The description whose architecture id (cache filenames, metadata) is arch_id; None for the old families.
+    Shared code (metadata, dataset buckets) asks this instead of carrying per-family entries."""
+    for d in FAMILIES.values():
+        if d.arch_id == arch_id:
+            return d
+    return None
+
+
 def training_families() -> list:
     """Descriptions whose training entry points exist (shown in the Base Model selector)."""
     return [d for d in FAMILIES.values() if d.training_ready]

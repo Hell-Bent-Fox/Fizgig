@@ -24,6 +24,7 @@ class ModelFile:
     path: str = ""                    # file path inside the repo
     size_gb: float = 0.0
     note: str = ""                    # one plain line shown under the row
+    local_name: str = ""              # name in models/ when the repo's own is generic (diffusion_pytorch_model...)
 
 
 @dataclass(frozen=True)
@@ -104,10 +105,11 @@ class FamilyDescription:
     # LoRA
     lora: Optional[LoRAFormat] = None
 
-    # training entry points; None = not built yet (the family stays hidden from training)
-    train_script: Optional[str] = None
-    cache_latents_script: Optional[str] = None
-    cache_text_script: Optional[str] = None
+    # the family's driver ("module.path:ClassName", a FamilyDriver); empty = not built yet, so the family stays
+    # hidden from training. Caching and training run through the generic entry points below for every family.
+    driver: str = ""
+    modelspec_arch: str = ""          # SAI modelspec.architecture, e.g. "Qwen-Image-2.1"
+    implementation: str = ""          # SAI modelspec.implementation (reference repo URL)
     precisions: tuple = ()            # base precisions offered, e.g. ("bf16", "int8", "nf4")
     optimizers: tuple = ("adamw8bit", "adamw")
     network_types: tuple = ("lora",)
@@ -127,9 +129,25 @@ class FamilyDescription:
     notes: tuple = ()
 
     # ---- derived ------------------------------------------------------------------------------
+    # generic entry points shared by every described family (the standard layer)
+    train_script = "src/fizgig/families/train.py"
+    cache_script = "src/fizgig/families/cache.py"
+
     @property
     def training_ready(self) -> bool:
-        return bool(self.train_script and self.cache_latents_script and self.cache_text_script)
+        return bool(self.driver)
+
+    def load_driver(self):
+        """Instantiate the family's FamilyDriver (imported lazily: the description stays importable without torch)."""
+        import importlib
+        mod, _, cls = self.driver.partition(":")
+        drv = getattr(importlib.import_module(mod), cls)()
+        drv.description = self
+        return drv
+
+    def lora_prefix(self, block: int, module: str) -> str:
+        """Key stem of one wrapped module, e.g. 'transformer.transformer_blocks.3.attn.to_q'."""
+        return self.lora.key_template.split(".{ab}")[0].format(block=block, module=module)
 
     @property
     def pref_keys(self) -> tuple:
@@ -154,8 +172,8 @@ class FamilyDescription:
             "family_key": self.key,
             "is_description_family": True,
             "train_script": self.train_script,
-            "cache_latents_script": self.cache_latents_script,
-            "cache_text_script": self.cache_text_script,
+            "cache_latents_script": self.cache_script,
+            "cache_text_script": self.cache_script,
             "network_module": "fizgig.networks.lora_klein",   # unused: the family trainer builds its own net
             "use_fizgig_venv": True,
             "timestep_sampling": "shift",
@@ -202,6 +220,8 @@ class FamilyDescription:
         for sl in self.speed_loras:
             if not (sl.repo and sl.file and sl.source):
                 problems.append(f"speed LoRA {sl.name!r} is missing repo/file/source")
-        if any(bool(x) != bool(self.train_script) for x in (self.cache_latents_script, self.cache_text_script)):
-            problems.append("training scripts must be all set or all None")
+        if self.driver and ":" not in self.driver:
+            problems.append("driver must be 'module.path:ClassName'")
+        if self.driver and not (self.modelspec_arch and self.implementation):
+            problems.append("a trainable family needs modelspec_arch and implementation for LoRA metadata")
         return problems

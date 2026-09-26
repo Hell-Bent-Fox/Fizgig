@@ -129,6 +129,16 @@ BUCKET_RESO_STEPS = {ARCHITECTURE_MINIMAX: 32}
 LATENT_SPATIAL_FACTOR = {"klein9b": 16, "krea2": 8, ARCHITECTURE_MINIMAX: 16}
 
 
+def _described_family(architecture):
+    """A family added through the standard layer (fizgig.families), or None. The tables above keep serving
+    Klein / Krea 2 / H3; described families carry their own bucket step and latent factor."""
+    try:
+        from fizgig.families.registry import by_arch_id
+        return by_arch_id(architecture)
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -547,6 +557,9 @@ class BucketBatchManager:
                 elif key in ("hidden_states", "attention_mask"):
                     # Krea 2 text cache: multi-layer Qwen3-VL stack + validity mask
                     content_key = key
+                elif key.startswith("cond__"):
+                    # standard-layer families (fizgig.families): the driver's own conditioning keys, verbatim
+                    content_key = key
                 else:
                     # Fallback: strip dtype suffix for compatibility with any
                     # legacy keys that might exist in merged caches
@@ -803,7 +816,8 @@ class ImageDataset(torch.utils.data.Dataset):
         # Regularisation set: a prior anchor, not a subject. The trainer trains it at a fixed
         # reduced LR and keeps the per-image loss watch off it.
         self.is_reg = is_reg
-        self.reso_steps = BUCKET_RESO_STEPS.get(architecture, RESOLUTION_STEPS)
+        _fam = None if architecture in BUCKET_RESO_STEPS else _described_family(architecture)
+        self.reso_steps = _fam.bucket_step if _fam else BUCKET_RESO_STEPS.get(architecture, RESOLUTION_STEPS)
 
         self.seed: Optional[int] = None
         self.current_epoch = 0
@@ -1077,6 +1091,9 @@ class ImageDataset(torch.utils.data.Dataset):
         failure mode.
         """
         factor = LATENT_SPATIAL_FACTOR.get(architecture)
+        if factor is None:
+            _fam = _described_family(architecture)
+            factor = _fam.spatial_factor if _fam else None
         if factor is None:
             return None
         try:

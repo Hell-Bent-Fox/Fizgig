@@ -2,7 +2,7 @@
 
 Facts from the phase-0 research (26 Sep 2026; full notes in the Desktop fizgig_family_descriptions
 RESEARCH_qwen_image_2_1_*.md files). Sources are cited per value. Training entry points stay None until
-the generic trainer drives this family through its driver, which keeps it out of the Training tab until then.
+the family is trained through its driver (qwen_image21/driver.py) by the generic cache + train entry points.
 """
 from fizgig.families.description import (
     FamilyDescription, LoRAFormat, ModelFile, SamplingSettings, SpeedLoRA,
@@ -30,7 +30,8 @@ QWEN_IMAGE_21 = FamilyDescription(
         ModelFile("qwen21_vae", "Qwen Image 2.1 VAE", True, "Qwen/Qwen-Image-2.1",
                   "vae/diffusion_pytorch_model.safetensors", 1.35,
                   "Its own VAE (64 latent channels, 16x, RGBA), the diffusers-format file from the official "
-                  "repo. Not the Krea 2 / Qwen-Image VAE."),
+                  "repo. Not the Krea 2 / Qwen-Image VAE.",
+                  local_name="qwen_image_2.1_vae_diffusers.safetensors"),
         ModelFile("qwen21_text_encoder", "Qwen3-VL-8B text encoder", True, _COMFY,
                   "text_encoders/qwen3vl_8b_bf16.safetensors", 17.53,
                   "Used for caching only, then unloaded before training steps."),
@@ -72,6 +73,9 @@ QWEN_IMAGE_21 = FamilyDescription(
                "Viggle r128 header",
     ),
 
+    driver="fizgig.qwen_image21.driver:QwenImage21Driver",
+    modelspec_arch="Qwen-Image-2.1",
+    implementation="https://github.com/QwenLM/Qwen-Image",
     precisions=("bf16",),             # int8 / nf4 bases not built yet; bf16 needs ~24 GB+
     optimizers=("adamw", "adamw8bit"),
 
