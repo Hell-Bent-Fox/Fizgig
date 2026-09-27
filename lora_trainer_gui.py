@@ -6964,8 +6964,8 @@ class LoRATrainerGUI:
                     clash = "the run in progress"
             if clash is not None and not messagebox.askyesno(
                     "Same output name",
-                    f"This run writes to the same output folder and LoRA name as {clash} — "
-                    f"its checkpoints, state dirs and samples would be overwritten.\n\n"
+                    f"This isn't a settings check: the Output Name matches {clash}, so this run "
+                    f"would save over its checkpoints, state dirs and samples.\n\n"
                     f"Queue it anyway? (Change the Output Name to keep both.)"):
                 return
         self.training_queue.append(item)
@@ -7160,7 +7160,19 @@ class LoRATrainerGUI:
         name = p.get("LORA_NAME") or os.path.basename(folder) or "(unnamed)"
         bits = [f"{item.get('architecture', '?')}",
                 f"{os.path.basename(folder) or '?'} ({n_imgs} items)"]
-        for label, key in (("LR", "LEARNING_RATE"), ("epochs", "MAX_TRAIN_EPOCHS"),
+        # The rate the run will actually use: Automagic owns it from the LR box's value; Adaptive LR
+        # ignores the box and works between Min and Max (MiniMax retired Adaptive LR in place).
+        _is_mm = ARCHITECTURES.get(item.get("architecture", ""), {}).get("is_minimax")
+        _lr = p.get("LEARNING_RATE")
+        if str(p.get("OPTIMIZER_TYPE") or "").strip().lower() == "automagic3":
+            bits.append(f"Automagic from {_lr}")
+        elif p.get("ADAPTIVE_LR") and not _is_mm:
+            _lo = str(p.get("ADAPTIVE_LR_MIN") or "").split(" ")[0]
+            _hi = str(p.get("ADAPTIVE_LR_MAX") or "").split(" ")[0]
+            bits.append(f"adaptive LR {_lo}–{_hi}")
+        elif _lr not in (None, ""):
+            bits.append(f"LR {_lr}")
+        for label, key in (("epochs", "MAX_TRAIN_EPOCHS"),
                            ("dim", "NETWORK_DIM"), ("type", "NETWORK_TYPE"),
                            ("area", "TARGET_LAYERS")):
             v = p.get(key)
