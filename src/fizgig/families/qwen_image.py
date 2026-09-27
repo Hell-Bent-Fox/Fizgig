@@ -77,6 +77,7 @@ QWEN_IMAGE_21 = FamilyDescription(
     driver="fizgig.qwen_image21.driver:QwenImage21Driver",
     modelspec_arch="Qwen-Image-2.1",
     training_adapter="qwen21_training_adapter",
+    ema_default="0.98",               # same default as Krea 2 and MiniMax H3 (measured there, 9 Sep 2026)
     training_adapter_note=("Keeps Qwen 2.1 LoRA training stable: frozen at 1.0 for every training step, off for "
                            "previews and never in your saved file. Without it Qwen 2.1 LoRAs collapse or wobble "
                            "(likeness 77 with it vs 56 without in Fizgig's A/B)."),
@@ -140,7 +141,7 @@ QWEN_IMAGE_21 = FamilyDescription(
             "MAX_TRAIN_EPOCHS": 16, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42,
             "ADAPTIVE_LR": True, "ADAPTIVE_LR_MIN": "1e-4", "ADAPTIVE_LR_MAX": "2e-4",
             "OPTIMIZER_TYPE": "adamw", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
-            "DATASET_MEGAPIXELS": "1.0", "FAMILY_TRAINING_ADAPTER": True,
+            "DATASET_MEGAPIXELS": "1.0", "FAMILY_TRAINING_ADAPTER": True, "FAMILY_EMA": "0.98 (recommended)",
         }),
     ),
     workbench={},                     # no workbench tab yet: training first (Peter, #155)

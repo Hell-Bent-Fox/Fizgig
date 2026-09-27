@@ -123,6 +123,7 @@ class FamilyDescription:
     modelspec_arch: str = ""          # SAI modelspec.architecture, e.g. "Qwen-Image-2.1"
     training_adapter: str = ""        # pref key of the family's frozen training adapter ("" = none)
     training_adapter_note: str = ""   # one line for the Training tab under the adapter toggle
+    ema_default: str = ""             # default EMA decay for the Training tab ("0.98", "Off"); "" = no EMA control
     implementation: str = ""          # SAI modelspec.implementation (reference repo URL)
     precisions: tuple = ()            # base precisions offered, e.g. ("bf16", "int8", "nf4")
     optimizers: tuple = ("adamw8bit", "adamw")

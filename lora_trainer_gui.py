@@ -5495,7 +5495,24 @@ class LoRATrainerGUI:
             training_content, text="", foreground=COLORS["text_explain"], font=HINT_FONT,
             justify=tk.LEFT, wraplength=720)
         self._family_adapter_hint.grid(row=49, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(0, 4))
-        for _w in (self._family_adapter_cb, self._family_adapter_hint):
+        # --- Weight averaging (EMA) — standard-layer families (default from the description) ------
+        self._family_ema_label = ttk.Label(training_content, text="Weight averaging (EMA):")
+        self._family_ema_label.grid(row=52, column=0, sticky=tk.W, padx=5, pady=(8, 2))
+        self._family_ema_frame = ttk.Frame(training_content)
+        self._family_ema_frame.grid(row=52, column=1, columnspan=2, sticky=tk.W, padx=5, pady=(8, 2))
+        self.entries["FAMILY_EMA"] = ttk.Combobox(
+            self._family_ema_frame, values=["Off", "0.98 (recommended)", "0.99 (stronger)", "0.995 (long runs only)"], width=22, state="readonly")
+        self.entries["FAMILY_EMA"].set(str(self.settings.get("FAMILY_EMA", "0.98 (recommended)")))
+        self.entries["FAMILY_EMA"].pack(side=tk.LEFT)
+        self._family_ema_hint = ttk.Label(
+            training_content,
+            text="Checkpoints and previews come from a running average of the adapter's recent steps instead of "
+                 "whichever step the epoch ended on. 0.98 measured best on MiniMax H3 and Krea 2; Off is there for "
+                 "an A/B.",
+            foreground=COLORS["text_explain"], font=(FONT_FAMILY, 9, "italic"), justify=tk.LEFT, wraplength=720)
+        self._family_ema_hint.grid(row=53, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(0, 4))
+        for _w in (self._family_adapter_cb, self._family_adapter_hint, self._family_ema_label,
+                   self._family_ema_frame, self._family_ema_hint):
             _w._fizgig_described_family = "*"   # standard-layer widget: old-family goldens set it aside
             _w.grid_remove()
 
@@ -7386,7 +7403,7 @@ class LoRATrainerGUI:
     }
 
     # Training-tab settings that belong to standard-layer (described) families only.
-    _FAMILY_ENTRY_KEYS = frozenset({"FAMILY_TRAINING_ADAPTER"})
+    _FAMILY_ENTRY_KEYS = frozenset({"FAMILY_TRAINING_ADAPTER", "FAMILY_EMA"})
 
     def _generic_validate_paths(self, desc):
         """Standard layer: every required model file of a described family (plus its training adapter when the
@@ -9049,6 +9066,9 @@ class LoRATrainerGUI:
             self._set_widget_visible(w, has_adapter)
         if has_adapter:
             self._family_adapter_hint.config(text=desc.training_adapter_note)
+        has_ema = bool(desc is not None and desc.ema_default)
+        for w in (self._family_ema_label, self._family_ema_frame, self._family_ema_hint):
+            self._set_widget_visible(w, has_ema)
         if desc is not None and len(desc.network_types) <= 1:
             for w in (self.labels["NETWORK_TYPE"], self._network_type_rowf):
                 self._set_widget_visible(w, False)
@@ -32178,7 +32198,8 @@ class LoRATrainerGUI:
             "MINIMAX_TRAIN_REFINER": bool(self.entries["MINIMAX_TRAIN_REFINER"].get()),
             "MINIMAX_ADAPTER": str(self.entries["MINIMAX_ADAPTER"].get()),
             # standard-layer settings ride only with described families
-            **({"FAMILY_TRAINING_ADAPTER": bool(self.entries["FAMILY_TRAINING_ADAPTER"].get())}
+            **({"FAMILY_TRAINING_ADAPTER": bool(self.entries["FAMILY_TRAINING_ADAPTER"].get()),
+                "FAMILY_EMA": self.entries["FAMILY_EMA"].get()}
                if self._family_desc() is not None else {}),
             # experiment/tread: both ticks must be copied here or the builder reads a stale value
             "MINIMAX_TREAD": bool(self.entries["MINIMAX_TREAD"].get()),
@@ -33025,6 +33046,10 @@ class LoRATrainerGUI:
                 cmd += ["--max_grad_norm", str(float(st["MAX_GRAD_NORM"]))]
         except ValueError:
             pass
+        if desc.ema_default:
+            ema = str(st.get("FAMILY_EMA", "") or desc.ema_default).split(" ")[0]
+            if ema != "Off":
+                cmd += ["--ema_decay", ema]
         if str(st.get("OPTIMIZER_TYPE", "") or "").strip():
             cmd += ["--optimizer_type", str(st["OPTIMIZER_TYPE"]).strip()]
         if str(st.get("OPTIMIZER_ARGS", "") or "").strip():
