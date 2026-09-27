@@ -5744,12 +5744,7 @@ class LoRATrainerGUI:
         self.quant_4bit_check.bind("<<ComboboxSelected>>",
                                    lambda e: self._on_quant_4bit_mode_changed())
         self._quant_4bit_hint = tk.Label(memory_content,
-                 text="Auto (recommended) picks the fastest option that fits your FREE VRAM, and sizes block "
-                      "swap to match. INT8 is 8-bit — fastest, and ~7x more accurate than 4-bit, but needs "
-                      "~18 GB free. 4-bit NF4 is the smallest (~5.6 GB base) so it fits 10–12 GB cards with "
-                      "no swap, at a slight quality cost. fp8 is the least compressed of the three and needs "
-                      "the most VRAM, so it swaps blocks to fit. Anything you pick explicitly is planned "
-                      "for — swap is sized for the option that will actually run.",
+                 text=self._KREA2_PRECISION_HINT,
                  font=HINT_FONT, fg=COLORS["text_explain"], bg=COLORS["bg_surface"],
                  wraplength=600, justify=tk.LEFT)
         self._quant_4bit_hint.grid(row=7, column=1, sticky=tk.W, padx=5, pady=(0, 4))
@@ -8927,12 +8922,18 @@ class LoRATrainerGUI:
         for w in widgets:
             self._set_widget_visible(w, not native)
 
-        # Base precision is the inverse: Krea 2 ONLY. Its options (Auto / INT8 / NF4 / fp8) and
-        # the memory strategy behind them are entirely krea2_train's; Klein's trainer has no
-        # INT8 path and no auto strategy, so offering the dropdown there would list options
-        # Klein cannot run. (Klein's --quant_4bit still exists on its CLI.)
+        # Base precision: Krea 2 (Auto / INT8 / NF4 / fp8, planned by krea2_train) and Klein (Auto /
+        # NF4 / fp8 only - Klein's trainer has no INT8 path; its Auto is resolved at launch by
+        # _parse_blocks_swap: 4-bit under 15 GB, fp8 above). Never under MiniMax or a described family.
+        _is_klein = (not is_krea2 and not self._is_minimax_arch() and self._family_desc() is None)
         for w in (self._quant_4bit_label, self.quant_4bit_check, self._quant_4bit_hint):
-            self._set_widget_visible(w, is_krea2)
+            self._set_widget_visible(w, is_krea2 or _is_klein)
+        _keys = ("auto", "int8", "nf4", "fp8") if is_krea2 else ("auto", "nf4", "fp8")
+        self.quant_4bit_check.configure(values=[self._BASE_PRECISION_LABELS[k] for k in _keys])
+        if self._base_precision() not in _keys:
+            self.quant_4bit_mode_var.set(self._BASE_PRECISION_LABELS["auto"])
+            self._on_quant_4bit_mode_changed()
+        self._quant_4bit_hint.configure(text=self._KREA2_PRECISION_HINT if is_krea2 else self._KLEIN_PRECISION_HINT)
         # Weight averaging for Krea 2 lives in Training Parameters (H3's is in Other Options).
         for w in (getattr(self, "_krea2_ema_label", None), getattr(self, "_krea2_ema_frame", None),
                   getattr(self, "_krea2_ema_hint", None)):
@@ -9313,6 +9314,16 @@ class LoRATrainerGUI:
         tk.Label(head, text="Problem Images", font=(FONT_FAMILY, 15, "bold"),
                  fg=COLORS["text_primary"], bg=COLORS["bg_deep"]).pack(side=tk.LEFT)
         ttk.Button(head, text="Refresh", command=lambda: self._refresh_problem_images(force=True)).pack(side=tk.RIGHT)
+        # What "problem" means here, in plain words: hard images are often the most valuable early
+        # on; only one that has stopped teaching the model gets throttled, recaptioned or set aside.
+        self._problem_explain = tk.Label(
+            win, font=(FONT_FAMILY, 11), fg=COLORS["text_secondary"], bg=COLORS["bg_deep"],
+            justify=tk.LEFT, anchor="w", wraplength=960,
+            text=("Hard images aren't bad images: early on they're often the most valuable in your set. "
+                  "An image only becomes a problem once it stops teaching the model, stuck without improving "
+                  "or already learned. Only then does the trainer ease off it, rewrite its caption, or as a "
+                  "last resort set it aside for the run."))
+        self._problem_explain.pack(fill=tk.X, padx=14, pady=(0, 8))
         self._problem_status = tk.Label(win, text="", font=(FONT_FAMILY, 9),
                                         fg=COLORS["text_muted"], bg=COLORS["bg_deep"],
                                         justify=tk.LEFT, anchor="w")
@@ -9326,6 +9337,7 @@ class LoRATrainerGUI:
             if getattr(self._problem_status, "_wl", None) != wl:
                 self._problem_status._wl = wl
                 self._problem_status.config(wraplength=wl)
+                self._problem_explain.config(wraplength=wl)
         win.bind("<Configure>", lambda e: _status_wrap(e) if e.widget is win else None, add="+")
 
         # Pages + filter (#140). The bar sits outside the canvas; no tk.Text here, so the
@@ -9848,6 +9860,12 @@ class LoRATrainerGUI:
             cfg = ARCHITECTURES.get(self.architecture_var.get(), {})
             if cfg.get("is_krea2"):
                 return self._auto_krea2_strategy()
+            if self._base_precision() == "auto" and not self._is_minimax_arch() and self._family_desc() is None:
+                small = self._klein_small_card()
+                self.quant_4bit_var.set(small)      # Klein Auto: 4-bit below 15 GB, fp8 above
+                if small:
+                    self.update_console("[vram] Klein Auto: 4-bit NF4 base, no block swap (card under 15 GB)\n")
+                    return 0
             return self._auto_training_blocks_swap()
         # Explicit swap value: any INT8 pick from a PREVIOUS auto pass must not leak into
         # this launch (stale --quant_int8 alongside --blocks_to_swap N OOM'd small cards).
@@ -9990,6 +10008,16 @@ class LoRATrainerGUI:
         except Exception:
             pass
         return 20  # safe default for an unknown smaller card
+
+    def _klein_small_card(self) -> bool:
+        """Under 15 GB total VRAM (a 16 GB card reports ~15.9): Klein's Auto base goes 4-bit there."""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return torch.cuda.get_device_properties(0).total_memory / (1024 ** 3) < 15
+        except Exception:
+            pass
+        return False
 
     def _auto_training_blocks_swap(self) -> int:
         """Pick training block swap based on GPU VRAM."""
@@ -10380,6 +10408,18 @@ class LoRATrainerGUI:
                     note.grid_remove()
             except Exception:
                 pass
+
+    _KREA2_PRECISION_HINT = (
+        "Auto (recommended) picks the fastest option that fits your FREE VRAM, and sizes block "
+        "swap to match. INT8 is 8-bit — fastest, and ~7x more accurate than 4-bit, but needs "
+        "~18 GB free. 4-bit NF4 is the smallest (~5.6 GB base) so it fits 10–12 GB cards with "
+        "no swap, at a slight quality cost. fp8 is the least compressed of the three and needs "
+        "the most VRAM, so it swaps blocks to fit. Anything you pick explicitly is planned "
+        "for — swap is sized for the option that will actually run.")
+    _KLEIN_PRECISION_HINT = (
+        "Auto (recommended) trains on fp8 on 16 GB cards and up, and on the 4-bit NF4 base below that: "
+        "NF4 trains a Klein LoRA in about 8.5 GB with no block swap, so it fits 10–12 GB cards, at a "
+        "slight quality cost. 4-bit turns block swap off; its weights can't stream.")
 
     # Base precision (Krea 2). Canonical key -> the label shown in the combobox. Stored as the
     # KEY so the saved value stays stable if the wording changes.
