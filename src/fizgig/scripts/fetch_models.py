@@ -7,6 +7,7 @@ writes the paths into prefs.json for you.
     python -m fizgig.scripts.fetch_models --family krea2      # ~45 GB, no HF account needed
     python -m fizgig.scripts.fetch_models --family klein      # ~39 GB, needs an HF token
     python -m fizgig.scripts.fetch_models --family minimax    # ~47 GB, no HF account needed
+    python -m fizgig.scripts.fetch_models --family qwen_image21 --include-optional   # ~38 GB, no HF account needed
     python -m fizgig.scripts.fetch_models --family tools      # ~1.6 GB helper models
     python -m fizgig.scripts.fetch_models --all
 

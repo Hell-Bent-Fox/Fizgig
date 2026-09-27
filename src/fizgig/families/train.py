@@ -3,7 +3,7 @@
     python src/fizgig/families/train.py --family qwen_image21 --dit ... --dataset_config ... --output_dir ...
 
 The loop is family-agnostic: Fizgig dataset + bucketing (batch 1), frozen adapters (the family's training adapter,
-a context LoRA) active during training and OFF for previews and saves, Adaptive LR or a step scheduler, gradient
+off for previews; a context LoRA, on for previews; neither in saves), Adaptive LR or a step scheduler, gradient
 clipping, optional EMA, per-epoch checkpoints in the family's LoRA key format with SAI metadata, resumable state
 dirs and the GUI's pause contract. Everything model-specific (loading, noise/target/timesteps, forward, sampling,
 decoding, which Linears a LoRA wraps) comes from the driver.
