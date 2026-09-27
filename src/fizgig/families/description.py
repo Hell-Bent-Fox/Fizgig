@@ -127,7 +127,8 @@ class FamilyDescription:
     implementation: str = ""          # SAI modelspec.implementation (reference repo URL)
     precisions: tuple = ("bf16",)     # base precisions offered for training: any of "bf16", "int8", "nf4"
     # measured training memory for the Auto plan: {precision: (peak GB with no block swap, GB saved per swapped
-    # block)}, at the family's usual training settings; {} = Auto just takes the first precision
+    # block)}; the peak may instead be ((megapixels, GB), ...) points, interpolated for the run's resolution.
+    # {} = Auto just takes the first precision
     train_memory: dict = field(default_factory=dict)
     optimizers: tuple = ("adamw8bit", "adamw")
     network_types: tuple = ("lora",)

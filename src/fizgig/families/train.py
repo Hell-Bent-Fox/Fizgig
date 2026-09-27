@@ -330,7 +330,10 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     # ---- model ----------------------------------------------------------------------------------
     if precision == "auto" or blocks_to_swap < 0:
         req = (precision, blocks_to_swap)
-        precision, blocks_to_swap, why = quant.plan(desc, driver, precision, blocks_to_swap)
+        res = user_config.get("general", {}).get("resolution") or [1024, 1024]
+        mp = (res[0] * res[1] if isinstance(res, (list, tuple)) else res * res) / 1e6
+        precision, blocks_to_swap, why = quant.plan(desc, driver, precision, blocks_to_swap, megapixels=mp)
+        why += f" at {mp:.2f} MP"
         logger.info(f"[precision] Auto plan: {precision}, block swap {blocks_to_swap} ({why}); asked {req}")
     logger.info(f"Loading {desc.display_name} DiT ({precision}) from {dit_path}")
     dit, swapped = quant.load_base(driver, dit_path, device, precision, blocks_to_swap)

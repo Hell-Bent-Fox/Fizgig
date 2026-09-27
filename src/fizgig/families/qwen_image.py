@@ -97,11 +97,14 @@ QWEN_IMAGE_21 = FamilyDescription(
                            "(likeness 77 with it vs 56 without in Fizgig's A/B)."),
     implementation="https://github.com/QwenLM/Qwen-Image",
     precisions=("bf16", "int8", "nf4"),
-    # Measured 27 Sep 2026 on a 5090: rank 32, ~1 MP buckets, gradient checkpointing, VAE resident for previews,
-    # 1 epoch of 52 steps. bf16 19.0 GB 2.04 s/step; INT8 11.9 GB 1.94 s/step; NF4 9.5 GB 2.02 s/step;
-    # bf16 + 16 swapped 11.9 GB 3.38 s/step; INT8 + 16 swapped 8.8 GB 2.50 s/step. Quantising costs no speed here,
-    # swapping costs 25-65%, so Auto quantises before it swaps.
-    train_memory={"bf16": (19.0, 0.44), "int8": (11.9, 0.19), "nf4": (9.5, 0.0)},
+    # Measured 27 Sep 2026 on a 5090, gradient checkpointing, VAE resident for previews, 1 epoch of 52 steps:
+    #   ~1 MP buckets, rank 32: bf16 19.0 GB 2.04 s/step; INT8 11.9 GB 1.94; NF4 9.5 GB 2.02;
+    #     bf16 + 16 swapped 11.9 GB 3.38 s/step; INT8 + 16 swapped 8.8 GB 2.50.
+    #   0.25 MP (the Fast presets), rank 8 / 16: bf16 14.6 / 14.9 GB; INT8 8.3 / 8.6; NF4 5.8 / 6.0; all ~0.5 s/step.
+    # Quantising costs no speed, swapping costs 25-65%, so Auto quantises before it swaps. Figures: (megapixels,
+    # peak GB) points - the rank-16 peak at 0.25 MP - and GB saved per swapped block (weights, resolution-free).
+    train_memory={"bf16": (((0.25, 14.9), (1.0, 19.0)), 0.44), "int8": (((0.25, 8.6), (1.0, 11.9)), 0.19),
+                  "nf4": (((0.25, 6.0), (1.0, 9.5)), 0.0)},
     optimizers=("adamw", "adamw8bit"),
     network_types=("lora", "lokr"),
     helper_files=(("Qwen/Qwen-Image-2.1", ("processor/*",)),),   # tokenizer + image processor + chat template

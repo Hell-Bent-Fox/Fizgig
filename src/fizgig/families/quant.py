@@ -99,7 +99,23 @@ def load_base(driver, path, device, precision="bf16", blocks_to_swap=0, supports
     return dit, swap
 
 
-def plan(desc, driver, precision="auto", blocks_to_swap=-1, free_gb=None, margin_gb=1.5):
+def _peak(entry, megapixels):
+    """Peak GB for a train_memory entry at `megapixels`: a number, or ((mp, GB), ...) points interpolated linearly
+    (and extrapolated from the nearest pair) by the run's resolution."""
+    peak = entry[0]
+    if not isinstance(peak, (tuple, list)):
+        return float(peak)
+    pts = sorted(peak)
+    if len(pts) == 1:
+        return float(pts[0][1])
+    (x0, y0), (x1, y1) = (pts[0], pts[1]) if megapixels <= pts[1][0] else (pts[-2], pts[-1])
+    for a, b in zip(pts, pts[1:]):
+        if a[0] <= megapixels <= b[0]:
+            (x0, y0), (x1, y1) = a, b
+    return y0 + (y1 - y0) * (megapixels - x0) / (x1 - x0)
+
+
+def plan(desc, driver, precision="auto", blocks_to_swap=-1, free_gb=None, margin_gb=1.5, megapixels=1.0):
     """Resolve 'auto' precision and/or block swap (-1) from free VRAM and the description's measured training
     memory (desc.train_memory: {precision: (peak GB at no swap, GB saved per swapped block)}).
 
@@ -108,7 +124,7 @@ def plan(desc, driver, precision="auto", blocks_to_swap=-1, free_gb=None, margin
     explicit precision with auto swap gets the fewest blocks that fit. Returns (precision, blocks_to_swap, reason)."""
     if free_gb is None:
         free_gb = free_vram_gb()
-    mem = dict(desc.train_memory or {})
+    mem = {p: (_peak(v, megapixels), v[1]) for p, v in (desc.train_memory or {}).items()}
     offered = [p for p in PRECISIONS if p in desc.precisions]
     cap = driver.max_blocks_to_swap()
     budget = free_gb - margin_gb
