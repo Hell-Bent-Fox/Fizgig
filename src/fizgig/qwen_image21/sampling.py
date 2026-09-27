@@ -54,7 +54,7 @@ def model_inputs(text_emb: torch.Tensor, n_tokens: int, device, text_mask=None):
     text_mask: optional [L] bool marking real tokens (padded prompts, e.g. prompt travel); default all real."""
     L = text_emb.shape[0]
     img_mask = torch.cat([torch.zeros(L, dtype=torch.bool), torch.ones(n_tokens // 4, dtype=torch.bool)])[None]
-    enc_mask = torch.ones(1, L, dtype=torch.bool) if text_mask is None else text_mask.bool().reshape(1, L)
+    enc_mask = torch.ones(1, L, dtype=torch.bool) if text_mask is None else text_mask.reshape(1, L)
     return text_emb[None].to(device), img_mask.to(device), enc_mask.to(device)
 
 

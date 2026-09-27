@@ -355,7 +355,8 @@ class WorkbenchEngine:
     @staticmethod
     def interp_waypoints(vecs, t, mode="lerp"):
         """Piecewise blend across the waypoint dicts (t 0..1 walks the whole chain): float tensors by lerp / norm /
-        slerp along the feature axis, boolean masks as a union."""
+        slerp along the feature axis; boolean masks become weights (a token only one side has fades in or out), so
+        each endpoint is exactly its own prompt and nothing switches on mid-travel."""
         if len(vecs) == 1:
             return vecs[0]
         t = min(max(float(t), 0.0), 1.0)
@@ -368,7 +369,7 @@ class WorkbenchEngine:
             if not torch.is_tensor(a):
                 out[k] = a
             elif a.dtype == torch.bool:
-                out[k] = a | b
+                out[k] = a if local == 0.0 else torch.lerp(a.float(), b.float(), local)
             else:
                 out[k] = _blend(a, b, local, mode)
         return out

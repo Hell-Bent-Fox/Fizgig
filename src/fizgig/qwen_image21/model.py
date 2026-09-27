@@ -201,7 +201,10 @@ class Attention(nn.Module):
                                torch.tril(torch.ones(n, n, dtype=torch.bool, device=q.device))], dim=1)[None, None]
             if key_valid is not None:
                 kv = key_valid[:, None, None, :end]
-                m = kv if m is None else (m & kv)
+                if kv.dtype == torch.bool:
+                    m = kv if m is None else (m & kv)
+                else:                                   # float bias (soft prompt-travel weights)
+                    m = kv if m is None else kv.masked_fill(~m, float("-inf"))
             outs.append(_sdpa(q[:, start:end], k[:, :end], v[:, :end], m))
         outs.append(_sdpa(q[:, prefix_len:], k, v, None if key_valid is None else key_valid[:, None, None, :]))
         h = torch.cat(outs, dim=1).flatten(2, 3).type_as(q)
@@ -240,6 +243,7 @@ class Rope3D(nn.Module):
 
     def __init__(self, theta: int, axes_dim):
         super().__init__()
+        self.theta = theta
         self.axes_dim = list(axes_dim)
         pos = torch.arange(8192)
         neg = torch.arange(1024).flip(0) * -1 - 1
@@ -250,17 +254,21 @@ class Rope3D(nn.Module):
         f = torch.outer(index, 1.0 / torch.pow(theta, torch.arange(0, dim, 2).to(torch.float32).div(dim)))
         return torch.polar(torch.ones_like(f), f)
 
-    def forward(self, img_shapes, image_pad_mask, device):
+    def forward(self, img_shapes, image_pad_mask, device, text_valid=None):
+        """text_valid: optional [joint_len] weights (1 real, 0 padded, in between while prompt travel fades a token
+        in). The image's frame position then starts after the real text only - fractionally while tokens fade - so a
+        padded prompt places the image exactly as the unpadded prompt does, and travel moves it smoothly."""
         self.freqs = [f.to(device) for f in self.freqs]
         frame, img_h, img_w = [], [], []
         cursor, position = 0, 0
         total = image_pad_mask.shape[-1]
         is_img = image_pad_mask.tolist()
+        valid = text_valid.tolist() if text_valid is not None else None
         for _, h, w in img_shapes:
             block_start = is_img.index(True, cursor)
             text_len = block_start - cursor
             frame.extend(range(position, position + text_len))
-            position += text_len
+            position += text_len if valid is None else float(sum(valid[cursor:block_start]))
             cursor = block_start + h * w
             frame.extend([position] * (h * w))
             position += max(h, w)
@@ -268,11 +276,17 @@ class Rope3D(nn.Module):
             img_w.extend([x for _ in range(h) for x in range(-(w - w // 2), w // 2)])
         if cursor < total:
             frame.extend(range(position, position + total - cursor))
-        frame = torch.tensor(frame, dtype=torch.long, device=device)
+        if valid is not None and any(float(f) != int(f) for f in frame):
+            frame_f = torch.tensor(frame, dtype=torch.float32)
+            f0 = self._params(frame_f, self.axes_dim[0], self.theta).to(device)    # fractional start (travel)
+            frame = frame_f.floor().long().to(device)                               # text slots are whole numbers
+        else:
+            frame = torch.tensor(frame, dtype=torch.long, device=device)
+            f0 = self.freqs[0][frame]
         hh, ww = frame.clone(), frame.clone()
         hh[image_pad_mask] = torch.tensor(img_h, dtype=torch.long, device=device)
         ww[image_pad_mask] = torch.tensor(img_w, dtype=torch.long, device=device)
-        return torch.cat([self.freqs[0][frame], self.freqs[1][hh], self.freqs[2][ww]], dim=-1)
+        return torch.cat([f0, self.freqs[1][hh], self.freqs[2][ww]], dim=-1)
 
 
 class QwenImage21DiT(nn.Module):
@@ -329,7 +343,24 @@ class QwenImage21DiT(nn.Module):
         joint = joint.repeat_interleave(repeats, dim=1)
         joint[:, image_pad_mask] = hidden_states.to(joint.dtype)
 
-        rotary = self.pos_embed(img_shapes[0], image_pad_mask, hidden_states.device)
+        key_valid, text_w = None, None
+        if encoder_hidden_states_mask is not None:
+            text_pos = (~image_pad_mask).nonzero(as_tuple=True)[0]
+            vlm_text = ~img_mask[0][: encoder_hidden_states_mask.shape[1]]
+            m = encoder_hidden_states_mask[:, vlm_text]
+            if m.dtype == torch.bool:
+                key_valid = torch.ones(batch, image_pad_mask.shape[0], dtype=torch.bool, device=hidden_states.device)
+                key_valid[:, text_pos] = m
+                text_w = key_valid[0].float()
+            else:
+                # soft key weights (prompt travel): attention bias log(w), -inf at 0 = masked, 0 at 1 = plain
+                w = torch.ones(batch, image_pad_mask.shape[0], dtype=torch.float32, device=hidden_states.device)
+                w[:, text_pos] = m.float()
+                text_w = w[0]
+                key_valid = torch.log(w).to(hidden_states.dtype)
+        padded = text_w is not None and not bool((text_w == 1).all())
+        rotary = self.pos_embed(img_shapes[0], image_pad_mask, hidden_states.device,
+                                text_valid=text_w if padded else None)
         image_ids, target_token_mask = self.build_token_metadata(image_pad_mask, img_shapes[0])
 
         timestep = timestep.to(hidden_states.dtype)
@@ -340,13 +371,6 @@ class QwenImage21DiT(nn.Module):
             mod_mask = None
         temb = self.time_text_embed(timestep, hidden_states)
         modulation = self.modulation(temb)
-
-        key_valid = None
-        if encoder_hidden_states_mask is not None:
-            key_valid = torch.ones(batch, image_pad_mask.shape[0], dtype=torch.bool, device=hidden_states.device)
-            text_pos = (~image_pad_mask).nonzero(as_tuple=True)[0]
-            vlm_text = ~img_mask[0][: encoder_hidden_states_mask.shape[1]]
-            key_valid[:, text_pos] = encoder_hidden_states_mask.bool()[:, vlm_text]
 
         prefix_len = int((~target_token_mask).sum())
         segments = prefix_segments(image_ids, prefix_len)

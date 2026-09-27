@@ -93,9 +93,9 @@ class QwenImage21Driver(FamilyDriver):
                         text_mask=cond.get("mask"), neg_mask=neg_mask)
 
     def pad_conditioning(self, conds):
-        """Pad prompts to one length (zeros) with a mask so they can be blended (prompt travel). The text's length
-        also sets where the image's positions start, so a padded prompt renders very slightly differently from
-        the same prompt unpadded."""
+        """Pad prompts to one length (zeros) with a mask so they can be blended (prompt travel). The DiT masks the
+        padded keys and starts the image's positions after the real tokens, so a padded prompt renders as the
+        unpadded one does."""
         L = max(c["hidden_states"].shape[0] for c in conds)
         out = []
         for c in conds:
