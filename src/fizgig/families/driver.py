@@ -14,7 +14,24 @@ Conventions every driver follows:
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Optional
+
+
+@dataclass
+class Block:
+    """One block of a model's LoRA map: a stable id (used in presets, sidecars and saved states), a display label
+    in the model's own terms, and the dotted names (relative to the DiT) of the Linears it covers."""
+    id: str
+    label: str
+    modules: list = field(default_factory=list)
+
+
+@dataclass
+class BlockGroup:
+    """A named section of blocks (e.g. "Double blocks", "Text fusion", "Refiner", SDXL's "Input blocks")."""
+    label: str
+    blocks: list = field(default_factory=list)
 
 
 class FamilyDriver:
@@ -67,21 +84,29 @@ class FamilyDriver:
         """-> PIL.Image (RGB)."""
         raise NotImplementedError
 
-    # ---- LoRA -----------------------------------------------------------------------------------
-    def lora_target_names(self, dit) -> list:
-        """Dotted module names (relative to dit) of the Linears a LoRA wraps. Default: every
-        '{block_prefix}.{N}.{module}' in the description's LoRA format that exists in the model."""
+    # ---- LoRA and the block map -------------------------------------------------------------------
+    def block_map(self, dit=None) -> list:
+        """The model's LoRA structure in its OWN terms: ordered BlockGroups of Blocks. The workbench builds its
+        slider panel, greying, presets and bake mapping from this, so a family with named areas (text fusion,
+        refiners, SDXL-style input/middle/output blocks) overrides it. Default: one group of `n_blocks` numbered
+        blocks from the description, each covering the description's LoRA modules (filtered to those in `dit`)."""
         d = self.description
-        names = {n for n, _ in dit.named_modules()}
-        out = []
+        names = {n for n, _ in dit.named_modules()} if dit is not None else None
+        blocks = []
         for i in range(d.n_blocks):
-            for m in d.lora.block_modules:
-                n = f"{d.block_prefix}.{i}.{m}"
-                if n in names:
-                    out.append(n)
-        return out
+            mods = [f"{d.block_prefix}.{i}.{m}" for m in d.lora.block_modules]
+            if names is not None:
+                mods = [m for m in mods if m in names]
+            blocks.append(Block(f"block_{i}", f"Block {i}", mods))
+        return [BlockGroup("Blocks", blocks)]
 
-    def block_of(self, module_name: str) -> int:
-        """Block index of a wrapped module name (Repair Studio / block targeting)."""
-        prefix = self.description.block_prefix + "."
-        return int(module_name[len(prefix):].split(".")[0])
+    def lora_target_names(self, dit) -> list:
+        """Dotted module names (relative to dit) of the Linears a LoRA wraps: every module in the block map."""
+        return [m for g in self.block_map(dit) for b in g.blocks for m in b.modules]
+
+    def block_of(self, module_name: str) -> Optional[str]:
+        """The block id a module belongs to, or None for modules outside the map (e.g. a speed LoRA's extras)."""
+        idx = getattr(self, "_block_index", None)
+        if idx is None:
+            idx = self._block_index = {m: b.id for g in self.block_map() for b in g.blocks for m in b.modules}
+        return idx.get(module_name)

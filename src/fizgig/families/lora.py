@@ -1,19 +1,27 @@
-"""The standard layer's LoRA: wraps a family's target Linears, trains one adapter and runs frozen ones alongside.
+"""The standard layer's LoRA: wraps a family's Linears, trains one adapter and runs any number of frozen ones.
 
-Which Linears (driver.lora_target_names) and how keys are written (description.lora: key template, down/up
-names, alpha key) come from the family - so every described family gets the same adapter machinery and its own
-ComfyUI-compatible file format.
+Which Linears (driver.block_map / lora_target_names) and how files are keyed (description.lora: file prefix, down/up
+names, alpha key) come from the family, so every described family gets the same adapter machinery and writes its own
+ComfyUI-compatible format.
 
-Each wrapped Linear computes W x + sum_i s_i * B_i(A_i(x)), s_i = alpha_i / rank_i * strength_i.
-The trainable adapter is named "lora"; frozen ones (the training adapter, a context LoRA) get their own
-names and can be switched off (scale 0) without being unloaded, which is how previews run adapter-off.
+Each wrapped Linear computes W x + sum_i s_i * B_i(A_i(x)). For a frozen adapter
+    s = alpha / rank * load_strength * block_strength * (adapter on) * (block on)
+where block_strength / block on belong to the block the module is in (driver.block_of); modules outside the block
+map (e.g. a speed LoRA's modulation layers) follow the adapter's load strength and on/off only. The trainable adapter
+is named "lora"; frozen ones (training adapter, context LoRA, a workbench primary/donor) get their own names.
+
+Files in any common layout are accepted: the family's own keys, kohya (`lora_unet_<flattened>.lora_down/up`), or
+PEFT / diffusers (`lora_A/lora_B` or `lora_down/lora_up`, bare or under `transformer.` / `diffusion_model.`).
+LyCORIS (LoKR / LoHa) is not handled by the standard layer yet and is refused with a clear message.
 """
 import math
+import re
 
 import torch
 import torch.nn as nn
 
 TRAINABLE = "lora"
+_PREFIXES = ("transformer.", "diffusion_model.", "model.diffusion_model.", "base_model.model.", "")
 
 
 class LoRALinear(nn.Module):
@@ -55,30 +63,43 @@ class FamilyLoRA:
         self.dit = dit
         self.driver = driver
         self.desc = driver.description
-        targets = set(driver.lora_target_names(dit))
-        self.targets = targets
+        self.targets = set(driver.lora_target_names(dit))
+        self.linears = {n for n, m in dit.named_modules() if isinstance(m, nn.Linear)}
+        self._flat = {n.replace(".", "_"): n for n in self.linears}
         self.wrapped = {}
-        for name, mod in list(dit.named_modules()):
-            for cname, child in list(mod.named_children()):
-                full = f"{name}.{cname}" if name else cname
-                if isinstance(child, nn.Linear) and full in targets:
-                    w = LoRALinear(child)
-                    setattr(mod, cname, w)
-                    self.wrapped[full] = w
+        for full in sorted(self.targets):
+            self._wrap(full)
         if not self.wrapped:
             raise RuntimeError(f"{self.desc.display_name}: none of the driver's LoRA targets exist in this model")
-        self._base_scale = {}
+        # per frozen adapter: {"alpha_rank": {module: alpha/rank}, "load": float, "on": bool,
+        #                      "block_mult": {block_id: float}, "block_on": {block_id: bool}}
+        self._frozen = {}
 
     def _keys(self, full):
         """(down key, up key, alpha key) of any wrapped module, in the family's file format. Built from the module
-        path alone, so modules outside the blocks (e.g. a speed LoRA's modulation layers) never need a block number."""
+        path alone, so modules outside the blocks never need a block id."""
         f = self.desc.lora
         stem = f"{f.file_prefix}{full}"
         return f"{stem}.{f.down}.weight", f"{stem}.{f.up}.weight", f.alpha_key.format(prefix=stem)
 
+    def _wrap(self, full):
+        """Wrap one Linear by dotted name (targets at init; frozen files may reach beyond them, e.g. a speed LoRA
+        that also patches the modulation / timestep layers). Returns the LoRALinear or None."""
+        if full in self.wrapped:
+            return self.wrapped[full]
+        parent_name, _, leaf = full.rpartition(".")
+        parent = self.dit.get_submodule(parent_name) if parent_name else self.dit
+        child = getattr(parent, leaf, None)
+        if not isinstance(child, nn.Linear):
+            return None
+        w = LoRALinear(child)
+        setattr(parent, leaf, w)
+        self.wrapped[full] = w
+        return w
+
     # ---- trainable ------------------------------------------------------------------------------
     def add_trainable(self, rank, alpha, blocks=None):
-        """blocks: optional set of block indices to train (None = all)."""
+        """blocks: optional set of block ids to train (None = every target)."""
         for full, w in self.wrapped.items():
             if full not in self.targets:
                 continue                    # extra Linears wrapped for a frozen file are never trained
@@ -92,44 +113,130 @@ class FamilyLoRA:
     def parameters(self):
         return [p for m in self.trainable_modules() for p in m.parameters()]
 
-    # ---- frozen file adapters -------------------------------------------------------------------
-    def _wrap(self, full):
-        """Wrap one more Linear by dotted name (for frozen files that reach beyond the LoRA targets, e.g. a speed
-        LoRA that also patches the modulation / timestep layers). Returns the LoRALinear or None."""
-        if full in self.wrapped:
-            return self.wrapped[full]
-        parent_name, _, leaf = full.rpartition(".")
-        parent = self.dit.get_submodule(parent_name) if parent_name else self.dit
-        child = getattr(parent, leaf, None)
-        if not isinstance(child, nn.Linear):
-            return None
-        w = LoRALinear(child)
-        setattr(parent, leaf, w)
-        self.wrapped[full] = w
-        return w
+    # ---- reading LoRA files in any common layout ------------------------------------------------
+    def _module_for(self, stem):
+        """A file's module stem (dotted, prefixed, or kohya-flattened) -> a Linear name in this model, or None."""
+        if stem.startswith("lora_unet_"):
+            return self._flat.get(stem[len("lora_unet_"):])
+        for p in _PREFIXES:
+            if p and not stem.startswith(p):
+                continue
+            name = stem[len(p):]
+            if name in self.linears:
+                return name
+            if name.replace(".", "_") in self._flat:
+                return self._flat[name.replace(".", "_")]
+        return None
 
-    def add_file(self, path, name, strength=1.0):
-        """Attach a LoRA file frozen, on every Linear the file names (in the family's key format). Returns the
-        number of Linears covered (0 = wrong format)."""
+    def read_file(self, path):
+        """-> {module name: (A, B, alpha)} for every Linear the file adapts in this model."""
         from safetensors.torch import load_file
-        f = self.desc.lora
         sd = load_file(path)
-        n = 0
-        for key in list(sd):
-            full = f.module_of(key)
+        if any(re.search(r"\.(lokr_w1|lokr_w2|hada_w1_a)(\.|$)", k) for k in sd):
+            raise ValueError(f"{path}: LoKR / LoHa files are not supported by the standard layer yet")
+        out = {}
+        for key in sd:
+            m = re.match(r"(.+)\.(lora_A|lora_down)\.weight$", key)
+            if not m:
+                continue
+            stem, down = m.group(1), m.group(2)
+            up = "lora_B" if down == "lora_A" else "lora_up"
+            if f"{stem}.{up}.weight" not in sd:
+                continue
+            full = self._module_for(stem)
             if full is None:
                 continue
+            A, B = sd[key], sd[f"{stem}.{up}.weight"]
+            alpha = sd.get(f"{stem}.alpha")
+            out[full] = (A, B, float(alpha.item()) if alpha is not None else float(A.shape[0]))
+        return out
+
+    # ---- frozen adapters ------------------------------------------------------------------------
+    def add_file(self, path, name, strength=1.0):
+        """Attach a LoRA file frozen under `name` on every Linear it adapts. Returns the number of Linears covered
+        (0 = nothing in the file matches this model)."""
+        n = 0
+        ar = {}
+        for full, (A, B, alpha) in self.read_file(path).items():
             w = self._wrap(full)
-            if w is None:
+            if w is None or A.shape[1] != w.base.in_features or B.shape[0] != w.base.out_features:
                 continue
-            A, B = sd[key], sd[f"{f.file_prefix}{full}.{f.up}.weight"]
-            r = A.shape[0]
-            ak = f.alpha_key.format(prefix=f"{f.file_prefix}{full}")
-            alpha = float(sd[ak].item()) if ak in sd else r
-            w.add(name, r, alpha, False, A, B, strength)
+            w.add(name, A.shape[0], alpha, False, A, B)
+            ar[full] = alpha / A.shape[0]
             n += 1
-        self._base_scale[name] = {full: w.scales[name] for full, w in self.wrapped.items() if name in w.adapters}
+        self._frozen[name] = {"alpha_rank": ar, "load": float(strength), "on": True, "block_mult": {},
+                              "block_on": {}, "path": path}
+        self._apply(name)
         return n
+
+    def has(self, name):
+        return name in self._frozen
+
+    def _apply(self, name):
+        st = self._frozen[name]
+        for full, ar in st["alpha_rank"].items():
+            b = self.driver.block_of(full)
+            on = st["on"] and (b is None or st["block_on"].get(b, True))
+            mult = 1.0 if b is None else st["block_mult"].get(b, 1.0)
+            self.wrapped[full].scales[name] = ar * st["load"] * mult if on else 0.0
+
+    def set_enabled(self, name, enabled: bool):
+        """Switch a frozen adapter on (with its load strength and block settings) or fully off - every module,
+        inside or outside the block map."""
+        if name in self._frozen:
+            self._frozen[name]["on"] = bool(enabled)
+            self._apply(name)
+
+    def set_strength(self, name, strength):
+        """The adapter's whole-file (load) strength."""
+        self._frozen[name]["load"] = float(strength)
+        self._apply(name)
+
+    def set_blocks(self, name, mult=None, enabled=None):
+        """Per-block controls for one adapter: mult {block_id: strength}, enabled {block_id: bool}. Blocks not
+        named keep their current values."""
+        st = self._frozen[name]
+        st["block_mult"].update(mult or {})
+        st["block_on"].update(enabled or {})
+        self._apply(name)
+
+    def adapter_blocks(self, name):
+        """Block ids the adapter touches (the workbench greys out the rest)."""
+        return {b for b in (self.driver.block_of(f) for f in self._frozen.get(name, {}).get("alpha_rank", {}))
+                if b is not None}
+
+    @torch.no_grad()
+    def swap_file(self, name, path):
+        """Replace an adapter's weights with another file's (epoch scrubbing). In place when the file adapts the
+        same modules at the same ranks; otherwise the adapter is rebuilt. Block settings and strength carry over.
+        Returns the number of Linears covered."""
+        st = self._frozen[name]
+        new = self.read_file(path)
+        same = set(new) == set(st["alpha_rank"]) and all(
+            self.wrapped[f].adapters[name][0].weight.shape == new[f][0].shape for f in new)
+        if same:
+            for full, (A, B, alpha) in new.items():
+                a, b = self.wrapped[full].adapters[name]
+                a.weight.copy_(A.to(a.weight.dtype))
+                b.weight.copy_(B.to(b.weight.dtype))
+                st["alpha_rank"][full] = alpha / A.shape[0]
+            st["path"] = path
+            self._apply(name)
+            return len(new)
+        keep = {k: st[k] for k in ("load", "on", "block_mult", "block_on")}
+        self.remove(name)
+        n = self.add_file(path, name, keep["load"])
+        self._frozen[name].update(keep)
+        self._apply(name)
+        return n
+
+    def remove(self, name):
+        """Drop a frozen adapter's weights entirely."""
+        for w in self.wrapped.values():
+            if name in w.adapters:
+                del w.adapters[name]
+                w.scales.pop(name, None)
+        self._frozen.pop(name, None)
 
     def move_adapter(self, name, device):
         """Move one frozen adapter's weights (e.g. a speed LoRA parked on CPU between previews)."""
@@ -137,12 +244,33 @@ class FamilyLoRA:
             if name in w.adapters:
                 w.adapters[name].to(device)
 
-    def set_enabled(self, name, enabled: bool):
-        """Frozen adapters only: switch a named adapter on (its loaded strength) or off."""
-        for full, s in self._base_scale.get(name, {}).items():
-            self.wrapped[full].scales[name] = s if enabled else 0.0
+    # ---- bake: what is live now, as one standard LoRA in the family format ------------------------
+    @torch.no_grad()
+    def bake(self, names, dtype=torch.bfloat16):
+        """One LoRA state dict equal to the named adapters as currently set (strengths, block settings, on/off),
+        in the family's key format. Several adapters on a module are rank-concatenated with their scales folded
+        into the up weights, so alpha = total rank (scale 1). Returns (state_dict, {module: rank})."""
+        sd, ranks = {}, {}
+        for full, w in self.wrapped.items():
+            As, Bs = [], []
+            for n in names:
+                s = w.scales.get(n, 0.0) if n in w.adapters else 0.0
+                if not s:
+                    continue
+                a, b = w.adapters[n]
+                As.append(a.weight.float())
+                Bs.append(b.weight.float() * s)
+            if not As:
+                continue
+            A, B = torch.cat(As, 0), torch.cat(Bs, 1)
+            ka, kb, kal = self._keys(full)
+            sd[ka] = A.to("cpu", dtype).contiguous()
+            sd[kb] = B.to("cpu", dtype).contiguous()
+            sd[kal] = torch.tensor(float(A.shape[0]))
+            ranks[full] = A.shape[0]
+        return sd, ranks
 
-    # ---- save / load (approved key format) ------------------------------------------------------
+    # ---- save / load the trainable adapter (approved key format) --------------------------------
     def state_dict(self, dtype=torch.bfloat16):
         sd = {}
         for full, w in self.wrapped.items():
