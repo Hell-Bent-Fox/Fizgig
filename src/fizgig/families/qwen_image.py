@@ -14,15 +14,17 @@ _VIGGLE = "https://huggingface.co/Viggle/Qwen-Image-2.1-viggle-turbo"
 _TEMPLATE = "Comfy-Org workflow_templates templates/image_qwen_image_2_1_t2i.json"
 _REDDIT = "r/StableDiffusion 'Qwen Image 2.1 4 Steps Turbo Lora is here by Viggle' (community, Sep 2026)"
 
-def _preset(megapixels, rank=16):
-    # Automagic starts at 1e-4 and sets its own rate from there (the start the optimizer A/B used); Adaptive LR,
-    # per-image LR and the look warm-up are off under it. The loss watch still detects problem images.
+def _preset(rank, lr=1e-4, adaptive=None):
+    # 0.5 MP, adamw8bit, 30 epochs saved every epoch. adaptive=(min, max) turns Adaptive LR on (the run starts at
+    # the geometric midpoint and the LR box is ignored); None trains flat at lr. Detection runs; per-image LR is
+    # off, as in the runs these were measured on.
+    lo, hi = adaptive or ("2e-4", "4e-4")
     return {
-        "NETWORK_DIM": rank, "NETWORK_ALPHA": rank, "NETWORK_TYPE": "LoRA (standard)", "LEARNING_RATE": 1e-4,
+        "NETWORK_DIM": rank, "NETWORK_ALPHA": rank, "NETWORK_TYPE": "LoRA (standard)", "LEARNING_RATE": lr,
         "MAX_TRAIN_EPOCHS": 30, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42,
-        "ADAPTIVE_LR": False, "ADAPTIVE_LR_MIN": "2e-4", "ADAPTIVE_LR_MAX": "4e-4",
-        "OPTIMIZER_TYPE": "automagic3", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
-        "DATASET_MEGAPIXELS": megapixels, "BLOCKS_SWAP": "Auto (detect from GPU)",
+        "ADAPTIVE_LR": adaptive is not None, "ADAPTIVE_LR_MIN": lo, "ADAPTIVE_LR_MAX": hi,
+        "OPTIMIZER_TYPE": "adamw8bit", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
+        "DATASET_MEGAPIXELS": "0.5", "BLOCKS_SWAP": "Auto (detect from GPU)",
         "FAMILY_PRECISION": "Auto (fits your free VRAM)", "FAMILY_TRAINING_ADAPTER": True,
         "FAMILY_EMA": "0.98 (recommended)",
         "KREA2_LOSS_WATCH": True, "KREA2_PER_IMAGE_LR": False, "KREA2_AUTO_RECAPTION": False,
@@ -163,12 +165,20 @@ QWEN_IMAGE_21 = FamilyDescription(
     preview_height=1024,
 
     presets=(
-        # Peter, 27 Sep 2026. Automagic beat adamw8bit in the optimizer A/B (rank 16: best likeness 71.1 vs 64.2).
-        # Qwen renders very sharp images and long or low-resolution training trades that sharpness for the
-        # dataset's, so Fast trains at 0.5 MP (quicker than 1 MP, less destructive than 0.25 MP in Peter's tests)
-        # and Standard at 1 MP. The first entry is what a first visit to the family applies.
-        ("✨ Qwen 2.1 Fast (0.5 MP, rank 16, Automagic)", _preset("0.5")),
-        ("✨ Qwen 2.1 Standard (1 MP, rank 16, Automagic)", _preset("1.0")),
+        # Peter, 27 Sep 2026, from a same-dataset comparison re-rendered identically (Desktop qwen_optimizer_ab/
+        # rerender). All 0.5 MP: quicker than 1 MP and keeps more of Qwen's sharpness than 0.25 MP. The first entry
+        # is what a first visit to the family applies.
+        # Fast: rank 8, Adaptive 2e-4..4e-4 - fastest to likeness (44 at epoch 3 vs 23-31 for every other run) and
+        # the best-held skin detail at 0.5 MP. Automagic (lower likeness, softer late) and flat 1e-4 (too slow)
+        # both lost to it.
+        ("✨ Qwen 2.1 Fast (rank 8, adaptive LR)", _preset(8, adaptive=("2e-4", "4e-4"))),
+        # Standard: rank 16 for bigger or mixed datasets. Fast's range at rank 16 overcooked from ~epoch 15 (skin
+        # detail 6.4 -> 4.7 by epoch 30), so the range is halved; Peter has run this at rank 16.
+        ("✨ Qwen 2.1 Standard (rank 16, adaptive LR)", _preset(16, adaptive=("1e-4", "2e-4"))),
+        # Style: flat, because style loss descends steadily and Adaptive LR climbs toward its ceiling on steady
+        # descent, where style overbakes. 1.5e-4 sits between flat 1e-4 (slow at rank 16) and the range that
+        # overcooked rank 16. 30 epochs, every one saved: stop early or pick an epoch in LoRA Royale.
+        ("✨ Qwen 2.1 Style (rank 16, 1.5e-4)", _preset(16, lr=1.5e-4)),
     ),
     workbench=("repair", "explorer", "profiler", "extract", "royale"),
 
