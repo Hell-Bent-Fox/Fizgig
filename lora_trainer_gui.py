@@ -18139,7 +18139,7 @@ class LoRATrainerGUI:
         # Model family selector. Krea 2 / MiniMax H3 = pure weight SVD over all blocks (no pipeline /
         # prompt / timesteps / block presets), so those cards are hidden for both.
         _efam = str(self.last_used.get("extract_family", "klein"))
-        if _efam not in ("klein", "krea2", "minimax"):
+        if _efam not in ("klein", "krea2", "minimax") and self._extract_desc(_efam) is None:
             _efam = "klein"
         self.extract_family_var = tk.StringVar(value=_efam)
         efam_card = self._start_section_card(
@@ -18155,6 +18155,11 @@ class LoRATrainerGUI:
                         command=self._on_extract_family_changed).pack(side=tk.LEFT, padx=(0, 20))
         ttk.Radiobutton(_ef, text="MiniMax H3", variable=self.extract_family_var, value="minimax",
                         command=self._on_extract_family_changed).pack(side=tk.LEFT)
+        for _d in self._workbench_families("extract"):
+            _rb = ttk.Radiobutton(_ef, text=_d.display_name, variable=self.extract_family_var, value=_d.key,
+                                  command=self._on_extract_family_changed)
+            _rb._fizgig_described_family = _d.key
+            _rb.pack(side=tk.LEFT, padx=(20, 0))
 
         # Card 1: Source & Output
         io_card = self._start_section_card(
@@ -18357,7 +18362,7 @@ class LoRATrainerGUI:
         self._extract_output_path = None
 
         # Apply the persisted family (krea2 hides the Klein-only block/prompt/probe controls).
-        self._apply_extract_family_ui(str(self.extract_family_var.get()) == "krea2")
+        self._apply_extract_family_ui(str(self.extract_family_var.get()) == "krea2" or self._extract_desc() is not None)
 
         self._add_youtube_help_button(outer, "extract")
 
@@ -18556,7 +18561,12 @@ class LoRATrainerGUI:
             try:
                 from fizgig.networks.lora import lora_family_from_file
                 fam = lora_family_from_file(filepath)
-                if fam in ("klein", "krea2", "minimax") and fam != self.extract_family_var.get():
+                if fam is None and self._workbench_families("extract"):
+                    from fizgig.families.registry import family_of_lora
+                    _dd = family_of_lora(filepath)
+                    fam = _dd.key if _dd is not None and self._extract_desc(_dd.key) is not None else None
+                if (fam in ("klein", "krea2", "minimax") or self._extract_desc(fam) is not None) \
+                        and fam != self.extract_family_var.get():
                     self.extract_family_var.set(fam)
                     self._on_extract_family_changed()
             except Exception:
@@ -18581,6 +18591,9 @@ class LoRATrainerGUI:
         """Start extraction in a background thread."""
         if str(self.extract_family_var.get()) in ("krea2", "minimax"):
             self._run_extract_krea2()      # weight-only path; model-agnostic, serves H3 too
+            return
+        if self._extract_desc() is not None:
+            self._run_extract_krea2()      # same controls; the worker writes the family's own key format
             return
 
         source = self.extract_source_var.get()
@@ -18780,9 +18793,16 @@ class LoRATrainerGUI:
 
     # --- Krea 2 extract (weight-only SVD over all blocks; no pipeline / prompt / block map) ---
 
+    def _extract_desc(self, fam=None):
+        """The FamilyDescription behind the Extract selector, or None for Klein / Krea 2 / H3."""
+        if fam is None:
+            var = getattr(self, "extract_family_var", None)
+            fam = var.get() if var is not None else ""
+        return next((d for d in self._workbench_families("extract") if d.key == fam), None)
+
     def _on_extract_family_changed(self):
         fam = str(self.extract_family_var.get())
-        if fam not in ("klein", "krea2", "minimax"):
+        if fam not in ("klein", "krea2", "minimax") and self._extract_desc(fam) is None:
             fam = "klein"
         self.last_used["extract_family"] = fam
         self._save_last_used_paths()
@@ -18819,6 +18839,11 @@ class LoRATrainerGUI:
                     "(208+ Linears, up to 5376 wide). Expect several minutes on a free GPU. "
                     "If the GPU is busy (a training run, ComfyUI, another preview), each SVD "
                     "falls back to the CPU and runs much slower - free up VRAM first.")
+                return
+            if self._extract_desc() is not None:
+                self.extract_time_note_var.set(
+                    f"{self._extract_desc().display_name}: exact low-rank SVD of every module, straight from the "
+                    "file (no model loaded) — a few seconds. The result keeps the family's own key format.")
                 return
             self.extract_time_note_var.set(
                 "⏱ Krea 2 is a 12.9B model — weight SVD runs over all 264 modules, several of "
@@ -18886,6 +18911,8 @@ class LoRATrainerGUI:
 
     def _extract_worker_krea2(self, source, output_path):
         """Background worker: weight-only SVD, model-agnostic (extract_weight_only with all blocks)."""
+        if self._extract_desc() is not None:
+            return self._extract_worker_family(self._extract_desc(), source, output_path)
         try:
             import sys
             sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
@@ -18942,6 +18969,43 @@ class LoRATrainerGUI:
         except Exception:
             import traceback
             error_msg = f"Extraction failed:\n{traceback.format_exc()}"
+            def _show_error():
+                self._extract_log(error_msg)
+                self.extract_progress_var.set("Error")
+                self.extract_run_btn.configure(state="normal")
+            self.master.after(0, _show_error)
+
+    def _extract_worker_family(self, desc, source, output_path):
+        """Standard-layer family: exact weight SVD in the family's own key format (families/extract.py)."""
+        try:
+            from fizgig.families.extract import extract_weight_only
+            rank = int(self.extract_rank_var.get())
+            self.master.after(0, lambda: self._extract_log(
+                f"{desc.display_name} weight-only SVD (all modules), rank={rank}\n"))
+
+            def progress(stage, current, total):
+                self.master.after(0, lambda: self.extract_progress_var.set(f"{stage}: {current + 1}/{total}"))
+            r = extract_weight_only(desc, source, output_path, rank, progress=progress)
+            summary = (f"\nExtraction complete!\n"
+                       f"  Output: {r['output']}\n"
+                       f"  Layers extracted: {r['layers']}"
+                       + (f" ({r['skipped']} skipped: names the block map can't place)" if r["skipped"] else "")
+                       + f"\n  Target rank: {rank}\n"
+                       f"  Energy kept: {100 * r['energy']:.1f}% (mean over layers)\n"
+                       f"  Total params: {r['params']:,}\n"
+                       f"  Time: {r['seconds']:.1f}s\n")
+            self._extract_output_path = output_path
+
+            def _update_ui():
+                self._extract_log(summary)
+                self.extract_progress_var.set("Done!")
+                self.extract_run_btn.configure(state="normal")
+                self.extract_open_btn.configure(state="normal")
+            self.master.after(0, _update_ui)
+        except Exception:
+            import traceback
+            error_msg = f"Extraction failed:\n{traceback.format_exc()}"
+
             def _show_error():
                 self._extract_log(error_msg)
                 self.extract_progress_var.set("Error")
@@ -20418,7 +20482,7 @@ class LoRATrainerGUI:
         # Model family selector. Krea 2 and MiniMax H3 are weight-only profiles — no pipeline,
         # prompt, resolution or stages — so those cards are hidden for both.
         _pfam = str(self.last_used.get("profiler_family", "klein"))
-        if _pfam not in ("klein", "krea2", "minimax"):
+        if _pfam not in ("klein", "krea2", "minimax") and self._profiler_desc(_pfam) is None:
             _pfam = "klein"
         self.profiler_family_var = tk.StringVar(value=_pfam)
         fam_card = self._start_section_card(
@@ -20434,6 +20498,11 @@ class LoRATrainerGUI:
                         command=self._on_profiler_family_changed).pack(side=tk.LEFT, padx=(0, 20))
         ttk.Radiobutton(_pf, text="MiniMax H3", variable=self.profiler_family_var, value="minimax",
                         command=self._on_profiler_family_changed).pack(side=tk.LEFT)
+        for _d in self._workbench_families("profiler"):
+            _rb = ttk.Radiobutton(_pf, text=_d.display_name, variable=self.profiler_family_var, value=_d.key,
+                                  command=self._on_profiler_family_changed)
+            _rb._fizgig_described_family = _d.key
+            _rb.pack(side=tk.LEFT, padx=(20, 0))
 
         # Card 1: Model selection
         model_card = self._start_section_card(
@@ -20531,7 +20600,8 @@ class LoRATrainerGUI:
         """Krea 2 / MiniMax H3 profiling is weight-only — hide the activation-probe cards
         (Model/Prompt/Options). Re-show (Klein) uses before= anchors so the cards land back
         in their canonical order."""
-        krea2 = (self.profiler_family_var.get() in ("krea2", "minimax"))
+        krea2 = (self.profiler_family_var.get() in ("krea2", "minimax")
+                 or self._profiler_desc() is not None)          # standard-layer families: weight-only too
 
         def _show(cont, before):
             try:
@@ -20558,6 +20628,13 @@ class LoRATrainerGUI:
             _show(getattr(self, "_profiler_prompt_container", None), getattr(self, "_profiler_options_container", None))
             _show(getattr(self, "_profiler_model_container", None), getattr(self, "_profiler_lora_container", None))
 
+    def _profiler_desc(self, fam=None):
+        """The FamilyDescription behind the Profiler selector, or None for Klein / Krea 2 / H3."""
+        if fam is None:
+            var = getattr(self, "profiler_family_var", None)
+            fam = var.get() if var is not None else ""
+        return next((d for d in self._workbench_families("profiler") if d.key == fam), None)
+
     def _on_profiler_family_changed(self):
         self._apply_profiler_family_ui()
         try:
@@ -20580,7 +20657,12 @@ class LoRATrainerGUI:
             try:
                 from fizgig.networks.lora import lora_family_from_file
                 fam = lora_family_from_file(filepath)
-                if fam in ("klein", "krea2", "minimax") and fam != self.profiler_family_var.get():
+                if fam is None and self._workbench_families("profiler"):
+                    from fizgig.families.registry import family_of_lora
+                    _dd = family_of_lora(filepath)
+                    fam = _dd.key if _dd is not None and self._profiler_desc(_dd.key) is not None else None
+                if (fam in ("klein", "krea2", "minimax") or self._profiler_desc(fam) is not None) \
+                        and fam != self.profiler_family_var.get():
                     self.profiler_family_var.set(fam)
                     self._on_profiler_family_changed()
             except Exception:
@@ -20620,6 +20702,8 @@ class LoRATrainerGUI:
             return self._run_profiler_krea2(lora_path)
         if self.profiler_family_var.get() == "minimax":
             return self._run_profiler_h3(lora_path)
+        if self._profiler_desc() is not None:
+            return self._run_profiler_family(self._profiler_desc(), lora_path)
 
         prompt = self.profiler_prompt_var.get().strip()
         if not prompt:
@@ -20693,6 +20777,54 @@ class LoRATrainerGUI:
             except Exception:
                 import traceback
                 err = traceback.format_exc()
+                def _fail():
+                    self._profiler_log(err + "\n")
+                    self.profiler_progress_var.set("Error — see results.")
+                    self.profiler_run_btn.configure(state="normal")
+                self.master.after(0, _fail)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _run_profiler_family(self, desc, lora_path):
+        """Standard-layer family: weight-only profile laid out by the driver's block map. No pipeline, fast."""
+        import threading
+        self.profiler_run_btn.configure(state="disabled")
+        self.profiler_open_btn.configure(state="disabled")
+        self.profiler_results.configure(state="normal")
+        self.profiler_results.delete(1.0, tk.END)
+        self.profiler_results.configure(state="disabled")
+        self.profiler_progress_var.set(f"Profiling ({desc.display_name}, weight-only)…")
+
+        def worker():
+            try:
+                from fizgig.families.profile import profile_weight_only
+                profiles_dir = (self.prefs_vars["profiles_dir"].get() if "profiles_dir" in self.prefs_vars
+                                else os.path.join(OUTPUT_LORAS_DIR, "profiles"))
+                os.makedirs(profiles_dir, exist_ok=True)
+                stem = os.path.splitext(os.path.basename(lora_path))[0]
+                html, sidecar = profile_weight_only(
+                    desc, lora_path, os.path.join(profiles_dir, f"{stem}_{desc.lora_name_suffix}_profile.html"))
+                self._profiler_report_path = html
+
+                def _done():
+                    import json as _json
+                    try:
+                        d = _json.load(open(sidecar, encoding="utf-8"))
+                        labels = {b.id: b.label for g in self._repair_block_groups(desc) for b in g.blocks}
+                        lines = [f"{desc.display_name} weight-only profile complete.\n",
+                                 f"Report: {html}\n\nTop blocks by weight:\n"]
+                        for b in d.get("top_active_blocks", []):
+                            lines.append(f"  {labels.get(b['name'], 'Outside the blocks'):<18} {b['pct']:.1f}%\n")
+                        self._profiler_log("".join(lines))
+                    except Exception:
+                        self._profiler_log(f"Profile complete: {html}\n")
+                    self.profiler_progress_var.set("Done.")
+                    self.profiler_run_btn.configure(state="normal")
+                    self.profiler_open_btn.configure(state="normal")
+                self.master.after(0, _done)
+            except Exception:
+                import traceback
+                err = traceback.format_exc()
+
                 def _fail():
                     self._profiler_log(err + "\n")
                     self.profiler_progress_var.set("Error — see results.")
