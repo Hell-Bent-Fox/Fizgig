@@ -12742,7 +12742,7 @@ class LoRATrainerGUI:
         self._family_turbo_label = tk.Label(_steps_frame, text="Turbo strength:", font=(FONT_FAMILY, 10),
                                             fg=COLORS["text_secondary"], bg=COLORS["bg_surface"])
         self.entries["FAMILY_TURBO_STRENGTH"] = ttk.Entry(_steps_frame, width=6)
-        self.entries["FAMILY_TURBO_STRENGTH"].insert(0, str(self.settings.get("FAMILY_TURBO_STRENGTH", "1.0")))
+        self.entries["FAMILY_TURBO_STRENGTH"].insert(0, str(self.settings.get("FAMILY_TURBO_STRENGTH", "")))
         ToolTip(self.entries["FAMILY_TURBO_STRENGTH"],
                 "How strongly the turbo LoRA loads for previews. Below 1.0 (around 0.7) with more steps often gives "
                 "cleaner, more detailed previews; 1.0 with the turbo's own step count is the fastest.")
@@ -13512,8 +13512,9 @@ class LoRATrainerGUI:
         sp = desc.preview_speed()
         speed_on = bool(sp and sp.pref_key and self._krea2_pref(sp.pref_key)
                         and os.path.exists(self._krea2_pref(sp.pref_key)))
-        want = sp.settings.steps if speed_on else desc.preview_steps
-        other = desc.preview_steps if speed_on else (sp.settings.steps if sp else None)
+        sp_steps, sp_strength = desc.preview_speed_defaults() or (None, None)
+        want = sp_steps if speed_on else desc.preview_steps
+        other = desc.preview_steps if speed_on else sp_steps
         if hasattr(self, "sample_steps_var") and self.sample_steps_var.get().strip() in ("", str(other)):
             self.sample_steps_var.set(str(want))       # only switch between the two defaults, never a user value
         if hasattr(self, "_family_turbo_label"):
@@ -13522,12 +13523,15 @@ class LoRATrainerGUI:
                     _w.pack(side=tk.LEFT, before=self.sample_steps_note, **_kw)
                 elif not speed_on:
                     _w.pack_forget()
+            if speed_on and not self.entries["FAMILY_TURBO_STRENGTH"].get().strip():
+                self.entries["FAMILY_TURBO_STRENGTH"].insert(0, f"{sp_strength:g}")
         if hasattr(self, "sample_steps_note"):
             self.sample_steps_note.configure(
-                text=(f"{desc.display_name}: the {sp.name} (set in Preferences) is made for {sp.settings.steps} steps at "
-                      f"strength {sp.strength:g}. Other step counts use the model's standard schedule" if speed_on else
+                text=(f"{desc.display_name}: the {sp.name} (set in Preferences), default {sp_steps} steps at strength "
+                      f"{sp_strength:g}. At {sp.settings.steps} steps it uses its own schedule, otherwise the model's "
+                      f"standard one" if speed_on else
                       f"{desc.display_name}: {desc.preview_steps} steps at CFG {desc.preview_cfg:g}"
-                      + (f" - set the {sp.name} in Preferences for {sp.settings.steps}-step previews" if sp else "")))
+                      + (f" - set the {sp.name} in Preferences for {sp_steps}-step previews" if sp else "")))
         if hasattr(self, "krea2_engine_frame"):
             self.krea2_engine_frame.grid_remove()
             self.krea2_engine_note.grid_remove()
@@ -33611,11 +33615,12 @@ class LoRATrainerGUI:
             speed_path = self._krea2_pref(sp.pref_key) if sp and sp.pref_key else ""
             if speed_path and os.path.exists(speed_path):
                 cmd += ["--speed_lora", speed_path]
+                _dflt = desc.preview_speed_defaults()[1]
                 try:
-                    _ts = float(str(st.get("FAMILY_TURBO_STRENGTH", "") or sp.strength))
+                    _ts = float(str(st.get("FAMILY_TURBO_STRENGTH", "") or _dflt))
                 except ValueError:
-                    _ts = sp.strength
-                if abs(_ts - sp.strength) > 1e-9:
+                    _ts = _dflt
+                if abs(_ts - _dflt) > 1e-9:
                     cmd += ["--speed_lora_strength", f"{max(0.0, min(2.0, _ts)):g}"]
             prompts = self._write_krea2_sample_prompts(filename=f"{desc.key}_prompts.txt")
             every = self.sample_every_n_epochs_var.get().strip()

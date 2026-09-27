@@ -141,6 +141,8 @@ class FamilyDescription:
     preview_width: int = 1024
     preview_height: int = 1024
     preview_speed_lora: str = ""      # name of the SpeedLoRA previews use when its file is set in Preferences
+    preview_speed_steps: int = 0      # preview steps with it (0 = the SpeedLoRA's own)
+    preview_speed_strength: float = 0.0   # preview strength for it (0 = the SpeedLoRA's own)
 
     # built-in Training-tab presets: ((name, {GUI setting key: value}), ...); the first is applied on a first visit
     presets: tuple = ()
@@ -194,6 +196,13 @@ class FamilyDescription:
     def preview_speed(self):
         """The SpeedLoRA used for in-training previews, or None."""
         return next((sl for sl in self.speed_loras if sl.name == self.preview_speed_lora), None)
+
+    def preview_speed_defaults(self):
+        """(steps, strength) previews use with the preview SpeedLoRA, or None without one."""
+        sp = self.preview_speed()
+        if sp is None:
+            return None
+        return (self.preview_speed_steps or sp.settings.steps, self.preview_speed_strength or sp.strength)
 
     def default_sampling(self) -> Optional[SamplingSettings]:
         return self.sampling[0] if self.sampling else None
