@@ -14,16 +14,18 @@ _VIGGLE = "https://huggingface.co/Viggle/Qwen-Image-2.1-viggle-turbo"
 _TEMPLATE = "Comfy-Org workflow_templates templates/image_qwen_image_2_1_t2i.json"
 _REDDIT = "r/StableDiffusion 'Qwen Image 2.1 4 Steps Turbo Lora is here by Viggle' (community, Sep 2026)"
 
-def _fast(rank):
+def _preset(megapixels, rank=16):
+    # Automagic starts at 1e-4 and sets its own rate from there (the start the optimizer A/B used); Adaptive LR,
+    # per-image LR and the look warm-up are off under it. The loss watch still detects problem images.
     return {
         "NETWORK_DIM": rank, "NETWORK_ALPHA": rank, "NETWORK_TYPE": "LoRA (standard)", "LEARNING_RATE": 1e-4,
         "MAX_TRAIN_EPOCHS": 30, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42,
-        "ADAPTIVE_LR": True, "ADAPTIVE_LR_MIN": "2e-4", "ADAPTIVE_LR_MAX": "4e-4",
-        "OPTIMIZER_TYPE": "adamw8bit", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
-        "DATASET_MEGAPIXELS": "0.25", "BLOCKS_SWAP": "Auto (detect from GPU)",
+        "ADAPTIVE_LR": False, "ADAPTIVE_LR_MIN": "2e-4", "ADAPTIVE_LR_MAX": "4e-4",
+        "OPTIMIZER_TYPE": "automagic3", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
+        "DATASET_MEGAPIXELS": megapixels, "BLOCKS_SWAP": "Auto (detect from GPU)",
         "FAMILY_PRECISION": "Auto (fits your free VRAM)", "FAMILY_TRAINING_ADAPTER": True,
         "FAMILY_EMA": "0.98 (recommended)",
-        "KREA2_LOSS_WATCH": True, "KREA2_PER_IMAGE_LR": True, "KREA2_AUTO_RECAPTION": False,
+        "KREA2_LOSS_WATCH": True, "KREA2_PER_IMAGE_LR": False, "KREA2_AUTO_RECAPTION": False,
         "KREA2_WARMUP_LOOK": False,
     }
 
@@ -161,21 +163,12 @@ QWEN_IMAGE_21 = FamilyDescription(
     preview_height=1024,
 
     presets=(
-        # Fast presets (Peter, 27 Sep 2026: tested on Qwen, "works great", better skin detail because it learns more
-        # quickly): Krea 2's Ultra Fast recipe - Adaptive LR 2e-4..4e-4, adamw8bit, 30 epochs saved every epoch,
-        # 0.25 MP, Auto precision and swap, loss watch + per-image LR - plus Qwen's training adapter and EMA 0.98.
-        # The first entry is what a first visit to the family applies.
-        ("✨ Qwen 2.1 Fast (rank 8, adaptive LR)", _fast(8)),
-        ("✨ Qwen 2.1 Fast (rank 16, adaptive LR)", _fast(16)),
-        # The recipe measured on 26 Sep 2026 (170-image face set): portrait likeness 76-77 from epoch 6 on, best
-        # around step 2700 (~16 epochs at 170 images). Rank 32, Fizgig adapter on, Adaptive LR 1e-4..2e-4.
-        ("✨ Qwen 2.1 Standard (rank 32, training adapter, adaptive LR)", {
-            "NETWORK_DIM": 32, "NETWORK_ALPHA": 32, "LEARNING_RATE": 1e-4,
-            "MAX_TRAIN_EPOCHS": 16, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42,
-            "ADAPTIVE_LR": True, "ADAPTIVE_LR_MIN": "1e-4", "ADAPTIVE_LR_MAX": "2e-4",
-            "OPTIMIZER_TYPE": "adamw", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
-            "DATASET_MEGAPIXELS": "1.0", "FAMILY_TRAINING_ADAPTER": True, "FAMILY_EMA": "0.98 (recommended)",
-        }),
+        # Peter, 27 Sep 2026. Automagic beat adamw8bit in the optimizer A/B (rank 16: best likeness 71.1 vs 64.2).
+        # Qwen renders very sharp images and long or low-resolution training trades that sharpness for the
+        # dataset's, so Fast trains at 0.5 MP (quicker than 1 MP, less destructive than 0.25 MP in Peter's tests)
+        # and Standard at 1 MP. The first entry is what a first visit to the family applies.
+        ("✨ Qwen 2.1 Fast (0.5 MP, rank 16, Automagic)", _preset("0.5")),
+        ("✨ Qwen 2.1 Standard (1 MP, rank 16, Automagic)", _preset("1.0")),
     ),
     workbench=("repair", "explorer", "profiler", "extract", "royale"),
 
