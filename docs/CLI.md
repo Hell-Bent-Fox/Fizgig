@@ -515,7 +515,7 @@ Two things are on with no flag at all: under `--photo_blocks` / `--clip_blocks` 
 
 ## Qwen Image 2.1 training
 
-Qwen Image 2.1 is the first model on Fizgig's driver system: one cache script and one trainer (`src/fizgig/families/`) serve it, selected with `--family qwen_image21`. You need the files from the [download table](#model-files-where-they-come-from-where-they-go): the bf16 DiT, the VAE and the Qwen3-VL-8B text encoder, plus the training adapter and the Viggle turbo LoRA, which are optional but both in the default recipe. The dataset TOML is the same as the other families'. 12 GB is the smallest card Qwen trains on.
+Qwen Image 2.1 is the first model on Fizgig's driver system: one cache script and one trainer (`src/fizgig/families/`) serve it, selected with `--family qwen_image21`. You need the files from the [download table](#model-files-where-they-come-from-where-they-go): the bf16 DiT, the VAE and the Qwen3-VL-8B text encoder, plus the training adapter and the Viggle turbo LoRA, which are optional but both in the default recipe. The dataset TOML is the same as the other families'. 10 GB is the smallest card Qwen trains on.
 
 ### Full example
 
@@ -646,7 +646,7 @@ Klein's fp8 Base is only ~9.6 GB resident, so 16 GB+ cards skip swap entirely (f
 
 MiniMax H3 plans for itself: `--base_quant auto --blocks_to_swap auto` reads the free VRAM at launch and picks the base precision (int8 at ~21 GB resident on 32 GB cards, 4-bit at ~11 GB below that) and the swap together, and logs the plan as a `[vram]` line. Set either by hand to override.
 
-Qwen Image 2.1 plans the same way with `--precision auto --blocks_to_swap -1`: bf16 on 24 GB+ cards, INT8 with no swap on 12 and 16 GB cards at the presets' 0.5 MP.
+Qwen Image 2.1 plans the same way with `--precision auto --blocks_to_swap -1`: bf16 on 24 GB+ cards, INT8 with no swap on 12 and 16 GB cards and NF4 on 10 GB cards, at the presets' 0.5 MP. Below about 20 GB free the text encoder loads 8-bit, and text-only when it is only encoding (about 8 GB), which is what sets the 10 GB floor.
 
 ---
 
