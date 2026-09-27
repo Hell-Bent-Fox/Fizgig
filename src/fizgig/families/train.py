@@ -307,12 +307,20 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     logger.info(f"LoRA rank {network_dim} alpha {network_alpha:g}: {len(net.trainable_modules())} modules, "
                 f"{sum(p.numel() for p in params) / 1e6:.1f}M trainable params")
 
-    from fizgig.training.optimizers import create_optimizer
-    if adaptive_lr:
+    from fizgig.training.optimizers import create_optimizer, owns_its_rate
+    optimizer, opt_label = create_optimizer(optimizer_type, params, learning_rate, optimizer_args)
+    if owns_its_rate(optimizer):        # Automagic v3 sets its own rate: the watcher and schedulers stand down
+        if adaptive_lr:
+            logger.info("[adaptive_lr] ignored - the optimizer sets its own learning rate")
+        adaptive_lr = False
+        logger.info(f"[optimizer] {opt_label} owns the learning rate from here ({learning_rate:.2e} is its start); "
+                    f"the LR scheduler stands down")
+    if adaptive_lr:                     # the watcher owns the rate: start at the geometric midpoint of Min/Max
         learning_rate = math.sqrt(adaptive_lr_min * adaptive_lr_max)
+        for g in optimizer.param_groups:
+            g["lr"] = learning_rate
         logger.info(f"[adaptive_lr] ENABLED - start_lr={learning_rate:.3e} min_lr={adaptive_lr_min:.3e} "
                     f"max_lr={adaptive_lr_max:.3e} (the Learning Rate box is ignored)")
-    optimizer, opt_label = create_optimizer(optimizer_type, params, learning_rate, optimizer_args)
     adaptive = AdaptiveLR(adaptive_lr_min, adaptive_lr_max) if adaptive_lr else None
     ema = None
     if ema_decay and ema_decay > 0:
@@ -329,7 +337,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             ema.load_state_dict(torch.load(os.path.join(resume_state_dir, "ema.pt"), map_location="cpu"))
         logger.info(f"[resume] from {resume_state_dir}: continuing at epoch {start_epoch + 1}/{max_train_epochs}")
     scheduler = None
-    if not adaptive:
+    if not adaptive and not owns_its_rate(optimizer):
         scheduler = _step_scheduler(optimizer, lr_scheduler, lr_warmup_steps, steps_per_epoch * max_train_epochs,
                                     lr_scheduler_num_cycles, lr_scheduler_power)
         for _ in range(global_step):
