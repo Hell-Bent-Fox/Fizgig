@@ -5144,8 +5144,8 @@ class LoRATrainerGUI:
         ToolTip(_mfts, "A dataset FILTER, not a mode. All media (default) fine-tunes on "
                        "everything in the folder — photos, clips, voice. Photos only is the "
                        "override for a mixed folder: clips and voice are skipped and the run "
-                       "behaves as if the dataset were photos-only (with Optimised Likeness "
-                       "on, the cycle then tightens to the identity blocks). On a dataset "
+                       "behaves as if the dataset were photos-only (with Training mode on "
+                       "Default, the cycle then tightens to the identity blocks). On a dataset "
                        "that's already just photos this choice changes nothing.")
         ttk.Label(self._minimax_ft_frame, text="Blocks:").pack(side=tk.LEFT, padx=(14, 4))
         self.minimax_ft_blockspec_var = tk.StringVar(
@@ -5216,7 +5216,7 @@ class LoRATrainerGUI:
                 "clips stop under 'Finish one category early' — once subject pressure ends, the "
                 "counter-pressure ends with it. Stills only: they tether the visual prior; the "
                 "audio prior is protected by voice routing instead.\n\n"
-                "With Optimised Likeness on, the anchor pulls only on the likeness blocks — "
+                "With Training mode on Default, the anchor pulls only on the likeness blocks — "
                 "the same territory your subject photos train, which is the point. On an "
                 "audio-only dataset, adding reg stills widens the rotation cycle to include "
                 "the photo blocks (the console prints the new span).")
@@ -5224,7 +5224,7 @@ class LoRATrainerGUI:
         self._minimax_ft_hint = ttk.Label(training_content,
                   text="Trains the base model's own weights, not an adapter — Network Type "
                        "and Blocks to Train hide while this is on (they're LoRA machinery); "
-                       "Optimised Likeness Learning keeps working with its usual meaning. "
+                       "Training mode keeps working with its usual meaning. "
                        "Each window is one matmul (attention qkv/out, MLP fc1/fc2) across "
                        "every block — full model depth per window, 4 windows per cycle, on "
                        "an NF4-resident base (the saved checkpoint is still exact int8). "
