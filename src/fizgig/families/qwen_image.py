@@ -154,11 +154,9 @@ QWEN_IMAGE_21 = FamilyDescription(
         ),
     ),
     # Previews on the live training DiT: with the Viggle turbo LoRA when its file is set, else the template's 25
-    # steps (Krea 2 pattern: live training model, family turbo LoRA, no model swap). The turbo runs at 0.7 for 10
-    # steps rather than its own 1.0 / 6: clearly more skin and hair detail (27 Sep, same seed, pod render).
+    # steps (Krea 2 pattern: live training model, family turbo LoRA, no model swap). The turbo runs at its own
+    # 1.0 / 6 steps (Peter, 28 Sep).
     preview_speed_lora="Viggle turbo v0.2.1 (6-step)",
-    preview_speed_steps=10,
-    preview_speed_strength=0.7,
     preview_steps=25,
     preview_cfg=1.0,
     preview_width=1024,

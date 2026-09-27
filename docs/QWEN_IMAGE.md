@@ -60,9 +60,7 @@ The text encoder only encodes, and loads in 8-bit below about 20 GB free (about 
 
 ## Previews and the turbo LoRA
 
-With Viggle's turbo LoRA set in Preferences, training previews render at **strength 0.7 for 10 steps**, which looks much better than the turbo's own 1.0 and 6 steps. The Samples tab's **Turbo strength** box and step count change either. Without the turbo, previews render at 25 steps. The training adapter is off for previews; a Context LoRA stays on.
-
-The same holds in ComfyUI: run the turbo at around 0.7 with more than 6 steps, with or without a Fizgig LoRA loaded.
+With Viggle's turbo LoRA set in Preferences, training previews render at its own settings: **strength 1.0 for 6 steps**. The Samples tab's **Turbo strength** box and step count change either. Without the turbo, previews render at 25 steps. The training adapter is off for previews; a Context LoRA stays on.
 
 ## The per-image loss watch
 
