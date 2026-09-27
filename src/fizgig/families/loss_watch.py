@@ -203,7 +203,18 @@ class Watch:
             torch.cuda.empty_cache()
         ok = False
         try:
-            te = self.driver.load_text_encoder(self.te_path, device)
+            try:        # manual edits only need encoding; captioning needs the full vision-language model
+                te = self.driver.load_text_encoder(self.te_path, device, for_captioning=bool(auto))
+            except torch.OutOfMemoryError:
+                if not auto:
+                    raise
+                logger.warning("[auto-recaption] off for the rest of this run: the captioning text encoder does not "
+                               "fit this card's VRAM. Training continues; manual caption edits still apply.")
+                self.auto_recaption = False
+                gc.collect()
+                torch.cuda.empty_cache()
+                _requeue(path, processing, updates)
+                return
             try:
                 for k, img, attempt in auto:
                     try:

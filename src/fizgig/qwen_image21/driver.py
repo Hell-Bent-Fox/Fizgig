@@ -41,11 +41,12 @@ class QwenImage21Driver(FamilyDriver):
         from fizgig.qwen_image21.vae import load_qwen21_vae
         return load_qwen21_vae(path, device=device)
 
-    def load_text_encoder(self, path, device):
-        """bf16 (17.5 GB) when it fits the free VRAM with room to run, else INT8 (about 9 GB)."""
+    def load_text_encoder(self, path, device, for_captioning=False):
+        """bf16 when it fits the free VRAM with room to run, else INT8. Text-only (no LM head or vision tower,
+        about 1.8 GB less) unless it will caption: 8-bit text-only is about 8.5 GB, which fits a 10 GB card."""
         from fizgig.qwen_image21.embedder import Qwen21TextEncoder
         from fizgig.families.quant import free_vram_gb
-        return Qwen21TextEncoder(path, device=device, int8=free_vram_gb() < 19.5)
+        return Qwen21TextEncoder(path, device=device, int8=free_vram_gb() < 19.5, text_only=not for_captioning)
 
     def unload_text_encoder(self, te):
         te.unload()

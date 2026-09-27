@@ -60,7 +60,9 @@ class FamilyDriver:
     def load_vae(self, path: str, device):
         raise NotImplementedError
 
-    def load_text_encoder(self, path: str, device):
+    def load_text_encoder(self, path: str, device, for_captioning: bool = False):
+        """The text encoder, for encode_text. for_captioning: also for caption_image (the loss watch's auto-recaption
+        passes it), so an encoder may leave out what only captioning needs when it is False."""
         raise NotImplementedError
 
     def unload_text_encoder(self, te) -> None:

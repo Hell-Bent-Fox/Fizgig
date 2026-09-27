@@ -74,9 +74,11 @@ def _int8_weights(model, prefix, device):
 
 class Qwen21TextEncoder:
     def __init__(self, model_path, tokenizer_dir=None, device="cuda", dtype=torch.bfloat16, config_path=None,
-                 int8=False):
+                 int8=False, text_only=False):
         """int8: the language model's Linears as INT8 (about 9 GB instead of 17.5), for cards that cannot hold the
-        bf16 encoder. Quantised one Linear at a time from CPU, so the bf16 model is never resident."""
+        bf16 encoder. Quantised one Linear at a time from CPU, so the bf16 model is never resident.
+        text_only: drop the LM head and the vision tower, which encoding never uses (about 1.8 GB), so the 8-bit
+        encoder fits a 10 GB card. Such an encoder cannot caption()."""
         from accelerate import init_empty_weights
         from transformers import AutoTokenizer, Qwen3VLConfig, Qwen3VLForConditionalGeneration
 
@@ -97,6 +99,11 @@ class Qwen21TextEncoder:
         if info.unexpected_keys or info.missing_keys:
             raise RuntimeError(f"Qwen3-VL-8B checkpoint mismatch: missing={info.missing_keys[:8]}, "
                                f"unexpected={info.unexpected_keys[:8]}")
+        self.text_only = text_only
+        if text_only:
+            model.lm_head = None
+            model.model.visual = None
+            del sd
         if int8:
             n = _int8_weights(model, "language_model.layers.", self.device)
             logger.info(f"[text encoder] 8-bit weights: {n} language-model Linears (low-VRAM card); matmuls stay bf16")
@@ -116,7 +123,9 @@ class Qwen21TextEncoder:
         # transformers 4.x already returns that; the hook makes it hold on 5.x too.
         handle = lm.norm.register_forward_hook(lambda m, args, out: args[0])
         try:
-            out = self.model(input_ids=tok.input_ids, attention_mask=tok.attention_mask, output_hidden_states=True)
+            # the base model, not the LM wrapper: same hidden states, no vocabulary-wide logits
+            out = self.model.model(input_ids=tok.input_ids, attention_mask=tok.attention_mask,
+                                   output_hidden_states=True)
         finally:
             handle.remove()
         hs = out.hidden_states[-1]
@@ -130,6 +139,8 @@ class Qwen21TextEncoder:
         """Caption an image with the same Qwen3-VL-8B (the ComfyUI file carries its LM head and vision tower), with
         Krea 2's auto-recaption instructions and decoding: sampled at temperature 0.5 with a random seed, the torch RNG
         saved and restored so training noise is untouched. image: a path or a PIL image."""
+        if self.text_only:
+            raise RuntimeError("this Qwen3-VL encoder was loaded text-only; load it with text_only=False to caption")
         import random as _random
         from PIL import Image
         from transformers import Qwen3VLProcessor
