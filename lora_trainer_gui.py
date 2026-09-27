@@ -16797,7 +16797,7 @@ class LoRATrainerGUI:
         # Model family selector. Krea 2 explores on the fp8 Turbo (always) and has no ref-strength
         # dial (vision-path reference), so the DiT radio + ref Strength are hidden in Krea 2 mode.
         _xfam = str(self.last_used.get("explorer_family", "klein"))
-        if _xfam not in ("klein", "krea2", "minimax"):
+        if _xfam not in ("klein", "krea2", "minimax") and self._explorer_desc(_xfam) is None:
             _xfam = "klein"
         self.explorer_family_var = tk.StringVar(value=_xfam)
         xfam_card = self._start_section_card(
@@ -16814,6 +16814,11 @@ class LoRATrainerGUI:
                         command=self._on_explorer_family_changed).pack(side=tk.LEFT, padx=(0, 20))
         ttk.Radiobutton(_xf, text="MiniMax H3", variable=self.explorer_family_var, value="minimax",
                         command=self._on_explorer_family_changed).pack(side=tk.LEFT)
+        for _d in self._workbench_families("explorer"):
+            _rb = ttk.Radiobutton(_xf, text=_d.display_name, variable=self.explorer_family_var, value=_d.key,
+                                  command=self._on_explorer_family_changed)
+            _rb._fizgig_described_family = _d.key
+            _rb.pack(side=tk.LEFT, padx=(20, 0))
 
         # Card 1: Setup
         setup_card = self._start_section_card(
@@ -17096,7 +17101,14 @@ class LoRATrainerGUI:
 
     def _explorer_family(self):
         fam = str(getattr(self, "explorer_family_var", None) and self.explorer_family_var.get())
-        return fam if fam in ("klein", "krea2", "minimax") else "klein"
+        return fam if fam in ("klein", "krea2", "minimax") or self._explorer_desc(fam) is not None else "klein"
+
+    def _explorer_desc(self, fam=None):
+        """The FamilyDescription behind the Explorer selector, or None for Klein / Krea 2 / H3."""
+        if fam is None:
+            var = getattr(self, "explorer_family_var", None)
+            fam = var.get() if var is not None else ""
+        return next((d for d in self._workbench_families("explorer") if d.key == fam), None)
 
     def _explorer_is_krea2(self):
         return self._explorer_family() == "krea2"
@@ -17104,6 +17116,8 @@ class LoRATrainerGUI:
     def _explorer_default_state(self):
         from fizgig.repair_studio.state import SliderState
         fam = self._explorer_family()
+        if self._explorer_desc(fam) is not None:
+            return self._repair_default_state_for_desc(self._explorer_desc(fam))
         return (SliderState.default_krea2() if fam == "krea2"
                 else SliderState.default_h3() if fam == "minimax"
                 else SliderState.default_klein9b())
@@ -17121,6 +17135,9 @@ class LoRATrainerGUI:
         """The family a Repair <-> Explorer handoff lands on: the same one. (Used to collapse
         MiniMax H3 to Klein — an H3 LoRA on the Klein engine, review 16 Sep 2026.)"""
         fam = str(fam or "")
+        if any(d.key == fam and d.training_ready and {"repair", "explorer"} <= set(d.workbench)
+               for d in DESCRIBED_FAMILIES.values()):
+            return fam
         return fam if fam in ("krea2", "minimax") else "klein"
 
     def _on_explorer_strength_changed(self):
@@ -17148,7 +17165,7 @@ class LoRATrainerGUI:
         Repair Studio). Klein: the old behaviour, every slider set to it (its engine has no
         load scale)."""
         v = self._explorer_strength()
-        if self._explorer_family() in ("krea2", "minimax"):
+        if self._explorer_family() in ("krea2", "minimax") or self._explorer_desc() is not None:
             state.primary_scale = v
             state.donor_scale = 1.0
         else:
@@ -17159,6 +17176,9 @@ class LoRATrainerGUI:
         """The structural-composition anchor block — never locked/disabled, only inverted/pushed.
         Klein: double_0. Krea 2: block_0. MiniMax H3: h3blk_0 (each family's first block)."""
         fam = self._explorer_family()
+        desc = self._explorer_desc(fam)
+        if desc is not None:
+            return self._repair_block_groups(desc)[0].blocks[0].id   # the family's first block
         return {"krea2": "block_0", "minimax": "h3blk_0"}.get(fam, "double_0")
 
     def _on_explorer_family_changed(self):
@@ -17204,6 +17224,8 @@ class LoRATrainerGUI:
             return self._explorer_ensure_engine_krea2()
         if self._explorer_family() == "minimax":
             return self._explorer_ensure_engine_h3()
+        if self._explorer_desc() is not None:
+            return self._explorer_ensure_engine_family(self._explorer_desc())
 
         dit_choice = self.explorer_dit_var.get()
         dit_pref_key = "base_dit" if dit_choice == "base" else "distilled_dit"
@@ -17242,6 +17264,37 @@ class LoRATrainerGUI:
         except Exception:
             import traceback
             messagebox.showerror("Error", f"Failed to load models:\n{traceback.format_exc()}")
+            self.explorer_status_var.set("Error loading models.")
+            return False
+
+    def _explorer_ensure_engine_family(self, desc):
+        """Standard-layer family: the same WorkbenchEngine as Repair Studio, previews with the family's speed LoRA
+        whenever its file is set in Preferences."""
+        paths = {r: self.prefs_vars.get(desc.pref_for(r), tk.StringVar()).get().strip()
+                 for r in ("dit", "vae", "text_encoder")}
+        labels = {f.role: f.label for f in desc.model_files}
+        for role, p in paths.items():
+            if not p or not os.path.exists(p):
+                messagebox.showerror("Error", f"{labels.get(role, role)} path not set or not found.\n"
+                                              "Configure on Preferences tab.")
+                return False
+        sp = desc.preview_speed()
+        speed_path = self.prefs_vars.get(sp.pref_key, tk.StringVar()).get().strip() if sp is not None else ""
+        from fizgig.families.workbench import WorkbenchEngine
+        if self._explorer_engine is None or not isinstance(self._explorer_engine, WorkbenchEngine) \
+                or self._explorer_engine.desc.key != desc.key:
+            self._explorer_engine = WorkbenchEngine(desc)
+        try:
+            self.explorer_status_var.set(f"Loading {desc.display_name}...")
+            self.master.update_idletasks()
+            self._explorer_engine.ensure_pipeline(
+                dit_path=paths["dit"], vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
+                speed_lora_path=speed_path if speed_path and os.path.exists(speed_path) else "", device="cuda")
+            self.explorer_status_var.set("Models loaded.")
+            return True
+        except Exception:
+            import traceback
+            messagebox.showerror("Error", f"Failed to load {desc.display_name}:\n{traceback.format_exc()}")
             self.explorer_status_var.set("Error loading models.")
             return False
 
@@ -17328,6 +17381,13 @@ class LoRATrainerGUI:
         from fizgig.networks.lora import lora_family_from_file, FAMILY_DISPLAY_NAMES
         detected = lora_family_from_file(path)
         from fizgig.networks.lora import INFERENCE_FAMILIES
+        if detected is None and self._workbench_families("explorer"):
+            from fizgig.families.registry import family_of_lora
+            _dd = family_of_lora(path)
+            if _dd is not None and self._explorer_desc(_dd.key) is not None:
+                detected = _dd.key
+                FAMILY_DISPLAY_NAMES = {**FAMILY_DISPLAY_NAMES, _dd.key: _dd.display_name}
+                INFERENCE_FAMILIES = tuple(INFERENCE_FAMILIES) + (_dd.key,)
         if detected is not None and detected not in INFERENCE_FAMILIES:
             messagebox.showerror(
                 "Unsupported family",
@@ -18025,7 +18085,11 @@ class LoRATrainerGUI:
         from fizgig.repair_studio.bake import save_repaired_lora
         from fizgig.networks.lora import UnsupportedLoRAFormat
         try:
-            summary = save_repaired_lora(primary_path, self._explorer_baseline_state, out)
+            if hasattr(self._explorer_engine, "save_repaired"):     # standard-layer family: family key format
+                summary = self._explorer_engine.save_repaired(out, self._explorer_baseline_state,
+                                                              include_donor=False)
+            else:
+                summary = save_repaired_lora(primary_path, self._explorer_baseline_state, out)
             _fmt_note = ("\n\nSaved natively in LyCORIS format — lossless, no conversion."
                          if summary.get('format_out') == 'lycoris' else "")
             _ps = float(getattr(self._explorer_baseline_state, "primary_scale", 1.0))
@@ -30517,10 +30581,6 @@ class LoRATrainerGUI:
         if self.repair_engine is None or self.repair_engine.primary_network is None:
             messagebox.showerror("Error", "Load a primary LoRA first.")
             return
-        if self._repair_desc() is not None:
-            messagebox.showinfo("Not yet", f"LoRA the Explorer doesn't support {self._repair_desc().display_name} "
-                                           "yet.")
-            return
         # Mirror of the Explorer-side guard: _reset_repair_session below refuses to tear down
         # mid-preview, but it returns into THIS method which would then build the Explorer
         # pipeline alongside the still-rendering preview — two pipelines, two threads, one
@@ -30942,13 +31002,17 @@ class LoRATrainerGUI:
             cache[desc.key] = desc.load_driver().block_map()
         return cache[desc.key]
 
+    def _repair_default_state_for_desc(self, desc):
+        from fizgig.repair_studio.state import BlockState, SliderState
+        return SliderState(blocks={b.id: BlockState() for g in self._repair_block_groups(desc) for b in g.blocks},
+                           preview_width=768, preview_height=768)
+
     def _repair_default_state(self, fam):
         """Every slider at its default for the family's blocks."""
-        from fizgig.repair_studio.state import BlockState, SliderState
+        from fizgig.repair_studio.state import SliderState
         desc = self._repair_desc(fam)
         if desc is not None:
-            return SliderState(blocks={b.id: BlockState() for g in self._repair_block_groups(desc)
-                                       for b in g.blocks}, preview_width=768, preview_height=768)
+            return self._repair_default_state_for_desc(desc)
         return (SliderState.default_krea2() if fam == "krea2"
                 else SliderState.default_h3() if fam == "minimax"
                 else SliderState.default_klein9b())

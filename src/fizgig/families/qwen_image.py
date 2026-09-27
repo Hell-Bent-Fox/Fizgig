@@ -144,7 +144,7 @@ QWEN_IMAGE_21 = FamilyDescription(
             "DATASET_MEGAPIXELS": "1.0", "FAMILY_TRAINING_ADAPTER": True, "FAMILY_EMA": "0.98 (recommended)",
         }),
     ),
-    workbench=("repair",),
+    workbench=("repair", "explorer"),
 
     notes=(
         ("A plain LoRA is unstable: collapse to texture at lr 5e-4 (~step 300), wobble at 1e-4, a no-adapter "
