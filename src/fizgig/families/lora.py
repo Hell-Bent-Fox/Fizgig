@@ -165,7 +165,7 @@ class FamilyLoRA:
             ar[full] = alpha / A.shape[0]
             n += 1
         self._frozen[name] = {"alpha_rank": ar, "load": float(strength), "on": True, "block_mult": {},
-                              "block_on": {}, "path": path}
+                              "block_on": {}, "outside_on": True, "path": path}
         self._apply(name)
         return n
 
@@ -176,7 +176,7 @@ class FamilyLoRA:
         st = self._frozen[name]
         for full, ar in st["alpha_rank"].items():
             b = self.driver.block_of(full)
-            on = st["on"] and (b is None or st["block_on"].get(b, True))
+            on = st["on"] and (st["outside_on"] if b is None else st["block_on"].get(b, True))
             mult = 1.0 if b is None else st["block_mult"].get(b, 1.0)
             self.wrapped[full].scales[name] = ar * st["load"] * mult if on else 0.0
 
@@ -190,6 +190,11 @@ class FamilyLoRA:
     def set_strength(self, name, strength):
         """The adapter's whole-file (load) strength."""
         self._frozen[name]["load"] = float(strength)
+        self._apply(name)
+
+    def set_outside(self, name, enabled: bool):
+        """On/off for the adapter's modules outside the block map (no slider reaches them)."""
+        self._frozen[name]["outside_on"] = bool(enabled)
         self._apply(name)
 
     def set_blocks(self, name, mult=None, enabled=None):
@@ -223,7 +228,7 @@ class FamilyLoRA:
             st["path"] = path
             self._apply(name)
             return len(new)
-        keep = {k: st[k] for k in ("load", "on", "block_mult", "block_on")}
+        keep = {k: st[k] for k in ("load", "on", "block_mult", "block_on", "outside_on")}
         self.remove(name)
         n = self.add_file(path, name, keep["load"])
         self._frozen[name].update(keep)

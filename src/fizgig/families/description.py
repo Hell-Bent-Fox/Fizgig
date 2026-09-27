@@ -141,8 +141,8 @@ class FamilyDescription:
     # built-in Training-tab presets: ((name, {GUI setting key: value}), ...); the first is applied on a first visit
     presets: tuple = ()
 
-    # workbench tabs that support this family: {"repair": "module.Class", ...}; absent = hidden
-    workbench: dict = field(default_factory=dict)
+    # workbench tools that support this family ("repair", ...); the generic WorkbenchEngine drives them all
+    workbench: tuple = ()
 
     # things a user or a later session must know, with sources
     notes: tuple = ()

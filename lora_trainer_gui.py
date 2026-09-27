@@ -20865,14 +20865,14 @@ class LoRATrainerGUI:
         try:
             if str(self.last_used.get("repair_family", "klein")) in ("krea2", "minimax"):
                 _fam = str(self.last_used.get("repair_family"))
+            elif self._repair_desc(str(self.last_used.get("repair_family", ""))) is not None:
+                _fam = str(self.last_used.get("repair_family"))
         except Exception:
             pass
         self.repair_family_var = tk.StringVar(value=_fam)
         # Engine + state — lazy
         self.repair_engine = None
-        self.repair_state = (SliderState.default_krea2() if _fam == "krea2"
-                             else SliderState.default_h3() if _fam == "minimax"
-                             else SliderState.default_klein9b())
+        self.repair_state = self._repair_default_state(_fam)
         self.repair_block_vars = {}   # block_id -> dict(primary_chk, primary_scale, primary_lbl, donor_chk, donor_scale, donor_lbl)
         self.repair_thumbnails = {}   # GC-safe ImageTk.PhotoImage refs
         self.repair_pil_images = {"baseline": None, "tweaked": None}  # raw PIL for resize-to-fit
@@ -21008,8 +21008,19 @@ class LoRATrainerGUI:
         families (Krea 2 + MiniMax H3 — the per-block sliders stay as the discovery
         instrument). `krea2` below means "any no-map family" (historical naming)."""
         fam = self.repair_family_var.get()
-        krea2 = fam in ("krea2", "minimax")
-        if fam == "minimax":
+        desc = self._repair_desc(fam)
+        krea2 = fam in ("krea2", "minimax") or desc is not None
+        if desc is not None:
+            # Standard-layer family: previews with its speed LoRA (when set in Preferences) or its default
+            # sampling. Radio values stay distilled / base so the rest of the tab reads them unchanged.
+            sp, ds = desc.preview_speed(), desc.default_sampling()
+            self._repair_dit_radio_a.configure(
+                text=(f"{sp.name.split(' (')[0]} ({sp.settings.steps}-step, default)" if sp else "Default"),
+                state="normal" if sp else "disabled")
+            self._repair_dit_radio_b.configure(text=f"Full ({ds.steps}-step, slow)", state="normal")
+            if not self._repair_dit_radio_b.winfo_manager():
+                self._repair_dit_radio_b.pack(side=tk.LEFT)
+        elif fam == "minimax":
             # H3 has no DiT choice: base precision is auto-planned from free VRAM and the
             # Turbo LoRA (6-step) applies whenever it's set in Preferences.
             self._repair_dit_radio_a.configure(text="Auto (int8/NF4 by VRAM + Turbo LoRA)",
@@ -21076,13 +21087,13 @@ class LoRATrainerGUI:
             try:
                 if _w is None:
                     continue
-                if fam == "minimax":
+                if fam == "minimax" or desc is not None:
                     _w.grid_remove()
                 else:
                     _w.grid()
             except Exception:
                 pass
-        if fam == "minimax" and self.repair_ref_path_var.get().strip():
+        if (fam == "minimax" or desc is not None) and self.repair_ref_path_var.get().strip():
             # A path carried over from a Klein session must not sit invisibly in the state.
             self.repair_ref_path_var.set("")
             self.repair_state.ref_image_path = ""
@@ -21132,7 +21143,7 @@ class LoRATrainerGUI:
                 self._repair_h3_label.grid_remove()
                 self._repair_h3_row.grid_remove()
                 # The load-strength boxes are H3 AND Krea 2 (16 Sep 2026); Klein has none.
-                self._repair_scale_controls(fam == "krea2")
+                self._repair_scale_controls(fam == "krea2" or desc is not None)
                 self._repair_h3_model_label.grid_remove()
                 self._repair_h3_model_combo.grid_remove()
                 self._repair_h3_base_label.grid_remove()
@@ -21389,12 +21400,11 @@ class LoRATrainerGUI:
             pass
         self._repair_swap_wanted = False
         self._repair_family_current = fam
-        self.repair_state = (SliderState.default_krea2() if fam == "krea2"
-                             else SliderState.default_h3() if fam == "minimax"
-                             else SliderState.default_klein9b())
+        self.repair_state = self._repair_default_state(fam)
         # 512 default for Klein/Krea 2 (keeps the Turbo Preview activation cache VRAM-feasible);
         # H3 previews at 768 — its native canvas, rendered as a 22-frame clip's middle frame.
-        self.repair_res_var.set("768" if fam == "minimax" else "512")
+        # Standard-layer families also start at 768 (Qwen 2.1 is a 1 MP+ model).
+        self.repair_res_var.set("768" if fam == "minimax" or self._repair_desc(fam) is not None else "512")
         self._build_repair_slider_panel(self._repair_sliders_parent)
         self._apply_repair_family_ui()
         try:
@@ -21403,8 +21413,9 @@ class LoRATrainerGUI:
         except Exception:
             pass
         from fizgig.networks.lora import FAMILY_DISPLAY_NAMES as _FDN
+        _dd = self._repair_desc(fam)
         self.repair_status_var.set(
-            f"Switched to {_FDN.get(fam, fam)}. Set a LoRA path and click Start.")
+            f"Switched to {_dd.display_name if _dd else _FDN.get(fam, fam)}. Set a LoRA path and click Start.")
 
     def _build_repair_outer_scroll(self, tab):
         """Wrap the Repair Studio tab in a vertical scrolling canvas. Returns the
@@ -21488,6 +21499,11 @@ class LoRATrainerGUI:
                         style="Surface.TRadiobutton", command=self._on_repair_family_changed).pack(side=tk.LEFT, padx=(0, 12))
         ttk.Radiobutton(fam_frame, text="MiniMax H3", variable=self.repair_family_var, value="minimax",
                         style="Surface.TRadiobutton", command=self._on_repair_family_changed).pack(side=tk.LEFT)
+        for _d in self._workbench_families("repair"):
+            _rb = ttk.Radiobutton(fam_frame, text=_d.display_name, variable=self.repair_family_var, value=_d.key,
+                                  style="Surface.TRadiobutton", command=self._on_repair_family_changed)
+            _rb._fizgig_described_family = _d.key
+            _rb.pack(side=tk.LEFT, padx=(12, 0))
         r += 1
         # DiT toggle (relabelled per family — Distilled/Base for Klein, Turbo/RAW for Krea 2)
         ttk.Label(parent, text="DiT:").grid(row=r, column=0, sticky=tk.W, padx=4, pady=2)
@@ -22182,6 +22198,9 @@ class LoRATrainerGUI:
         if getattr(self, "repair_family_var", None) is not None and self.repair_family_var.get() == "minimax":
             self._build_repair_slider_panel_h3(parent)
             return
+        if self._repair_desc() is not None:
+            self._build_repair_slider_panel_family(parent, self._repair_desc())
+            return
         # Scrollable canvas (vertical) holding two columns: double on left, single on right.
         # Bounded height (500px) so the panel stays compact inside the outer scroll
         # and the user can independently scroll all 32 rows without losing the preview.
@@ -22280,6 +22299,45 @@ class LoRATrainerGUI:
             self._build_repair_block_row(col_right, bid, r)
             r += 1
 
+    def _build_repair_slider_panel_family(self, parent, desc):
+        """Standard-layer family: the driver's block map in the model's own names, groups in order, split over two
+        columns at a group or block boundary nearest the middle."""
+        canvas = tk.Canvas(parent, highlightthickness=0, bg=COLORS["bg_surface"], height=500)
+        scroll = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        inner = ttk.Frame(canvas)
+        inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(inner_id, width=e.width))
+        inner.columnconfigure(0, weight=1)
+        inner.columnconfigure(1, weight=1)
+        cols = [ttk.Frame(inner), ttk.Frame(inner)]
+        for i, c in enumerate(cols):
+            c.grid(row=0, column=i, sticky=tk.NSEW, padx=4)
+        groups = self._repair_block_groups(desc)
+        self._repair_family_labels = {b.id: b.label for g in groups for b in g.blocks}
+        half = (sum(len(g.blocks) for g in groups) + 1) // 2
+        rows, col, placed = [0, 0], 0, 0
+        for g in groups:
+            chunks = [g.blocks]
+            if col == 0 and placed < half < placed + len(g.blocks):
+                cut = half - placed                     # a group longer than what is left of the left column
+                chunks = [g.blocks[:cut], g.blocks[cut:]]
+            for ci, blocks in enumerate(chunks):
+                if ci == 1 or (col == 0 and placed >= half):
+                    col = 1
+                first, last = blocks[0].label, blocks[-1].label
+                title = g.label if len(chunks) == 1 else f"{g.label}: {first}–{last}"
+                ttk.Label(cols[col], text=title, font=(FONT_FAMILY, 10, "bold")).grid(
+                    row=rows[col], column=0, padx=0, pady=(8 if rows[col] else 2, 4), sticky=tk.W)
+                rows[col] += 1
+                for b in blocks:
+                    self._build_repair_block_row(cols[col], b.id, rows[col])
+                    rows[col] += 1
+                    placed += 1
+
     def _build_repair_slider_panel_h3(self, parent):
         """MiniMax H3 layout: 50 main blocks (0-25 left, 26-49 right) + the 2 token-refiner
         blocks. Generic per-block (no semantic bucket colouring — that map doesn't exist yet;
@@ -22329,6 +22387,9 @@ class LoRATrainerGUI:
         """(label, colour, category_short_or_None) for a block row. Klein ids are
         category-coloured; Krea 2 (block_N / txt_*) and H3 (h3blk_N / h3_rf_N) ids are
         generic (no semantic bucket map yet) → neutral colour, no category tag."""
+        if self._repair_desc() is not None:
+            return (getattr(self, "_repair_family_labels", {}).get(block_id, block_id),
+                    COLORS["text_secondary"], None)
         if block_id.startswith("h3blk_"):
             return (f"Block {block_id.split('_')[1]}", COLORS["text_secondary"], None)
         if block_id.startswith("h3_rf_"):
@@ -22576,7 +22637,7 @@ class LoRATrainerGUI:
     def _on_repair_scale_changed(self):
         """A load strength edited: the state carries it (slider × scale in the engine), the
         baseline is a different render now, so re-render — H3 and Krea 2."""
-        if not (self._repair_is_h3() or self._repair_family_is("krea2")):
+        if not (self._repair_is_h3() or self._repair_family_is("krea2") or self._repair_desc() is not None):
             return
         ps, ds = self._repair_scale("primary"), self._repair_scale("donor")
         if (abs(getattr(self.repair_state, "primary_scale", 1.0) - ps) < 1e-9
@@ -22610,6 +22671,8 @@ class LoRATrainerGUI:
             return self._repair_engine_plan_krea2()
         if self.repair_family_var.get() == "minimax":
             return self._repair_engine_plan_h3()
+        if self._repair_desc() is not None:
+            return self._repair_engine_plan_family(self._repair_desc())
 
         dit_choice = self.repair_dit_choice_var.get()
         dit_pref_key = "base_dit" if dit_choice == "base" else "distilled_dit"
@@ -22647,6 +22710,32 @@ class LoRATrainerGUI:
             blocks_to_swap=self._get_inference_blocks_to_swap(),
             int8=self._get_inference_int8(),
         )
+
+    def _repair_engine_plan_family(self, desc):
+        """Standard-layer family: one WorkbenchEngine over the family's driver. The first DiT radio = previews with
+        the family's speed LoRA (when its file is set in Preferences), the second = its default sampling."""
+        paths = {r: self.prefs_vars.get(desc.pref_for(r), tk.StringVar()).get().strip()
+                 for r in ("dit", "vae", "text_encoder")}
+        labels = {f.role: f.label for f in desc.model_files}
+        for role, p in paths.items():
+            if not p or not os.path.exists(p):
+                messagebox.showerror("Error", f"{labels.get(role, role)} path not set or not found.\n"
+                                              "Configure on Preferences tab.")
+                return False
+        sp = desc.preview_speed()
+        speed_path = ""
+        if sp is not None and self.repair_dit_choice_var.get() != "base":
+            speed_path = self.prefs_vars.get(sp.pref_key, tk.StringVar()).get().strip()
+            if speed_path and not os.path.exists(speed_path):
+                speed_path = ""
+        from fizgig.families.workbench import WorkbenchEngine
+        if self.repair_engine is None or not isinstance(self.repair_engine, WorkbenchEngine) \
+                or self.repair_engine.desc.key != desc.key:
+            self.repair_engine = WorkbenchEngine(desc)
+        steps = sp.settings.steps if speed_path else desc.default_sampling().steps
+        self.repair_status_var.set(f"Loading {desc.display_name} ({steps}-step previews)…")
+        return dict(dit_path=paths["dit"], vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
+                    speed_lora_path=speed_path, device="cuda")
 
     def _repair_engine_plan_krea2(self):
         """Lazy-load the Krea 2 Repair engine. Turbo (8-step, default) or RAW (slow). The DiT
@@ -25602,6 +25691,16 @@ class LoRATrainerGUI:
         # generic error below, same as before.
         from fizgig.networks.lora import lora_family_from_file, FAMILY_DISPLAY_NAMES, INFERENCE_FAMILIES
         detected = lora_family_from_file(path)
+        if detected is None and self._workbench_families("repair"):
+            # Standard-layer families (asked only when the old detector knows nothing about the file).
+            from fizgig.families.registry import family_of_lora
+            _dd = family_of_lora(path)
+            if _dd is not None and self._repair_desc(_dd.key) is not None:
+                detected = _dd.key
+                FAMILY_DISPLAY_NAMES = {**FAMILY_DISPLAY_NAMES, _dd.key: _dd.display_name}
+                INFERENCE_FAMILIES = tuple(INFERENCE_FAMILIES) + (_dd.key,)
+        if self._repair_desc() is not None:
+            INFERENCE_FAMILIES = tuple(INFERENCE_FAMILIES) + (self.repair_family_var.get(),)
         if detected is not None and detected not in INFERENCE_FAMILIES:
             # Setting the var to a family with no radio leaves all radios blank instead of
             # following it (issue #62). Refuse rather than land on a family this tab has no
@@ -26287,6 +26386,7 @@ class LoRATrainerGUI:
     def _repair_preview_worker(self, snapshot, h3_opts=None):
         from fizgig.krea2.sampling import SampleAborted
         from fizgig.minimax.sampling import PreviewAborted
+        from fizgig.families.workbench import RenderCancelled
         try:
             if self.repair_engine is None:
                 self._repair_preview_in_flight = False
@@ -26362,7 +26462,7 @@ class LoRATrainerGUI:
             tweaked = self.repair_engine.generate_preview(snapshot)
             print(f"[repair] worker: tweaked done, size={tweaked.size}")
             self.master.after(0, lambda: self._set_repair_preview_images(baseline, tweaked))
-        except (SampleAborted, PreviewAborted):
+        except (SampleAborted, PreviewAborted, RenderCancelled):
             # Cancelled mid-pass by a newer edit — quietly re-fire with the latest state.
             print("[repair] worker: aborted; re-firing with newest state")
             def _refire():
@@ -28376,12 +28476,18 @@ class LoRATrainerGUI:
         from fizgig.repair_studio.bake import save_repaired_lora
         from fizgig.networks.lora import UnsupportedLoRAFormat
         try:
-            summary = save_repaired_lora(
-                self.repair_engine.primary_path,
-                self.repair_state,
-                out,
-                donor_path=donor_path if donor_enabled_bids else None,
-            )
+            if hasattr(self.repair_engine, "save_repaired"):
+                # Standard-layer family: the engine bakes what is live, in the family's own key format.
+                with self._repair_engine_lock:
+                    summary = self.repair_engine.save_repaired(out, self.repair_state,
+                                                               include_donor=bool(donor_enabled_bids))
+            else:
+                summary = save_repaired_lora(
+                    self.repair_engine.primary_path,
+                    self.repair_state,
+                    out,
+                    donor_path=donor_path if donor_enabled_bids else None,
+                )
             msg = (
                 f"Saved: {out}\n\n"
                 f"Keys: {summary['keys_in']} → {summary['keys_out']}\n"
@@ -28444,9 +28550,7 @@ class LoRATrainerGUI:
         # Family-correct layout — the Klein default's block ids match nothing on Krea 2 / H3
         # panels, making Reset All a silent no-op there (same trap as GitHub #12).
         _fam = self.repair_family_var.get() if getattr(self, "repair_family_var", None) else "klein"
-        defaults = (SliderState.default_krea2() if _fam == "krea2"
-                    else SliderState.default_h3() if _fam == "minimax"
-                    else SliderState.default_klein9b())
+        defaults = self._repair_default_state(_fam)
         # Suppress per-block preview spam while bulk-resetting.
         self._repair_master_mutating = True
         try:
@@ -30413,6 +30517,10 @@ class LoRATrainerGUI:
         if self.repair_engine is None or self.repair_engine.primary_network is None:
             messagebox.showerror("Error", "Load a primary LoRA first.")
             return
+        if self._repair_desc() is not None:
+            messagebox.showinfo("Not yet", f"LoRA the Explorer doesn't support {self._repair_desc().display_name} "
+                                           "yet.")
+            return
         # Mirror of the Explorer-side guard: _reset_repair_session below refuses to tear down
         # mid-preview, but it returns into THIS method which would then build the Explorer
         # pipeline alongside the still-rendering preview — two pipelines, two threads, one
@@ -30814,7 +30922,36 @@ class LoRATrainerGUI:
         """Historical name — True for ANY no-block-map family (Krea 2 or MiniMax H3), which
         is what every caller actually means: no category presets, no master sliders."""
         return (getattr(self, "repair_family_var", None) is not None
-                and self.repair_family_var.get() in ("krea2", "minimax"))
+                and (self.repair_family_var.get() in ("krea2", "minimax") or self._repair_desc() is not None))
+
+    def _workbench_families(self, tool):
+        """Standard-layer families a workbench tool offers (the description's `workbench` names the tool)."""
+        return [d for d in DESCRIBED_FAMILIES.values() if d.training_ready and tool in d.workbench]
+
+    def _repair_desc(self, fam=None):
+        """The FamilyDescription behind the Repair Studio selector, or None for Klein / Krea 2 / H3."""
+        if fam is None:
+            var = getattr(self, "repair_family_var", None)
+            fam = var.get() if var is not None else ""
+        return next((d for d in self._workbench_families("repair") if d.key == fam), None)
+
+    def _repair_block_groups(self, desc):
+        """The driver's block map (description-level, no model needed); cached per family."""
+        cache = self.__dict__.setdefault("_repair_block_group_cache", {})
+        if desc.key not in cache:
+            cache[desc.key] = desc.load_driver().block_map()
+        return cache[desc.key]
+
+    def _repair_default_state(self, fam):
+        """Every slider at its default for the family's blocks."""
+        from fizgig.repair_studio.state import BlockState, SliderState
+        desc = self._repair_desc(fam)
+        if desc is not None:
+            return SliderState(blocks={b.id: BlockState() for g in self._repair_block_groups(desc)
+                                       for b in g.blocks}, preview_width=768, preview_height=768)
+        return (SliderState.default_krea2() if fam == "krea2"
+                else SliderState.default_h3() if fam == "minimax"
+                else SliderState.default_klein9b())
 
     def _repair_preset_list(self) -> list:
         if self._repair_family_is("krea2"):
@@ -30864,9 +31001,7 @@ class LoRATrainerGUI:
         # Family-correct layout: a Klein-shaped state applied to Krea 2 / H3 widgets matches
         # no slider vars and silently does nothing (GitHub #12).
         _fam = self.repair_family_var.get() if getattr(self, "repair_family_var", None) else "klein"
-        s = (SliderState.default_krea2() if _fam == "krea2"
-             else SliderState.default_h3() if _fam == "minimax"
-             else SliderState.default_klein9b())
+        s = self._repair_default_state(_fam)
         s.seed = self.repair_state.seed
         s.prompt = self.repair_state.prompt
         s.preview_width = self.repair_state.preview_width

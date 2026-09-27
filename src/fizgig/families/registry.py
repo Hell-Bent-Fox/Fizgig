@@ -40,3 +40,29 @@ def by_arch_id(arch_id: str) -> Optional[FamilyDescription]:
 def training_families() -> list:
     """Descriptions whose training entry points exist (shown in the Base Model selector)."""
     return [d for d in FAMILIES.values() if d.training_ready]
+
+
+def workbench_families(tool: str) -> list:
+    """Descriptions whose driver is built and whose description enables this workbench tool ("repair", ...)."""
+    return [d for d in FAMILIES.values() if d.training_ready and tool in d.workbench]
+
+
+def family_of_lora(path: str) -> Optional[FamilyDescription]:
+    """The described family a LoRA file was written for, from its header alone (key names, no tensor data), or
+    None. A file matches when most of its down weights name modules inside the family's block map in the family's
+    own key format. Callers ask the old detector first, so Klein / Krea 2 / H3 files never reach this."""
+    try:
+        from safetensors import safe_open
+        with safe_open(path, "pt") as f:
+            keys = list(f.keys())
+    except Exception:
+        return None
+    for d in training_families():
+        mods = [m for m in (d.lora.module_of(k) for k in keys) if m is not None]
+        if not mods:
+            continue
+        drv = d.load_driver()
+        inside = sum(1 for m in mods if drv.block_of(m) is not None)
+        if inside and inside >= 0.5 * len(mods):
+            return d
+    return None

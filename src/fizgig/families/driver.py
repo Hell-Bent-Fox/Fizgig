@@ -73,11 +73,17 @@ class FamilyDriver:
         raise NotImplementedError
 
     # ---- sampling -------------------------------------------------------------------------------
+    def initial_noise(self, seed: int, width: int, height: int):
+        """The seed's starting noise (CPU float32), exactly what generate() draws for this seed. The workbench
+        slerps two of these for seed travel and passes the result back as generate(noise=...)."""
+        raise NotImplementedError
+
     def generate(self, dit, cond: dict, width: int, height: int, *, steps: int, seed: int, cfg: float = 1.0,
-                 neg_cond: Optional[dict] = None, sigmas=None, options=()):
+                 neg_cond: Optional[dict] = None, sigmas=None, options=(), noise=None, on_step=None):
         """Denoise one image from noise; returns latents in the driver's own layout (fed to decode).
         sigmas / options: an explicit schedule and driver-specific sampler options (e.g. from a speed LoRA's
-        SamplingSettings); a driver ignores what it doesn't use."""
+        SamplingSettings); a driver ignores what it doesn't use. noise: a start from initial_noise() (or a blend of
+        two) instead of the seed's. on_step(done, total): called before every step; it may raise to abort."""
         raise NotImplementedError
 
     def decode(self, vae, latents, width: int, height: int):

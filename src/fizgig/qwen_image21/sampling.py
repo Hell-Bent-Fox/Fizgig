@@ -58,19 +58,23 @@ def model_inputs(text_emb: torch.Tensor, n_tokens: int, device):
 
 @torch.no_grad()
 def sample(dit, text_emb, height, width, steps=25, seed=0, sigmas=None, shift_terminal=SHIFT_TERMINAL,
-           cfg=1.0, neg_emb=None, device="cuda", dtype=torch.bfloat16, generator_device="cpu"):
-    """Denoise one image; returns packed latents [1, N, 64] in float32."""
+           cfg=1.0, neg_emb=None, device="cuda", dtype=torch.bfloat16, generator_device="cpu", noise=None,
+           on_step=None):
+    """Denoise one image; returns packed latents [1, N, 64] in float32. noise: a [1, 64, h, w] start (seed travel)
+    instead of the seed's; on_step(done, total) is called before each step and may raise to abort."""
     h, w = latent_hw(height, width)
     n = h * w
-    gen = torch.Generator(generator_device).manual_seed(seed)
-    x = torch.randn(1, 1, 64, h, w, generator=gen, dtype=torch.float32).to(device)
-    x = x.view(1, 64, n).transpose(1, 2).contiguous()                  # reference pack of a (B,1,C,h,w) sample
+    if noise is None:
+        noise = initial_noise(seed, height, width, generator_device)
+    x = noise.float().to(device).reshape(1, 64, n).transpose(1, 2).contiguous()   # reference pack
     sched = sigma_schedule(steps, n, sigmas, shift_terminal).to(device)
     enc, img_mask, enc_mask = model_inputs(text_emb, n, device)
     if cfg > 1.0 and neg_emb is not None:
         nenc, nmask, nenc_mask = model_inputs(neg_emb, n, device)
     shapes = [[(1, h, w)]]
     for i in range(len(sched) - 1):
+        if on_step is not None:
+            on_step(i, len(sched) - 1)
         s, s_next = sched[i], sched[i + 1]
         t = s.view(1).to(dtype)
         v = dit(x.to(dtype), enc.to(dtype), t, shapes, img_mask, enc_mask)[:, -n:].float()
@@ -79,6 +83,13 @@ def sample(dit, text_emb, height, width, steps=25, seed=0, sigmas=None, shift_te
             v = vn + cfg * (v - vn)
         x = x + (s_next - s) * v
     return x
+
+
+def initial_noise(seed, height, width, generator_device="cpu"):
+    """The seed's starting noise, [1, 64, h, w] float32 (what sample() draws when no noise is given)."""
+    h, w = latent_hw(height, width)
+    gen = torch.Generator(generator_device).manual_seed(int(seed))
+    return torch.randn(1, 1, 64, h, w, generator=gen, dtype=torch.float32)[:, 0]
 
 
 @torch.no_grad()
