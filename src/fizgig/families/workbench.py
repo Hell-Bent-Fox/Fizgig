@@ -22,6 +22,7 @@ from typing import Optional
 
 import torch
 
+from fizgig.families.driver import FamilyDriver
 from fizgig.families.lora import FamilyLoRA
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,25 @@ def _slerp(t, a, b):
     if so.item() < 1e-6:
         return torch.lerp(a.float(), b.float(), t)
     return ((torch.sin((1 - t) * om) / so) * a.float() + (torch.sin(t * om) / so) * b.float())
+
+
+def _blend(a, b, t, mode):
+    af, bf = a.float(), b.float()
+    if mode in (None, "lerp"):
+        return torch.lerp(af, bf, t).to(a.dtype)
+    eps = 1e-6
+    na, nb = af.norm(dim=-1, keepdim=True), bf.norm(dim=-1, keepdim=True)
+    target = (1 - t) * na + t * nb
+    if mode == "norm":
+        out = torch.lerp(af, bf, t)
+        return (out * (target / out.norm(dim=-1, keepdim=True).clamp_min(eps))).to(a.dtype)
+    ua, ub = af / na.clamp_min(eps), bf / nb.clamp_min(eps)
+    dot = (ua * ub).sum(-1, keepdim=True).clamp(-1 + 1e-7, 1 - 1e-7)
+    om = torch.acos(dot)
+    so = torch.sin(om)
+    arc = (torch.sin((1 - t) * om) / so) * ua + (torch.sin(t * om) / so) * ub
+    d = torch.where(so < 1e-4, torch.lerp(ua, ub, t), arc)
+    return (d * target).to(a.dtype)
 
 
 def _free_vram_gb():
@@ -321,6 +341,37 @@ class WorkbenchEngine:
 
     def _invalidate_activation_cache(self):
         pass
+
+    # ---- prompt travel (Royale) -------------------------------------------------------------------------
+    @property
+    def supports_prompt_travel(self):
+        return type(self.driver).pad_conditioning is not FamilyDriver.pad_conditioning
+
+    def encode_travel_prompts(self, prompts):
+        """Waypoint conditioning, padded to one shape by the driver. Returns (waypoints, None) - the second slot is
+        the old engines' negative, unused here."""
+        return self.driver.pad_conditioning(self.encode(list(prompts))), None
+
+    @staticmethod
+    def interp_waypoints(vecs, t, mode="lerp"):
+        """Piecewise blend across the waypoint dicts (t 0..1 walks the whole chain): float tensors by lerp / norm /
+        slerp along the feature axis, boolean masks as a union."""
+        if len(vecs) == 1:
+            return vecs[0]
+        t = min(max(float(t), 0.0), 1.0)
+        pos = t * (len(vecs) - 1)
+        i = min(int(pos), len(vecs) - 2)
+        local = pos - i
+        out = {}
+        for k, a in vecs[i].items():
+            b = vecs[i + 1][k]
+            if not torch.is_tensor(a):
+                out[k] = a
+            elif a.dtype == torch.bool:
+                out[k] = a | b
+            else:
+                out[k] = _blend(a, b, local, mode)
+        return out
 
     # ---- bake ---------------------------------------------------------------------------------------
     def save_repaired(self, out_path, state, include_donor=True):

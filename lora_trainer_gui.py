@@ -23030,7 +23030,7 @@ class LoRATrainerGUI:
         # seed slerp / prompt interpolation with the vision-path image as the per-frame anchor
         # (no Klein reference-latent chaining).
         _rfam = str(self.last_used.get("royale_family", "klein"))
-        if _rfam not in ("klein", "krea2", "minimax"):
+        if _rfam not in ("klein", "krea2", "minimax") and self._royale_desc(_rfam) is None:
             _rfam = "klein"
         self.royale_family_var = tk.StringVar(value=_rfam)
         rfam_card = self._start_section_card(
@@ -23046,6 +23046,11 @@ class LoRATrainerGUI:
                         command=self._on_royale_family_changed).pack(side=tk.LEFT, padx=(0, 20))
         ttk.Radiobutton(_rf, text="MiniMax H3", variable=self.royale_family_var, value="minimax",
                         command=self._on_royale_family_changed).pack(side=tk.LEFT)
+        for _d in self._workbench_families("royale"):
+            _rb = ttk.Radiobutton(_rf, text=_d.display_name, variable=self.royale_family_var, value=_d.key,
+                                  command=self._on_royale_family_changed)
+            _rb._fizgig_described_family = _d.key
+            _rb.pack(side=tk.LEFT, padx=(20, 0))
 
         setup = self._start_section_card(outer, "Setup",
                                          "Point at a training output folder. Renders use the Distilled 4-step model.")
@@ -23106,9 +23111,11 @@ class LoRATrainerGUI:
         # They now live in Crossfade, next to the thing they size.
         r += 1
 
-        ttk.Label(setup, text="Reference:").grid(row=r, column=0, sticky=tk.W, padx=(0, 10), pady=4)
+        _rrl = ttk.Label(setup, text="Reference:")
+        _rrl.grid(row=r, column=0, sticky=tk.W, padx=(0, 10), pady=4)
         self.royale_ref_var = tk.StringVar(value=self.last_used.get("royale_ref", ""))
         _rr = tk.Frame(setup, bg=_sbg); _rr.grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+        self._royale_ref_rows = {"grid": [_rrl, _rr], "pack": []}
         ttk.Entry(_rr, textvariable=self.royale_ref_var, state="readonly").pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(_rr, text="Browse…", command=self._royale_browse_ref).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(_rr, text="Clear", command=lambda: self.royale_ref_var.set("")).pack(side=tk.LEFT, padx=(4, 0))
@@ -23275,6 +23282,7 @@ class LoRATrainerGUI:
                  wraplength=760, justify=tk.LEFT).pack(anchor=tk.W, pady=(0, 6))
 
         _trr = tk.Frame(trav, bg=_sbg); _trr.pack(fill=tk.X, pady=(0, 4))
+        self._royale_ref_rows["pack"].append(_trr)
         tk.Label(_trr, text="Reference", bg=_sbg, fg=COLORS["text_muted"], width=10,
                  anchor="w").pack(side=tk.LEFT, padx=(0, 6))
         self.royale_travel_ref_var = tk.StringVar(value=self.last_used.get("royale_travel_ref", ""))
@@ -23292,6 +23300,7 @@ class LoRATrainerGUI:
         self.royale_travel_seq_ref_var = tk.BooleanVar(
             value=bool(self.last_used.get("royale_travel_seq_ref", False)))
         _tru = tk.Frame(trav, bg=_sbg); _tru.pack(anchor=tk.W, pady=(0, 4))
+        self._royale_ref_rows["pack"].append(_tru)
         self._royale_travel_ref_row = _tru
         self._royale_travel_useepoch_cb = ttk.Checkbutton(
             _tru, text="Use the rendered epoch as the reference",
@@ -23481,6 +23490,7 @@ class LoRATrainerGUI:
                  fg=COLORS["accent"], bg=_sbg, wraplength=760, justify=tk.LEFT).pack(anchor=tk.W, pady=(0, 8))
 
         _ptr = tk.Frame(ptrav, bg=_sbg); _ptr.pack(fill=tk.X, pady=(0, 4))
+        self._royale_ref_rows["pack"].append(_ptr)
         tk.Label(_ptr, text="Reference", bg=_sbg, fg=COLORS["text_muted"], width=12,
                  anchor="w").pack(side=tk.LEFT, padx=(0, 6))
         self.royale_pt_ref_var = tk.StringVar(value=self.last_used.get("royale_pt_ref", ""))
@@ -23499,6 +23509,7 @@ class LoRATrainerGUI:
         self.royale_pt_seq_ref_var = tk.BooleanVar(
             value=bool(self.last_used.get("royale_pt_seq_ref", False)))
         _ptu = tk.Frame(ptrav, bg=_sbg); _ptu.pack(anchor=tk.W, pady=(0, 4))
+        self._royale_ref_rows["pack"].append(_ptu)
         self._royale_pt_ref_row = _ptu
         self._royale_pt_useepoch_cb = ttk.Checkbutton(
             _ptu, text="Use the rendered epoch as the reference",
@@ -23905,7 +23916,7 @@ class LoRATrainerGUI:
         self._royale_apply_mode()
 
         # Apply the persisted family (krea2 hides the Klein-only reference-latent knobs).
-        self._apply_royale_family_ui(str(self.royale_family_var.get()) == "krea2")
+        self._apply_royale_family_ui(str(self.royale_family_var.get()) == "krea2" or self._royale_desc() is not None)
 
         # Scan the pre-filled output folder so the count shows on first open.
         try:
@@ -24197,7 +24208,14 @@ class LoRATrainerGUI:
 
     def _royale_family(self):
         fam = str(getattr(self, "royale_family_var", None) and self.royale_family_var.get())
-        return fam if fam in ("klein", "krea2", "minimax") else "klein"
+        return fam if fam in ("klein", "krea2", "minimax") or self._royale_desc(fam) is not None else "klein"
+
+    def _royale_desc(self, fam=None):
+        """The FamilyDescription behind the Royale selector, or None for Klein / Krea 2 / H3."""
+        if fam is None:
+            var = getattr(self, "royale_family_var", None)
+            fam = var.get() if var is not None else ""
+        return next((d for d in self._workbench_families("royale") if d.key == fam), None)
 
     def _royale_is_krea2(self):
         return self._royale_family() == "krea2"
@@ -24207,6 +24225,8 @@ class LoRATrainerGUI:
         Krea 2 block_/txt_, H3 h3blk_/h3_rf_)."""
         from fizgig.repair_studio.state import SliderState
         fam = self._royale_family()
+        if self._royale_desc(fam) is not None:
+            return self._repair_default_state_for_desc(self._royale_desc(fam))
         return (SliderState.default_krea2() if fam == "krea2"
                 else SliderState.default_h3() if fam == "minimax"
                 else SliderState.default_klein9b())
@@ -24223,7 +24243,8 @@ class LoRATrainerGUI:
         self.royale_engine = None
         self._apply_royale_family_ui(fam != "klein")
         _names = {"krea2": "Krea 2 (Turbo previews)",
-                  "minimax": "MiniMax H3 (22-frame clip previews)"}
+                  "minimax": "MiniMax H3 (22-frame clip previews)",
+                  **{d.key: d.display_name for d in self._workbench_families("royale")}}
         self.royale_status_var.set(
             f"Switched to {_names.get(fam, 'Klein 9B (Distilled previews)')}. "
             f"Pick a source and render.")
@@ -24261,6 +24282,27 @@ class LoRATrainerGUI:
                 if anchor is not None and anchor.winfo_manager() != "":
                     kw["before"] = anchor
                 w.pack(**kw)
+        _rows = getattr(self, "_royale_ref_rows", None)
+        if _rows is not None:
+            no_ref = self._royale_desc() is not None
+            for w in _rows["grid"]:
+                if no_ref:
+                    w.grid_remove()
+                elif not w.winfo_manager():
+                    w.grid()
+            for w in _rows["pack"]:
+                if no_ref:
+                    if w.winfo_manager():
+                        sl = w.master.pack_slaves()
+                        nxt = sl[sl.index(w) + 1] if sl.index(w) + 1 < len(sl) else None
+                        w._fizgig_restore = (w.pack_info(), nxt)
+                        w.pack_forget()
+                elif not w.winfo_manager() and getattr(w, "_fizgig_restore", None):
+                    info, nxt = w._fizgig_restore
+                    info = {k: v for k, v in info.items() if k != "in"}
+                    if nxt is not None and nxt.winfo_manager() == "pack":
+                        info["before"] = nxt
+                    w.pack(**info)
         # Krea 2 has no sequential latent chain — force the (now-hidden) flags off so each travel
         # frame takes the non-sequential path in _royale_apply_travel_ref (the selected image as a
         # per-frame vision reference) instead of dropping the reference for a prev-latent that the
@@ -24281,6 +24323,8 @@ class LoRATrainerGUI:
             return self._royale_validate_models_krea2()
         if self._royale_family() == "minimax":
             return self._royale_validate_models_h3()
+        if self._royale_desc() is not None:
+            return self._royale_validate_models_family(self._royale_desc())
         dit_path = self.prefs_vars["distilled_dit"].get() if "distilled_dit" in self.prefs_vars else ""
         vae_path = self._get_path("VAE_MODEL")
         te_path = self._get_path("TEXT_ENCODER")
@@ -24302,6 +24346,26 @@ class LoRATrainerGUI:
             fp8_scaled=False if is_fp8 else True,
             blocks_to_swap=self._get_inference_blocks_to_swap(),
             int8=self._get_inference_int8())
+        return True
+
+    def _royale_validate_models_family(self, desc):
+        """Standard-layer family: the WorkbenchEngine, previews with the family's speed LoRA when it is set."""
+        paths = {r: self.prefs_vars.get(desc.pref_for(r), tk.StringVar()).get().strip()
+                 for r in ("dit", "vae", "text_encoder")}
+        labels = {f.role: f.label for f in desc.model_files}
+        for role, p in paths.items():
+            if not p or not os.path.exists(p):
+                messagebox.showerror("Error", f"{labels.get(role, role)} path not set or not found.\n"
+                                              "Configure on Preferences tab.")
+                return False
+        sp = desc.preview_speed()
+        speed = self.prefs_vars.get(sp.pref_key, tk.StringVar()).get().strip() if sp is not None else ""
+        from fizgig.families.workbench import WorkbenchEngine
+        if not isinstance(self.royale_engine, WorkbenchEngine) or self.royale_engine.desc.key != desc.key:
+            self.royale_engine = WorkbenchEngine(desc)
+        self._royale_pipeline_kwargs = dict(
+            dit_path=paths["dit"], vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
+            speed_lora_path=speed if speed and os.path.exists(speed) else "", device="cuda")
         return True
 
     def _royale_validate_models_krea2(self):
@@ -24388,6 +24452,10 @@ class LoRATrainerGUI:
                 continue
             checked.add(path)
             detected = lora_family_from_file(path)
+            if detected is None and self._workbench_families("royale"):
+                from fizgig.families.registry import family_of_lora
+                _dd = family_of_lora(path)
+                detected = _dd.key if _dd is not None and self._royale_desc(_dd.key) is not None else None
             if detected is not None:
                 seen.append((path, detected))
         if not seen:
@@ -24402,6 +24470,9 @@ class LoRATrainerGUI:
                     f"(e.g. {os.path.basename(target_path)}). Pick LoRAs from a single family.")
                 return False
         from fizgig.networks.lora import INFERENCE_FAMILIES
+        if self._royale_desc(target) is not None:
+            INFERENCE_FAMILIES = tuple(INFERENCE_FAMILIES) + (target,)
+            FAMILY_DISPLAY_NAMES = {**FAMILY_DISPLAY_NAMES, target: self._royale_desc(target).display_name}
         if target not in INFERENCE_FAMILIES:
             messagebox.showerror(
                 "Unsupported family",

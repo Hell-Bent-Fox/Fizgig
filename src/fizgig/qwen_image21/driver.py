@@ -83,12 +83,27 @@ class QwenImage21Driver(FamilyDriver):
                  noise=None, on_step=None):
         device = next(dit.parameters()).device
         neg = neg_cond["hidden_states"] if (neg_cond is not None and cfg > 1.0) else None
+        neg_mask = neg_cond.get("mask") if neg is not None else None
         opts = dict(options)
         shift_terminal = opts.get("shift_terminal", S.SHIFT_TERMINAL)
         if sigmas is not None and len(sigmas) != steps:
             sigmas = None                   # an explicit schedule only applies at its own step count
         return S.sample(dit, cond["hidden_states"], height, width, steps=steps, seed=seed, cfg=cfg, neg_emb=neg,
-                        device=device, sigmas=sigmas, shift_terminal=shift_terminal, noise=noise, on_step=on_step)
+                        device=device, sigmas=sigmas, shift_terminal=shift_terminal, noise=noise, on_step=on_step,
+                        text_mask=cond.get("mask"), neg_mask=neg_mask)
+
+    def pad_conditioning(self, conds):
+        """Pad prompts to one length (zeros) with a mask so they can be blended (prompt travel). The text's length
+        also sets where the image's positions start, so a padded prompt renders very slightly differently from
+        the same prompt unpadded."""
+        L = max(c["hidden_states"].shape[0] for c in conds)
+        out = []
+        for c in conds:
+            h = c["hidden_states"]
+            pad = L - h.shape[0]
+            out.append({"hidden_states": torch.cat([h, h.new_zeros(pad, h.shape[1])]) if pad else h,
+                        "mask": torch.cat([torch.ones(h.shape[0], dtype=torch.bool), torch.zeros(pad, dtype=torch.bool)])})
+        return out
 
     @torch.no_grad()
     def decode(self, vae, latents, width, height):

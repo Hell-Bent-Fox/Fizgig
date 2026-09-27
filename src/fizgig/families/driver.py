@@ -86,6 +86,12 @@ class FamilyDriver:
         two) instead of the seed's. on_step(done, total): called before every step; it may raise to abort."""
         raise NotImplementedError
 
+    def pad_conditioning(self, conds: list) -> list:
+        """Optional (prompt travel): the conditioning dicts brought to one shape so they can be blended, e.g. padded
+        with a validity mask. Tensors that are blended are floating point; booleans are combined as a union. A
+        driver without it has no prompt travel."""
+        raise NotImplementedError
+
     def decode(self, vae, latents, width: int, height: int):
         """-> PIL.Image (RGB)."""
         raise NotImplementedError
