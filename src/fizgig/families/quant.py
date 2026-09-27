@@ -12,6 +12,7 @@ resident.
 """
 import gc
 import math
+import os
 import logging
 
 import torch
@@ -106,7 +107,7 @@ def plan(desc, driver, precision="auto", blocks_to_swap=-1, free_gb=None, margin
     far more speed than quantisation. Only if nothing fits does it swap (int8, the smaller swappable base). An
     explicit precision with auto swap gets the fewest blocks that fit. Returns (precision, blocks_to_swap, reason)."""
     if free_gb is None:
-        free_gb = torch.cuda.mem_get_info()[0] / 1024 ** 3 if torch.cuda.is_available() else 0.0
+        free_gb = free_vram_gb()
     mem = dict(desc.train_memory or {})
     offered = [p for p in PRECISIONS if p in desc.precisions]
     cap = driver.max_blocks_to_swap()
@@ -140,3 +141,27 @@ def plan(desc, driver, precision="auto", blocks_to_swap=-1, free_gb=None, margin
         n = swap_for(precision)
         return precision, n, (f"{n} swapped blocks to fit {free_gb:.1f} GB" if n else f"fits {free_gb:.1f} GB")
     return precision, blocks_to_swap, "as set"
+
+
+_SIM_OTHERS_GB = 0.8     # a simulated card also loses this to the desktop / other apps, as real cards do
+
+
+def apply_vram_cap():
+    """FIZGIG_SIM_VRAM_GB=N: behave like an N GB card - cap this process's allocations at N minus what the desktop
+    takes, so a plan that does not fit fails as it would on the real card. No-op without the variable."""
+    sim = os.environ.get("FIZGIG_SIM_VRAM_GB", "").strip()
+    if not sim or not torch.cuda.is_available():
+        return
+    total = torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
+    torch.cuda.set_per_process_memory_fraction(min(1.0, (float(sim) - _SIM_OTHERS_GB) / total))
+    logger.info(f"[sim] behaving like a {float(sim):g} GB card ({float(sim) - _SIM_OTHERS_GB:.1f} GB for Fizgig)")
+
+
+def free_vram_gb():
+    """Free VRAM in GB - of the simulated card when FIZGIG_SIM_VRAM_GB is set."""
+    if not torch.cuda.is_available():
+        return 0.0
+    sim = os.environ.get("FIZGIG_SIM_VRAM_GB", "").strip()
+    if sim:
+        return max(0.0, float(sim) - _SIM_OTHERS_GB - torch.cuda.memory_reserved() / 1024 ** 3)
+    return torch.cuda.mem_get_info()[0] / 1024 ** 3

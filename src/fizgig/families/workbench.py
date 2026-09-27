@@ -73,7 +73,8 @@ def _blend(a, b, t, mode):
 
 def _free_vram_gb():
     try:
-        return torch.cuda.mem_get_info()[0] / 1024 ** 3 if torch.cuda.is_available() else 0.0
+        from fizgig.families.quant import free_vram_gb
+        return free_vram_gb()
     except Exception:
         return 0.0
 

@@ -168,8 +168,7 @@ def _encode_override(driver, te_path, prompt, dit, device, parkable=True):
     encoder when VRAM is short)."""
     from fizgig.families import quant
     te_gb = os.path.getsize(te_path) / 1024 ** 3 if te_path and os.path.exists(te_path) else 0.0
-    free = torch.cuda.mem_get_info()[0] / 1024 ** 3 if torch.cuda.is_available() else 0.0
-    park = parkable and free < te_gb + 2.0
+    park = parkable and quant.free_vram_gb() < te_gb + 2.0
     if park:
         quant.move(dit, "cpu")
         torch.cuda.empty_cache()
@@ -291,6 +290,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         logger.info(f"[preview] card under 20 GB: preview canvas capped to {sample_width}x{sample_height} and the "
                     f"DiT parks on CPU for the decode (#123). FIZGIG_PREVIEW_LOWMEM=0 turns this off.")
     device = torch.device("cuda")
+    quant.apply_vram_cap()          # FIZGIG_SIM_VRAM_GB: behave like a smaller card
     torch.manual_seed(seed)
     os.makedirs(output_dir, exist_ok=True)
 

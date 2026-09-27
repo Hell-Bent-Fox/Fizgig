@@ -63,6 +63,8 @@ def main():
     p.add_argument("--skip_existing", action="store_true")
     p.add_argument("--keep_cache", action="store_true")
     args = p.parse_args()
+    from fizgig.families.quant import apply_vram_cap
+    apply_vram_cap()                # FIZGIG_SIM_VRAM_GB: behave like a smaller card
 
     desc = get(args.family)
     if desc is None or not desc.training_ready:
