@@ -22824,6 +22824,9 @@ class LoRATrainerGUI:
         spin = ttk.Entry(parent, textvariable=var, width=5)
         spin.bind("<Return>", lambda e: self._on_repair_scale_changed())
         spin.bind("<FocusOut>", lambda e: self._on_repair_scale_changed())
+        # Typing applies too, after a short pause: Enter / focus-out alone meant a new strength did nothing until
+        # the user happened to click into another entry (clicking the preview or a slider takes no focus).
+        var.trace_add("write", lambda *_a: self._schedule_repair_scale_change())
         ToolTip(spin, f"Load strength for {who} — the strength it was designed to be used "
                       "at (not always 1.0). The block sliders stay relative to it: a block at "
                       "1.0 is that block at this strength, 0.5 is half of it. The saved file "
@@ -22869,6 +22872,27 @@ class LoRATrainerGUI:
             else:
                 lbl.pack_forget()
                 spin.pack_forget()
+
+    def _schedule_repair_scale_change(self):
+        """Debounced strength-box typing: apply 0.6 s after the last keystroke, skipping a half-typed value."""
+        pending = getattr(self, "_repair_scale_after", None)
+        if pending is not None:
+            try:
+                self.master.after_cancel(pending)
+            except Exception:
+                pass
+            self._repair_scale_after = None
+
+        def _apply():
+            self._repair_scale_after = None
+            for which in ("primary", "donor"):
+                var = getattr(self, f"repair_{which}_scale_var", None)
+                try:
+                    float(str(var.get()).strip())
+                except (TypeError, ValueError, AttributeError):
+                    return                    # "", "0.", "-" while typing: wait for a number
+            self._on_repair_scale_changed()
+        self._repair_scale_after = self.master.after(600, _apply)
 
     def _repair_scale(self, which):
         """The primary / donor load strength as a float (1.0 on anything unparseable)."""
@@ -26531,8 +26555,9 @@ class LoRATrainerGUI:
         self.repair_state.preview_width = res
         self.repair_state.preview_height = res
         h3_opts = None
-        if self._repair_family_is("krea2"):
-            # Krea 2 carries the load strengths too (16 Sep 2026): slider × scale in the engine.
+        if self._repair_family_is("krea2") or self._repair_desc() is not None:
+            # Krea 2 carries the load strengths too (16 Sep 2026): slider × scale in the engine. Standard-layer
+            # families the same (the engine multiplies each block by the load strength).
             self.repair_state.primary_scale = self._repair_scale("primary")
             self.repair_state.donor_scale = self._repair_scale("donor")
             self._repair_refresh_baseline_title()
