@@ -24,6 +24,44 @@ TRAINABLE = "lora"
 _PREFIXES = ("transformer.", "diffusion_model.", "model.diffusion_model.", "base_model.model.", "")
 
 
+class LoRAFactor(nn.Linear):
+    """One adapter matrix (A or B). Its own class so block-swap offloaders, which stream every module whose class name
+    ends in "Linear", leave the adapters resident: trainable weights must never be moved between steps."""
+
+
+class LoKR(nn.Module):
+    """A LoKR (Kronecker) adapter: delta = scale * kron(w1, w2), applied without materialising it (Krea 2's trainable
+    recipe: full-matrix w2, w1 about factor x factor). Frozen files may carry w1/w2 as low-rank factors; they are
+    multiplied out at load."""
+
+    def __init__(self, in_f, out_f, factor=8, w1=None, w2=None):
+        super().__init__()
+        from fizgig.networks.lora import factorization
+        if w1 is not None:
+            self.a, self.b = w1.shape
+            self.c, self.d = w2.shape
+        else:
+            self.a, self.c = factorization(out_f, int(factor))
+            self.b, self.d = factorization(in_f, int(factor))
+        if self.a * self.c != out_f or self.b * self.d != in_f:
+            raise ValueError(f"LoKR factors {self.a}x{self.b} (x) {self.c}x{self.d} do not tile {out_f}x{in_f}")
+        self.lokr_w1 = nn.Parameter(torch.empty(self.a, self.b) if w1 is None else w1.clone())
+        self.lokr_w2 = nn.Parameter(torch.zeros(self.c, self.d) if w2 is None else w2.clone())
+        if w1 is None:
+            nn.init.kaiming_uniform_(self.lokr_w1, a=math.sqrt(5))   # w2 = 0: delta is exactly 0 at step 0
+
+    def forward(self, x):
+        """Computed in the input's dtype (bf16 in the DiT): the Kronecker product runs as thousands of small batched
+        matmuls, which in fp32 made LoKR 3.7x slower than LoRA on Qwen (7.46 vs 2.04 s/step). The weights stay fp32
+        for the optimizer; autograd casts the gradients back."""
+        from fizgig.networks.lora import _lokr_forward_update
+        return _lokr_forward_update(x, self.lokr_w1.to(x.dtype), self.lokr_w2.to(x.dtype), self.a, self.b, self.c,
+                                    self.d)
+
+    def delta(self):
+        return torch.kron(self.lokr_w1.float(), self.lokr_w2.float())
+
+
 class LoRALinear(nn.Module):
     def __init__(self, base: nn.Linear):
         super().__init__()
@@ -32,36 +70,49 @@ class LoRALinear(nn.Module):
         self.scales = {}
 
     def add(self, name, rank, alpha, trainable, A=None, B=None, strength=1.0):
-        a = nn.Linear(self.base.in_features, rank, bias=False)
-        b = nn.Linear(rank, self.base.out_features, bias=False)
+        a = LoRAFactor(self.base.in_features, rank, bias=False)
+        b = LoRAFactor(rank, self.base.out_features, bias=False)
         if A is not None:
             a.weight.data.copy_(A)
             b.weight.data.copy_(B)
         else:
             nn.init.kaiming_uniform_(a.weight, a=math.sqrt(5))
             nn.init.zeros_(b.weight)
-        dev = self.base.weight.device
+        dev = getattr(self, "home", None) or self.base.weight.device   # a swapped block's base may sit on CPU
         dt = torch.float32 if trainable else torch.bfloat16
         a.to(dev, dt).requires_grad_(trainable)
         b.to(dev, dt).requires_grad_(trainable)
         self.adapters[name] = nn.Sequential(a, b)
         self.scales[name] = alpha / rank * strength
 
+    def add_lokr(self, name, trainable, factor=8, w1=None, w2=None, scale=1.0):
+        ad = LoKR(self.base.in_features, self.base.out_features, factor, w1, w2)
+        dev = getattr(self, "home", None) or self.base.weight.device
+        ad.to(dev, torch.float32 if trainable else torch.bfloat16).requires_grad_(trainable)
+        self.adapters[name] = ad
+        self.scales[name] = scale
+
     def forward(self, x):
         out = self.base(x)
         for n, ad in self.adapters.items():
             s = self.scales.get(n, 0.0)
             if s:
-                out = out + (s * ad(x.to(ad[0].weight.dtype))).to(out.dtype)
+                if isinstance(ad, LoKR):
+                    out = out + (s * ad(x)).to(out.dtype)
+                else:
+                    out = out + (s * ad(x.to(ad[0].weight.dtype))).to(out.dtype)
         return out
 
 
 class FamilyLoRA:
     """A DiT's adapter set. `wrapped` maps the module name (relative to the DiT) -> LoRALinear."""
 
-    def __init__(self, dit, driver):
+    def __init__(self, dit, driver, device=None):
+        """device: where adapters live. Needed when block swap has parked some base weights on the CPU; by default
+        each adapter follows its base weight."""
         self.dit = dit
         self.driver = driver
+        self.device = torch.device(device) if device is not None else None
         self.desc = driver.description
         self.targets = set(driver.lora_target_names(dit))
         self.linears = {n for n, m in dit.named_modules() if isinstance(m, nn.Linear)}
@@ -93,19 +144,25 @@ class FamilyLoRA:
         if not isinstance(child, nn.Linear):
             return None
         w = LoRALinear(child)
+        if self.device is not None:
+            w.home = self.device
         setattr(parent, leaf, w)
         self.wrapped[full] = w
         return w
 
     # ---- trainable ------------------------------------------------------------------------------
-    def add_trainable(self, rank, alpha, blocks=None):
-        """blocks: optional set of block ids to train (None = every target)."""
+    def add_trainable(self, rank, alpha, blocks=None, kind="lora", factor=8):
+        """blocks: optional set of block ids to train (None = every target). kind "lokr": a Kronecker adapter per
+        Linear (w1 about factor x factor, full w2); rank / alpha do not apply to it."""
         for full, w in self.wrapped.items():
             if full not in self.targets:
                 continue                    # extra Linears wrapped for a frozen file are never trained
             if blocks is None or self.driver.block_of(full) in blocks:
-                w.add(TRAINABLE, rank, alpha, True)
-        self.rank, self.alpha = rank, alpha
+                if kind == "lokr":
+                    w.add_lokr(TRAINABLE, True, factor)
+                else:
+                    w.add(TRAINABLE, rank, alpha, True)
+        self.rank, self.alpha, self.kind, self.factor = rank, alpha, kind, factor
 
     def trainable_modules(self):
         return nn.ModuleList([w.adapters[TRAINABLE] for w in self.wrapped.values() if TRAINABLE in w.adapters])
@@ -129,13 +186,27 @@ class FamilyLoRA:
         return None
 
     def read_file(self, path):
-        """-> {module name: (A, B, alpha)} for every Linear the file adapts in this model."""
+        """-> {module name: entry} for every Linear the file adapts in this model. A LoRA entry is
+        ("lora", A, B, scale) with scale = alpha / rank; a LoKR entry is ("lokr", w1, w2, scale) with low-rank factors
+        multiplied out and the LyCORIS scale rule (lycoris_scale_from_keys). LoHa is refused."""
         from safetensors.torch import load_file
         sd = load_file(path)
-        if any(re.search(r"\.(lokr_w1|lokr_w2|hada_w1_a)(\.|$)", k) for k in sd):
-            raise ValueError(f"{path}: LoKR / LoHa files are not supported by the standard layer yet")
+        if any(re.search(r"\.hada_w1_a(\.|$)", k) for k in sd):
+            raise ValueError(f"{path}: LoHa files are not supported by the standard layer yet")
         out = {}
         for key in sd:
+            m = re.match(r"(.+)\.lokr_w1(_a)?$", key)
+            if m:
+                stem = m.group(1)
+                full = self._module_for(stem)
+                if full is None:
+                    continue
+                keys = {k[len(stem) + 1:]: v for k, v in sd.items() if k.startswith(stem + ".")}
+                w1 = keys["lokr_w1"] if "lokr_w1" in keys else keys["lokr_w1_a"].float() @ keys["lokr_w1_b"].float()
+                w2 = keys["lokr_w2"] if "lokr_w2" in keys else keys["lokr_w2_a"].float() @ keys["lokr_w2_b"].float()
+                from fizgig.networks.lora import lycoris_scale_from_keys
+                out[full] = ("lokr", w1, w2, lycoris_scale_from_keys(keys))
+                continue
             m = re.match(r"(.+)\.(lora_A|lora_down)\.weight$", key)
             if not m:
                 continue
@@ -148,7 +219,7 @@ class FamilyLoRA:
                 continue
             A, B = sd[key], sd[f"{stem}.{up}.weight"]
             alpha = sd.get(f"{stem}.alpha")
-            out[full] = (A, B, float(alpha.item()) if alpha is not None else float(A.shape[0]))
+            out[full] = ("lora", A, B, (float(alpha.item()) if alpha is not None else float(A.shape[0])) / A.shape[0])
         return out
 
     # ---- frozen adapters ------------------------------------------------------------------------
@@ -157,12 +228,19 @@ class FamilyLoRA:
         (0 = nothing in the file matches this model)."""
         n = 0
         ar = {}
-        for full, (A, B, alpha) in self.read_file(path).items():
+        for full, (kind, P, Q, scale) in self.read_file(path).items():
             w = self._wrap(full)
-            if w is None or A.shape[1] != w.base.in_features or B.shape[0] != w.base.out_features:
+            if w is None:
                 continue
-            w.add(name, A.shape[0], alpha, False, A, B)
-            ar[full] = alpha / A.shape[0]
+            if kind == "lokr":
+                if P.shape[0] * Q.shape[0] != w.base.out_features or P.shape[1] * Q.shape[1] != w.base.in_features:
+                    continue
+                w.add_lokr(name, False, w1=P, w2=Q)
+            else:
+                if P.shape[1] != w.base.in_features or Q.shape[0] != w.base.out_features:
+                    continue
+                w.add(name, P.shape[0], P.shape[0], False, P, Q)
+            ar[full] = scale
             n += 1
         self._frozen[name] = {"alpha_rank": ar, "load": float(strength), "on": True, "block_mult": {},
                               "block_on": {}, "outside_on": True, "path": path}
@@ -217,14 +295,19 @@ class FamilyLoRA:
         Returns the number of Linears covered."""
         st = self._frozen[name]
         new = self.read_file(path)
+
+        def params(full):
+            ad = self.wrapped[full].adapters[name]
+            return (ad.lokr_w1, ad.lokr_w2) if isinstance(ad, LoKR) else (ad[0].weight, ad[1].weight)
         same = set(new) == set(st["alpha_rank"]) and all(
-            self.wrapped[f].adapters[name][0].weight.shape == new[f][0].shape for f in new)
+            (new[f][0] == "lokr") == isinstance(self.wrapped[f].adapters[name], LoKR)
+            and params(f)[0].shape == new[f][1].shape and params(f)[1].shape == new[f][2].shape for f in new)
         if same:
-            for full, (A, B, alpha) in new.items():
-                a, b = self.wrapped[full].adapters[name]
-                a.weight.copy_(A.to(a.weight.dtype))
-                b.weight.copy_(B.to(b.weight.dtype))
-                st["alpha_rank"][full] = alpha / A.shape[0]
+            for full, (_kind, P, Q, scale) in new.items():
+                a, b = params(full)
+                a.copy_(P.to(a.dtype))
+                b.copy_(Q.to(b.dtype))
+                st["alpha_rank"][full] = scale
             st["path"] = path
             self._apply(name)
             return len(new)
@@ -257,16 +340,31 @@ class FamilyLoRA:
         into the up weights, so alpha = total rank (scale 1). Returns (state_dict, {module: rank})."""
         sd, ranks = {}, {}
         for full, w in self.wrapped.items():
-            As, Bs = [], []
-            for n in names:
-                s = w.scales.get(n, 0.0) if n in w.adapters else 0.0
-                if not s:
-                    continue
-                a, b = w.adapters[n]
-                As.append(a.weight.float())
-                Bs.append(b.weight.float() * s)
-            if not As:
+            live = [(n, w.scales[n]) for n in names if n in w.adapters and w.scales.get(n, 0.0)]
+            if not live:
                 continue
+            if len(live) == 1 and isinstance(w.adapters[live[0][0]], LoKR):
+                # a lone LoKR stays a LoKR: the scale folds into w2 (alpha 1, full matrices -> scale 1 everywhere)
+                ad, s1 = w.adapters[live[0][0]], live[0][1]
+                stem = f"{self.desc.lora.file_prefix}{full}"
+                sd[f"{stem}.lokr_w1"] = ad.lokr_w1.detach().to("cpu", dtype).contiguous()
+                sd[f"{stem}.lokr_w2"] = (ad.lokr_w2.detach().float() * s1).to("cpu", dtype).contiguous()
+                sd[f"{stem}.alpha"] = torch.tensor(1.0)
+                ranks[full] = 0
+                continue
+            As, Bs = [], []
+            for n, sc in live:
+                ad = w.adapters[n]
+                if isinstance(ad, LoKR):          # mixed with a LoRA: SVD the Kronecker delta to rank <= 64
+                    U, S, Vh = torch.linalg.svd(ad.delta(), full_matrices=False)
+                    k = min(64, S.numel())
+                    root = S[:k].sqrt()
+                    As.append(root[:, None] * Vh[:k])
+                    Bs.append(U[:, :k] * root * sc)
+                    continue
+                a, b = ad
+                As.append(a.weight.float())
+                Bs.append(b.weight.float() * sc)
             A, B = torch.cat(As, 0), torch.cat(Bs, 1)
             ka, kb, kal = self._keys(full)
             sd[ka] = A.to("cpu", dtype).contiguous()
@@ -279,7 +377,13 @@ class FamilyLoRA:
     def state_dict(self, dtype=torch.bfloat16):
         sd = {}
         for full, w in self.wrapped.items():
-            if TRAINABLE in w.adapters:
+            if TRAINABLE in w.adapters and isinstance(w.adapters[TRAINABLE], LoKR):
+                ad = w.adapters[TRAINABLE]
+                stem = f"{self.desc.lora.file_prefix}{full}"
+                sd[f"{stem}.lokr_w1"] = ad.lokr_w1.detach().to("cpu", dtype).contiguous()
+                sd[f"{stem}.lokr_w2"] = ad.lokr_w2.detach().to("cpu", dtype).contiguous()
+                sd[f"{stem}.alpha"] = torch.tensor(1.0)     # full matrices: LyCORIS scale = alpha = 1
+            elif TRAINABLE in w.adapters:
                 a, b = w.adapters[TRAINABLE]
                 ka, kb, kal = self._keys(full)
                 sd[ka] = a.weight.detach().to("cpu", dtype).contiguous()
@@ -300,6 +404,14 @@ class FamilyLoRA:
         for full, w in self.wrapped.items():
             if TRAINABLE not in w.adapters:
                 continue                # frozen-only wraps (training adapter, speed LoRA extras) hold nothing to load
+            ad = w.adapters[TRAINABLE]
+            if isinstance(ad, LoKR):
+                stem = f"{self.desc.lora.file_prefix}{full}"
+                if f"{stem}.lokr_w1" in sd:
+                    ad.lokr_w1.copy_(sd[f"{stem}.lokr_w1"].to(ad.lokr_w1.dtype))
+                    ad.lokr_w2.copy_(sd[f"{stem}.lokr_w2"].to(ad.lokr_w2.dtype))
+                    n += 1
+                continue
             ka, kb, _ = self._keys(full)
             if ka in sd:
                 a, b = w.adapters[TRAINABLE]

@@ -119,18 +119,29 @@ class WorkbenchEngine:
 
     # ---- models -------------------------------------------------------------------------------------
     def ensure_pipeline(self, dit_path, vae_path, text_encoder_path, speed_lora_path="", device="cuda",
-                        lowmem=None, **_ignored):
+                        lowmem=None, precision="auto", blocks_to_swap=0, **_ignored):
         """Load the DiT (resident) and the VAE once; the text encoder loads per new prompt. speed_lora_path: the
-        family's speed LoRA file, attached unmerged and used for every preview ("" = default sampling)."""
+        family's speed LoRA file, attached unmerged and used for every preview ("" = default sampling).
+        precision: "auto" = bf16 with 20 GB+ free, else INT8 (when the family offers it); blocks_to_swap streams
+        blocks forward-only (previews never backprop)."""
         if self.pipeline is not None:
             return
         from fizgig.families.train import _small_card_previews
         self.device = device
         self.te_path = text_encoder_path
         self.lowmem = _small_card_previews() if lowmem is None else bool(lowmem)
-        self.dit = self.driver.load_dit(dit_path, device)
+        from fizgig.families import quant
+        if precision == "auto":
+            precision = "int8" if ("int8" in self.desc.precisions and _free_vram_gb() < 20.0) else "bf16"
+        elif precision not in self.desc.precisions:
+            precision = "bf16"
+        self.dit, self.swapped = quant.load_base(self.driver, dit_path, device, precision, blocks_to_swap,
+                                                 supports_backward=False)
+        if self.swapped:
+            self.driver.block_swap_mode(self.dit, inference=True)
+        self.precision = precision
         self.vae = self.driver.load_vae(vae_path, "cpu" if self.lowmem else device)
-        self.net = FamilyLoRA(self.dit, self.driver)
+        self.net = FamilyLoRA(self.dit, self.driver, device=device)
         sp = self.desc.preview_speed()
         if speed_lora_path and sp is not None and os.path.exists(speed_lora_path):
             n = self.net.add_file(speed_lora_path, SPEED, sp.strength)
@@ -138,7 +149,8 @@ class WorkbenchEngine:
             self.speed = sp
             logger.info("%s workbench: speed LoRA %s on %d Linears", self.desc.display_name, sp.name, n)
         self.pipeline = _Loaded()
-        logger.info("%s workbench ready (lowmem=%s)", self.desc.display_name, self.lowmem)
+        logger.info("%s workbench ready (%s, block swap %d, lowmem=%s)", self.desc.display_name, precision,
+                    self.swapped, self.lowmem)
 
     def _attach(self, path, name, strength=1.0):
         n = self.net.add_file(path, name, strength)
@@ -235,8 +247,9 @@ class WorkbenchEngine:
 
     # ---- rendering ----------------------------------------------------------------------------------
     def _park_dit(self, where):
-        if self.dit is not None:
-            self.dit.to(where)
+        if self.dit is not None and not getattr(self, "swapped", 0):   # a swapped DiT keeps its streaming layout
+            from fizgig.families import quant
+            quant.move(self.dit, where)
             if where == "cpu":
                 gc.collect()
                 torch.cuda.empty_cache()

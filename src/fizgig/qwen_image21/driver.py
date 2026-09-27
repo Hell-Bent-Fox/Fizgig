@@ -20,19 +20,32 @@ from fizgig.qwen_image21 import sampling as S
 class QwenImage21Driver(FamilyDriver):
 
     # ---- models ---------------------------------------------------------------------------------
-    def load_dit(self, path, device, precision="bf16"):
+    def load_dit(self, path, device):
         from fizgig.qwen_image21.model import load_qwen21_dit
-        if precision != "bf16":
-            raise ValueError(f"Qwen Image 2.1: only bf16 is supported so far (asked for {precision})")
         return load_qwen21_dit(path, device=device).eval().requires_grad_(False)
+
+    def max_blocks_to_swap(self, dit=None):
+        return len(dit.transformer_blocks) - 2 if dit is not None else self.description.n_blocks - 2
+
+    def enable_block_swap(self, dit, num_blocks, device, supports_backward=True):
+        dit.enable_block_swap(num_blocks, device, supports_backward)
+        dit.move_to_device_except_swap_blocks(device)
+
+    def block_swap_mode(self, dit, inference):
+        if inference:
+            dit.switch_block_swap_for_inference()
+        else:
+            dit.switch_block_swap_for_training()
 
     def load_vae(self, path, device):
         from fizgig.qwen_image21.vae import load_qwen21_vae
         return load_qwen21_vae(path, device=device)
 
     def load_text_encoder(self, path, device):
+        """bf16 (17.5 GB) when it fits the free VRAM with room to run, else INT8 (about 9 GB)."""
         from fizgig.qwen_image21.embedder import Qwen21TextEncoder
-        return Qwen21TextEncoder(path, device=device)
+        free = torch.cuda.mem_get_info()[0] / 1024 ** 3 if torch.cuda.is_available() else 0.0
+        return Qwen21TextEncoder(path, device=device, int8=free < 19.5)
 
     def unload_text_encoder(self, te):
         te.unload()

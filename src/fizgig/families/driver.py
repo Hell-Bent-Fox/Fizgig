@@ -40,9 +40,22 @@ class FamilyDriver:
     description = None
 
     # ---- models ---------------------------------------------------------------------------------
-    def load_dit(self, path: str, device, precision: str = "bf16"):
-        """The diffusion transformer, frozen, ready for LoRA wrapping (gradient checkpointing available)."""
+    def load_dit(self, path: str, device):
+        """The diffusion transformer in bf16, frozen, ready for LoRA wrapping (gradient checkpointing available).
+        INT8 / NF4 are applied afterwards by families/quant.py to the block map's Linears; the driver only loads."""
         raise NotImplementedError
+
+    # ---- block swap (optional) --------------------------------------------------------------------
+    def max_blocks_to_swap(self, dit=None) -> int:
+        """How many blocks may stream between CPU and GPU; 0 = the family has no block swap."""
+        return 0
+
+    def enable_block_swap(self, dit, num_blocks: int, device, supports_backward: bool = True) -> None:
+        """Stream `num_blocks` blocks: called with the model on CPU; leaves everything else on `device`."""
+        raise NotImplementedError
+
+    def block_swap_mode(self, dit, inference: bool) -> None:
+        """Forward-only streaming for previews (inference=True), back to training layout after."""
 
     def load_vae(self, path: str, device):
         raise NotImplementedError

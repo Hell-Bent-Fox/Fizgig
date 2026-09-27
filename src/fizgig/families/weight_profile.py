@@ -16,13 +16,18 @@ OUTSIDE = "outside"
 def block_norms(desc, lora_path):
     """-> ({block id or OUTSIDE: norm}, modules counted). Family / kohya / PEFT layouts; LoKR / LoHa are refused."""
     from safetensors import safe_open
-    from fizgig.families.lorafile import block_of, lora_pairs
+    from fizgig.families.lorafile import block_of, lokr_factors, lokr_modules, lora_pairs
     blocks = block_of(desc)
     out, n = {}, 0
     with safe_open(lora_path, "pt") as f:
         for mod, down, up, _alpha in lora_pairs(desc, f.keys()):
             bid = blocks.get(mod, OUTSIDE)
             out[bid] = out.get(bid, 0.0) + float(f.get_tensor(up).float().norm()) * float(f.get_tensor(down).float().norm())
+            n += 1
+        for mod, stem in lokr_modules(desc, f.keys()):       # ||kron(w1, w2)|| = ||w1|| * ||w2||, exactly
+            w1, w2, scale = lokr_factors(f, stem)
+            bid = blocks.get(mod, OUTSIDE)
+            out[bid] = out.get(bid, 0.0) + float(w1.norm()) * float(w2.norm()) * scale
             n += 1
     if not out:
         raise RuntimeError(f"No LoRA modules found — is this a {desc.display_name} LoRA?")

@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from fizgig.dataset.config import (BlueprintGenerator, ConfigSanitizer,  # noqa: E402
                                    generate_dataset_group_by_blueprint, load_user_config)
+from fizgig.families import quant  # noqa: E402
 from fizgig.families.lora import FamilyLoRA  # noqa: E402
 from fizgig.families.registry import get as get_family  # noqa: E402
 from fizgig.krea2.trainer import AdaptiveLR  # noqa: E402
@@ -155,7 +156,7 @@ def _cap_canvas(width, height, cap=768):
 
 @torch.no_grad()
 def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_name, steps, cfg, neg, width,
-                     height, seed, ema=None, speed=None, lowmem=False):
+                     height, seed, ema=None, speed=None, lowmem=False, swapped=False):
     """Previews on the RESIDENT training model: training adapter OFF (the deployment setup), the family's speed
     LoRA ON if one is loaded (it lives on CPU between previews). On small cards the DiT parks on CPU for the
     decode. File names match the other trainers so the GUI gallery reads them:
@@ -172,6 +173,8 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
         ema.swap_in()
     was_training = dit.training
     dit.eval()
+    if swapped:
+        driver.block_swap_mode(dit, inference=True)
     paths = []
     try:
         lats = []
@@ -182,9 +185,10 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
             else:
                 lats.append(driver.generate(dit, cond, width, height, steps=steps, seed=seed + i, cfg=cfg,
                                             neg_cond=neg))
-        if lowmem:                          # #123: never hold the training DiT and the VAE decode together
+        park = lowmem and not swapped      # a swapped DiT is already mostly on CPU; moving it would undo the layout
+        if park:                            # #123: never hold the training DiT and the VAE decode together
             _preview_vram("before decode")
-            dit.to("cpu")
+            quant.move(dit, "cpu")
             torch.cuda.empty_cache()
             _preview_vram("DiT parked for the decode")
         for i, lat in enumerate(lats):
@@ -192,9 +196,11 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
             driver.decode(vae, lat, width, height).save(p)
             paths.append(p)
     finally:
-        if lowmem:
-            dit.to(device)
+        if lowmem and not swapped:
+            quant.move(dit, device)
             _preview_vram("after decode, DiT restored")
+        if swapped:
+            driver.block_swap_mode(dit, inference=False)
         if ema is not None:
             ema.swap_out()
         if speed is not None:
@@ -222,7 +228,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  resume_state_dir=None, adaptive_lr=False, adaptive_lr_min=1e-4, adaptive_lr_max=2e-4,
                  max_grad_norm=1.0, ema_decay=0.0, optimizer_type="adamw", optimizer_args="",
                  lr_scheduler="constant", lr_warmup_steps=0, lr_scheduler_num_cycles=1, lr_scheduler_power=1.0,
-                 gradient_checkpointing=True):
+                 gradient_checkpointing=True, blocks_to_swap=0, network_type="lora", lokr_factor=8):
     desc = get_family(family)
     if desc is None or not desc.training_ready:
         raise RuntimeError(f"unknown or untrainable family {family!r}")
@@ -279,11 +285,15 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         logger.warning("[sample] previews need the text encoder and VAE paths - previews are off for this run")
 
     # ---- model ----------------------------------------------------------------------------------
+    if precision == "auto" or blocks_to_swap < 0:
+        req = (precision, blocks_to_swap)
+        precision, blocks_to_swap, why = quant.plan(desc, driver, precision, blocks_to_swap)
+        logger.info(f"[precision] Auto plan: {precision}, block swap {blocks_to_swap} ({why}); asked {req}")
     logger.info(f"Loading {desc.display_name} DiT ({precision}) from {dit_path}")
-    dit = driver.load_dit(dit_path, device, precision)
+    dit, swapped = quant.load_base(driver, dit_path, device, precision, blocks_to_swap)
     if gradient_checkpointing:
         driver.enable_gradient_checkpointing(dit, True)
-    net = FamilyLoRA(dit, driver)
+    net = FamilyLoRA(dit, driver, device=device)
     if training_adapter:
         n = net.add_file(training_adapter, ADAPTER, training_adapter_strength)
         if n == 0:
@@ -302,10 +312,13 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         net.move_adapter(SPEED, "cpu")
         logger.info(f"[sample] {speed_desc.name}: {n} Linears, on CPU between previews, on only while they render "
                     f"({sample_steps} steps)")
-    net.add_trainable(network_dim, network_alpha)
+    if network_type == "lokr" and "lokr" not in desc.network_types:
+        raise RuntimeError(f"{desc.display_name} does not offer LoKR")
+    net.add_trainable(network_dim, network_alpha, kind=network_type, factor=lokr_factor)
     params = net.parameters()
-    logger.info(f"LoRA rank {network_dim} alpha {network_alpha:g}: {len(net.trainable_modules())} modules, "
-                f"{sum(p.numel() for p in params) / 1e6:.1f}M trainable params")
+    logger.info((f"LoKR factor {lokr_factor}" if network_type == "lokr" else
+                 f"LoRA rank {network_dim} alpha {network_alpha:g}") +
+                f": {len(net.trainable_modules())} modules, {sum(p.numel() for p in params) / 1e6:.1f}M trainable params")
 
     from fizgig.training.optimizers import create_optimizer, owns_its_rate
     optimizer, opt_label = create_optimizer(optimizer_type, params, learning_rate, optimizer_args)
@@ -355,8 +368,11 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                             description=metadata_description if metadata_description is not None else last_prompt[0],
                             license=metadata_license, tags=metadata_tags, trigger_phrase=metadata_trigger_phrase,
                             thumbnail=thumbnail_data_uri(thumb))
-        md.update({"ss_network_module": f"fizgig.families ({desc.key}, lora)", "ss_network_dim": str(network_dim),
-                   "ss_network_alpha": str(network_alpha), "ss_architecture": arch, "ss_epoch": str(epoch),
+        md.update({"ss_network_module": f"fizgig.families ({desc.key}, {network_type})",
+                   "ss_network_dim": str(network_dim if network_type == "lora" else lokr_factor),
+                   "ss_network_alpha": str(network_alpha if network_type == "lora" else 1.0),
+                   **({"ss_lokr_factor": str(lokr_factor)} if network_type == "lokr" else {}),
+                   "ss_architecture": arch, "ss_epoch": str(epoch),
                    "ss_optimizer": opt_label, "ss_learning_rate": f"{learning_rate:g}",
                    "ss_training_adapter": os.path.basename(training_adapter) if training_adapter else "none"})
         if context_lora_path:
@@ -380,7 +396,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         _render_previews(driver, dit, net, vae, encoded, sample_dir, epoch, output_name=output_name,
                          steps=sample_steps, cfg=sample_cfg_scale, neg=neg, width=sample_width, height=sample_height,
                          seed=sample_seed, ema=ema,
-                         speed=speed_desc.settings if (speed_lora and speed_desc) else None, lowmem=lowmem)
+                         speed=speed_desc.settings if (speed_lora and speed_desc) else None, lowmem=lowmem,
+                         swapped=bool(swapped))
         last_prompt[0] = sample_prompts[-1] if sample_prompts else None
 
     def state(epoch):
@@ -398,6 +415,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     dit.train()
     for epoch in range(start_epoch, max_train_epochs):
         shared_epoch.value = epoch + 1
+        torch.cuda.reset_peak_memory_stats()
         t0 = time.time()
         for i, batch in enumerate(loader):
             latents = batch["latents"].to(device)
@@ -419,7 +437,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
 
         logger.info(f"epoch {epoch + 1}/{max_train_epochs}  avr_loss={recorder.moving_average:.4f}  step={global_step}  "
                     f"{(time.time() - t0) / max(1, steps_per_epoch):.2f}s/step  "
-                    f"lr={optimizer.param_groups[0]['lr']:.3e}")
+                    f"lr={optimizer.param_groups[0]['lr']:.3e}  "
+                    f"peak VRAM {torch.cuda.max_memory_reserved() / 1024 ** 3:.1f} GB")
         if adaptive:
             adaptive.epoch_boundary(epoch, recorder.moving_average, net.trainable_modules(), optimizer)
 
@@ -459,8 +478,13 @@ def setup_parser():
     p.add_argument("--dataset_config", required=True)
     p.add_argument("--output_dir", required=True)
     p.add_argument("--output_name", required=True)
-    p.add_argument("--precision", default="bf16")
+    p.add_argument("--precision", default="bf16", choices=("auto",) + quant.PRECISIONS,
+                   help="base precision: bf16, int8 (8-bit, int8 matmuls), nf4 (4-bit) or auto (fits free VRAM)")
+    p.add_argument("--blocks_to_swap", type=int, default=0,
+                   help="blocks streamed between CPU and GPU (not with nf4); -1 = as few as fit free VRAM")
     p.add_argument("--network_dim", type=int, default=32)
+    p.add_argument("--network_type", default="lora", choices=("lora", "lokr"))
+    p.add_argument("--lokr_factor", type=int, default=8, help="LoKR only: w1 is about factor x factor")
     p.add_argument("--network_alpha", type=float, default=32)
     p.add_argument("--learning_rate", type=float, default=1e-4)
     p.add_argument("--max_train_epochs", type=int, default=16)
@@ -522,6 +546,7 @@ def main():
             prompts = [ln.strip() for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
     train_family(
         a.family, a.dit, a.dataset_config, a.output_dir, a.output_name, precision=a.precision,
+        blocks_to_swap=a.blocks_to_swap, network_type=a.network_type, lokr_factor=a.lokr_factor,
         network_dim=a.network_dim, network_alpha=a.network_alpha, learning_rate=a.learning_rate,
         max_train_epochs=a.max_train_epochs, save_every_n_epochs=a.save_every_n_epochs, save_state=a.save_state,
         save_state_on_train_end=a.save_state_on_train_end, keep_last_n_states=a.keep_last_n_states, seed=a.seed,

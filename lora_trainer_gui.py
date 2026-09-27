@@ -5755,6 +5755,23 @@ class LoRATrainerGUI:
         self._quant_4bit_hint.grid(row=7, column=1, sticky=tk.W, padx=5, pady=(0, 4))
         self._on_quant_4bit_mode_changed()  # derive the boolean + sync dependent locks
 
+        # Base precision for standard-layer families: shares rows 6-7 with Krea 2's control (only one family's is
+        # ever shown). Choices come from the description; Auto is resolved by the trainer from free VRAM at launch.
+        self._family_precision_label = tk.Label(memory_content, text="Base precision:", font=(FONT_FAMILY, 10),
+                                                fg=COLORS["text_secondary"], bg=COLORS["bg_surface"])
+        self._family_precision_label.grid(row=6, column=0, sticky=tk.W, padx=(12, 8), pady=4)
+        self.entries["FAMILY_PRECISION"] = ttk.Combobox(memory_content, state="readonly", width=34,
+                                                        values=list(self._FAMILY_PRECISION_LABELS.values()))
+        self.entries["FAMILY_PRECISION"].set(self._FAMILY_PRECISION_LABELS["auto"])
+        self.entries["FAMILY_PRECISION"].grid(row=6, column=1, sticky=tk.W, padx=5, pady=4)
+        self._family_precision_hint = tk.Label(memory_content, text="", font=HINT_FONT,
+                                               fg=COLORS["text_explain"], bg=COLORS["bg_surface"],
+                                               wraplength=600, justify=tk.LEFT)
+        self._family_precision_hint.grid(row=7, column=1, sticky=tk.W, padx=5, pady=(0, 4))
+        for _w in (self._family_precision_label, self.entries["FAMILY_PRECISION"], self._family_precision_hint):
+            _w._fizgig_described_family = "*"
+            _w.grid_remove()
+
         # Gradient checkpointing — trades compute for VRAM.
         self._grad_checkpoint_label = tk.Label(memory_content, text="Grad Checkpoint:", font=(FONT_FAMILY, 10),
                  fg=COLORS["text_secondary"], bg=COLORS["bg_surface"])
@@ -7403,7 +7420,9 @@ class LoRATrainerGUI:
     }
 
     # Training-tab settings that belong to standard-layer (described) families only.
-    _FAMILY_ENTRY_KEYS = frozenset({"FAMILY_TRAINING_ADAPTER", "FAMILY_EMA"})
+    _FAMILY_ENTRY_KEYS = frozenset({"FAMILY_TRAINING_ADAPTER", "FAMILY_EMA", "FAMILY_PRECISION"})
+    _FAMILY_PRECISION_LABELS = {"auto": "Auto (fits your free VRAM)", "bf16": "bf16 (full precision)",
+                                "int8": "INT8 (8-bit, fastest)", "nf4": "4-bit NF4 (smallest)"}
 
     def _generic_validate_paths(self, desc):
         """Standard layer: every required model file of a described family (plus its training adapter when the
@@ -9069,6 +9088,19 @@ class LoRATrainerGUI:
         has_ema = bool(desc is not None and desc.ema_default)
         for w in (self._family_ema_label, self._family_ema_frame, self._family_ema_hint):
             self._set_widget_visible(w, has_ema)
+        many = bool(desc is not None and len(desc.precisions) > 1)
+        for w in (self._family_precision_label, self.entries["FAMILY_PRECISION"], self._family_precision_hint):
+            self._set_widget_visible(w, many)
+        if many:
+            opts = ["auto"] + [p for p in ("bf16", "int8", "nf4") if p in desc.precisions]
+            self.entries["FAMILY_PRECISION"].configure(values=[self._FAMILY_PRECISION_LABELS[p] for p in opts])
+            if self.entries["FAMILY_PRECISION"].get() not in self.entries["FAMILY_PRECISION"].cget("values"):
+                self.entries["FAMILY_PRECISION"].set(self._FAMILY_PRECISION_LABELS["auto"])
+            self._family_precision_hint.config(text=(
+                "Auto (recommended) picks at launch from your FREE VRAM: bf16 if it fits, else INT8 (8-bit, about "
+                "half the size and the fastest), else 4-bit NF4 (smallest, slower). Only when none of those fit does "
+                "it stream blocks between CPU and GPU (Blocks Swap), which is much slower. Blocks Swap on Auto sizes "
+                "the swap for whatever precision runs; NF4 never swaps."))
         if desc is not None and len(desc.network_types) <= 1:
             for w in (self.labels["NETWORK_TYPE"], self._network_type_rowf):
                 self._set_widget_visible(w, False)
@@ -17289,7 +17321,8 @@ class LoRATrainerGUI:
             self.master.update_idletasks()
             self._explorer_engine.ensure_pipeline(
                 dit_path=paths["dit"], vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
-                speed_lora_path=speed_path if speed_path and os.path.exists(speed_path) else "", device="cuda")
+                speed_lora_path=speed_path if speed_path and os.path.exists(speed_path) else "", device="cuda",
+                **self._family_inference_memory())
             self.explorer_status_var.set("Models loaded.")
             return True
         except Exception:
@@ -20796,7 +20829,7 @@ class LoRATrainerGUI:
 
         def worker():
             try:
-                from fizgig.families.profile import profile_weight_only
+                from fizgig.families.weight_profile import profile_weight_only
                 profiles_dir = (self.prefs_vars["profiles_dir"].get() if "profiles_dir" in self.prefs_vars
                                 else os.path.join(OUTPUT_LORAS_DIR, "profiles"))
                 os.makedirs(profiles_dir, exist_ok=True)
@@ -22931,7 +22964,13 @@ class LoRATrainerGUI:
         steps = sp.settings.steps if speed_path else desc.default_sampling().steps
         self.repair_status_var.set(f"Loading {desc.display_name} ({steps}-step previews)…")
         return dict(dit_path=paths["dit"], vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
-                    speed_lora_path=speed_path, device="cuda")
+                    speed_lora_path=speed_path, device="cuda", **self._family_inference_memory())
+
+    def _family_inference_memory(self):
+        """The app's inference memory preferences for a standard-layer workbench engine: INT8 when the inference INT8
+        preference is on (else Auto: bf16 with 20 GB+ free, INT8 below), and the inference block swap."""
+        return {"precision": "int8" if self._get_inference_int8() else "auto",
+                "blocks_to_swap": self._get_inference_blocks_to_swap()}
 
     def _repair_engine_plan_krea2(self):
         """Lazy-load the Krea 2 Repair engine. Turbo (8-step, default) or RAW (slow). The DiT
@@ -24365,7 +24404,8 @@ class LoRATrainerGUI:
             self.royale_engine = WorkbenchEngine(desc)
         self._royale_pipeline_kwargs = dict(
             dit_path=paths["dit"], vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
-            speed_lora_path=speed if speed and os.path.exists(speed) else "", device="cuda")
+            speed_lora_path=speed if speed and os.path.exists(speed) else "", device="cuda",
+            **self._family_inference_memory())
         return True
 
     def _royale_validate_models_krea2(self):
@@ -32601,7 +32641,8 @@ class LoRATrainerGUI:
             "MINIMAX_ADAPTER": str(self.entries["MINIMAX_ADAPTER"].get()),
             # standard-layer settings ride only with described families
             **({"FAMILY_TRAINING_ADAPTER": bool(self.entries["FAMILY_TRAINING_ADAPTER"].get()),
-                "FAMILY_EMA": self.entries["FAMILY_EMA"].get()}
+                "FAMILY_EMA": self.entries["FAMILY_EMA"].get(),
+                "FAMILY_PRECISION": self.entries["FAMILY_PRECISION"].get()}
                if self._family_desc() is not None else {}),
             # experiment/tread: both ticks must be copied here or the builder reads a stale value
             "MINIMAX_TREAD": bool(self.entries["MINIMAX_TREAD"].get()),
@@ -33448,6 +33489,20 @@ class LoRATrainerGUI:
                 cmd += ["--max_grad_norm", str(float(st["MAX_GRAD_NORM"]))]
         except ValueError:
             pass
+        if len(desc.precisions) > 1:
+            lab = str(st.get("FAMILY_PRECISION", "") or "")
+            prec = next((k for k, v in self._FAMILY_PRECISION_LABELS.items() if v == lab), "auto")
+            cmd += ["--precision", prec if prec == "auto" or prec in desc.precisions else "auto"]
+        if "lokr" in desc.network_types and str(st.get("NETWORK_TYPE", "")).startswith("LoKR"):
+            cmd += ["--network_type", "lokr", "--lokr_factor", str(st.get("LOKR_FACTOR", 8))]
+        raw_swap = self.entries["BLOCKS_SWAP"].get().strip()
+        if raw_swap.lower().startswith("auto"):
+            cmd += ["--blocks_to_swap", "-1"]            # the trainer sizes it for the precision that runs
+        else:
+            import re as _re
+            _m = _re.match(r"\d+", raw_swap)
+            if _m and int(_m.group()) > 0:
+                cmd += ["--blocks_to_swap", _m.group()]
         if desc.ema_default:
             ema = str(st.get("FAMILY_EMA", "") or desc.ema_default).split(" ")[0]
             if ema != "Off":

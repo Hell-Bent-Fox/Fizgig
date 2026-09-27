@@ -45,8 +45,38 @@ def _text_encoder_config(config_path=None) -> dict:
         return json.load(f)
 
 
+def _w8_forward(self, x):
+    w = (self.weight.view(self.weight.shape[0], -1, _W8_GROUP).to(x.dtype) * self._w8_scale.to(x.dtype))
+    return torch.nn.functional.linear(x, w.view(self.weight.shape), self.bias)
+
+
+_W8_GROUP = 64
+
+
+@torch.no_grad()
+def _int8_weights(model, prefix, device):
+    """Weight-only 8-bit with one scale per 64 weights, dequantised per matmul; activations stay bf16. Measured on
+    Qwen3-VL-8B hidden states against bf16 (27 Sep 2026): W8A8 was 35% off (cosine 0.93: activation outliers), weight-
+    only with per-channel scales 8% (0.996); per-group scales are the fix for the per-channel error."""
+    n = 0
+    for name, m in model.named_modules():
+        if not (isinstance(m, torch.nn.Linear) and prefix in name) or m.in_features % _W8_GROUP:
+            continue
+        w = m.weight.data.to(device).float().view(m.out_features, -1, _W8_GROUP)
+        scale = w.abs().amax(dim=-1, keepdim=True).clamp_min(1e-8) / 127.0
+        m.weight.requires_grad_(False)
+        m.weight.data = (w / scale).round_().clamp_(-127, 127).to(torch.int8).view(m.out_features, m.in_features)
+        m.register_buffer("_w8_scale", scale.to(torch.bfloat16), persistent=False)
+        m.forward = _w8_forward.__get__(m, type(m))
+        n += 1
+    return n
+
+
 class Qwen21TextEncoder:
-    def __init__(self, model_path, tokenizer_dir=None, device="cuda", dtype=torch.bfloat16, config_path=None):
+    def __init__(self, model_path, tokenizer_dir=None, device="cuda", dtype=torch.bfloat16, config_path=None,
+                 int8=False):
+        """int8: the language model's Linears as INT8 (about 9 GB instead of 17.5), for cards that cannot hold the
+        bf16 encoder. Quantised one Linear at a time from CPU, so the bf16 model is never resident."""
         from accelerate import init_empty_weights
         from transformers import AutoTokenizer, Qwen3VLConfig, Qwen3VLForConditionalGeneration
 
@@ -67,7 +97,10 @@ class Qwen21TextEncoder:
         if info.unexpected_keys or info.missing_keys:
             raise RuntimeError(f"Qwen3-VL-8B checkpoint mismatch: missing={info.missing_keys[:8]}, "
                                f"unexpected={info.unexpected_keys[:8]}")
-        self.model = model.to(self.device, dtype).eval().requires_grad_(False)
+        if int8:
+            n = _int8_weights(model, "language_model.layers.", self.device)
+            logger.info(f"[text encoder] 8-bit weights: {n} language-model Linears (low-VRAM card); matmuls stay bf16")
+        self.model = model.to(self.device).eval().requires_grad_(False)
         # Number of leading system-turn tokens to drop (the reference derives it from the tokenized system message).
         sys_ids = self.tokenizer(f"<|im_start|>system\n{SYS_PROMPT}<|im_end|>\n", add_special_tokens=False).input_ids
         self.drop_idx = len(sys_ids)

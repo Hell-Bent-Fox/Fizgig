@@ -309,9 +309,47 @@ class QwenImage21DiT(nn.Module):
         self.norm_out = AdaLayerNormContinuous(self.inner_dim, self.inner_dim, eps=eps)
         self.proj_out = nn.Linear(self.inner_dim, patch_size * patch_size * self.out_channels, bias=False)
         self.gradient_checkpointing = False
+        self.blocks_to_swap = 0
+        self.offloader = None
 
     def enable_gradient_checkpointing(self, on: bool = True):
         self.gradient_checkpointing = on
+
+    # ---- block swap (Fizgig's shared offloader, as Klein and Krea 2 use it) --------------------------------------
+    def enable_block_swap(self, num_blocks: int, device, supports_backward: bool = True):
+        from fizgig.modules.offloading import ModelOffloader
+        if self.offloader is not None:
+            self.offloader.remove_hooks()       # stale backward hooks double-swap blocks ("mat2 is on cpu")
+        n = len(self.transformer_blocks)
+        if not 0 < num_blocks <= n - 2:
+            raise ValueError(f"block swap: 1..{n - 2} blocks, got {num_blocks}")
+        self.blocks_to_swap = num_blocks
+        self.offloader = ModelOffloader("qwen21", list(self.transformer_blocks), n, num_blocks, supports_backward,
+                                        torch.device(device))
+
+    def move_to_device_except_swap_blocks(self, device):
+        """Everything to `device` except the swapped blocks' weights (the model is assumed to be on CPU)."""
+        blocks = self.transformer_blocks
+        self.transformer_blocks = nn.ModuleList()
+        try:
+            self.to(device)
+        finally:
+            self.transformer_blocks = blocks
+        self.prepare_block_swap_before_forward()
+
+    def prepare_block_swap_before_forward(self):
+        if self.blocks_to_swap:
+            self.offloader.prepare_block_devices_before_forward(list(self.transformer_blocks))
+
+    def switch_block_swap_for_inference(self):
+        if self.blocks_to_swap:
+            self.offloader.set_forward_only(True)
+            self.prepare_block_swap_before_forward()
+
+    def switch_block_swap_for_training(self):
+        if self.blocks_to_swap:
+            self.offloader.set_forward_only(False)
+            self.prepare_block_swap_before_forward()
 
     @staticmethod
     def build_token_metadata(image_pad_mask, img_shapes):
@@ -375,12 +413,17 @@ class QwenImage21DiT(nn.Module):
         prefix_len = int((~target_token_mask).sum())
         segments = prefix_segments(image_ids, prefix_len)
 
-        for block in self.transformer_blocks:
+        blocks = list(self.transformer_blocks) if self.blocks_to_swap else None
+        for index, block in enumerate(self.transformer_blocks):
+            if self.blocks_to_swap:
+                self.offloader.wait_for_block(index)
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 joint = checkpoint(block, joint, modulation, rotary, mod_mask, segments, key_valid,
                                    use_reentrant=False)
             else:
                 joint = block(joint, modulation, rotary, mod_mask, segments, key_valid)
+            if self.blocks_to_swap:
+                self.offloader.submit_move_blocks_forward(blocks, index)
 
         joint = self.norm_out(joint, temb, mod_mask)
         return self.proj_out(joint)

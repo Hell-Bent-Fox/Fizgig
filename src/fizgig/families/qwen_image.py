@@ -82,8 +82,14 @@ QWEN_IMAGE_21 = FamilyDescription(
                            "previews and never in your saved file. Without it Qwen 2.1 LoRAs collapse or wobble "
                            "(likeness 77 with it vs 56 without in Fizgig's A/B)."),
     implementation="https://github.com/QwenLM/Qwen-Image",
-    precisions=("bf16",),             # int8 / nf4 bases not built yet; bf16 needs ~24 GB+
+    precisions=("bf16", "int8", "nf4"),
+    # Measured 27 Sep 2026 on a 5090: rank 32, ~1 MP buckets, gradient checkpointing, VAE resident for previews,
+    # 1 epoch of 52 steps. bf16 19.0 GB 2.04 s/step; INT8 11.9 GB 1.94 s/step; NF4 9.5 GB 2.02 s/step;
+    # bf16 + 16 swapped 11.9 GB 3.38 s/step; INT8 + 16 swapped 8.8 GB 2.50 s/step. Quantising costs no speed here,
+    # swapping costs 25-65%, so Auto quantises before it swaps.
+    train_memory={"bf16": (19.0, 0.44), "int8": (11.9, 0.19), "nf4": (9.5, 0.0)},
     optimizers=("adamw", "adamw8bit"),
+    network_types=("lora", "lokr"),
 
     sampling=(
         SamplingSettings("ComfyUI template", steps=25, cfg=1.0, sampler="euler", scheduler="simple",

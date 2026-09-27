@@ -58,7 +58,9 @@ def family_of_lora(path: str) -> Optional[FamilyDescription]:
     except Exception:
         return None
     for d in training_families():
+        from fizgig.families.lorafile import lokr_modules
         mods = [m for m in (d.lora.module_of(k) for k in keys) if m is not None]
+        mods += [m for m, _ in lokr_modules(d, keys) if m is not None and m.startswith(d.block_prefix + ".")]
         if not mods:
             continue
         drv = d.load_driver()

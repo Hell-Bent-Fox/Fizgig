@@ -29,7 +29,7 @@ def extract_weight_only(desc, source, output, rank, dtype=torch.bfloat16, progre
     """Write `output` at `rank`. Returns a summary dict (layers, skipped, mean kept energy, seconds, params)."""
     from safetensors import safe_open
     from safetensors.torch import save_file
-    from fizgig.families.lorafile import family_keys, lora_pairs
+    from fizgig.families.lorafile import family_keys, lokr_factors, lokr_modules, lora_pairs
     t0 = time.time()
     sd, energies, skipped, params = {}, [], 0, 0
     with safe_open(source, "pt") as f:
@@ -50,6 +50,27 @@ def extract_weight_only(desc, source, output, rank, dtype=torch.bfloat16, progre
             sd[ka] = torch.tensor(float(down.shape[0]))
             energies.append(e)
             params += down.numel() + up.numel()
+        lokrs = lokr_modules(desc, f.keys())
+        dev = "cuda" if torch.cuda.is_available() else "cpu"
+        for i, (mod, stem) in enumerate(lokrs):      # LoKR: the Kronecker delta is full rank - SVD it densely
+            if progress is not None:
+                progress("SVD (LoKR)", i, len(lokrs))
+            if mod is None:
+                skipped += 1
+                continue
+            w1, w2, scale = lokr_factors(f, stem)
+            dW = torch.kron(w1.to(dev), w2.to(dev)) * scale
+            U, S, Vh = torch.linalg.svd(dW, full_matrices=False)
+            k = min(rank, S.numel())
+            root = S[:k].sqrt()
+            down, up = (root[:, None] * Vh[:k]).cpu(), (U[:, :k] * root).cpu()
+            kd, ku, ka = family_keys(desc, mod)
+            sd[kd] = down.to(dtype).contiguous()
+            sd[ku] = up.to(dtype).contiguous()
+            sd[ka] = torch.tensor(float(k))
+            energies.append(float((S[:k] ** 2).sum() / (S ** 2).sum().clamp_min(1e-30)))
+            params += down.numel() + up.numel()
+            del dW, U, S, Vh
     if not sd:
         raise RuntimeError(f"No {desc.display_name} LoRA modules found in {source}")
     for stale in ("sshs_model_hash", "sshs_legacy_hash", "modelspec.hash_sha256"):
