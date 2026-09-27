@@ -1,0 +1,50 @@
+# Training features and the workbench
+
+[← Back to the README](../README.md)
+
+Everything on this page works on every model unless it says otherwise: [Klein 9B](KLEIN.md), [Krea 2](KREA2.md), [MiniMax H3](MINIMAX_H3.md) and [Qwen Image 2.1](QWEN_IMAGE.md).
+
+## The sample gallery is an instrument
+
+- **Live likeness scoring** — pick 3 dataset photos and every sample gets a colour-coded likeness badge (ArcFace, CPU — zero training-speed cost), with a per-epoch trend chart and best-epoch highlight, live while the run goes.
+- **Training Run Visualiser** — scrub the run epoch by epoch in the browser, Royale-style, with share-ready WebM/PNG export.
+- **Every epoch checkpoint carries its own preview as the thumbnail**, so file browsers and LoRA managers show what each epoch looks like.
+- A **live sample override** in the status bar changes the preview prompt, seed, size or reference mid-run, no restart. The status bar itself carries VRAM/RAM gauges with per-run peak markers.
+
+## Dataset prep
+
+- **AI captioning with Krea 2's Qwen3-VL-4B** — every model's captions, on the Captions tab and in auto-recaption, come from it. It writes viewpoint-aware training captions in five editable preset styles (including **Style**, which describes everything *except* the look so your trigger word binds to it). Every preset's instruction is editable in plain English and persists. Florence-2 is the zero-setup option. **Bilingual captions** (English + Chinese via Helsinki-NLP) act as text-level augmentation — measurably better skin detail on Klein at identical loss.
+- **Image Prep** — batch resize, PNG conversion, InsightFace face-crops with gender targeting. Pairing a tight crop with a full shot adds a lot to a character dataset.
+- **Look Consistency Filter** — pick the 3 images that best nail the look and every image is scored against them (ArcFace). Worst matches surface first; mark drifters or let Auto-Suggest flag the outliers, then move them out in one click — nothing is deleted, and the scores feed the trainer's [look-outlier warm-up](KREA2.md#the-trainer-curates-your-dataset-while-it-trains-experimental).
+
+## Output folders
+
+The LoRA output folder lives on the Training tab's Output section and is remembered per model: switch models and each gets its own folder back. The default is `output_loras` inside Fizgig.
+
+## Compatibility
+
+Loads kohya, PEFT, OneTrainer (OMI + legacy), AI-Toolkit, and LyCORIS (LoKR / LoHa) — auto-converted, and LoKR/LoHa run natively everywhere: Repair Studio, Profiler, Extract, Context LoRA. Repair Studio and Explorer save LoKR as LoKR, losslessly. Output is `.safetensors` that drops straight into ComfyUI.
+
+## The workbench
+
+Each tool works on a trained run's output **or any LoRA you've downloaded** — and they hand off to each other (profile → repair → explore → compare, one closed loop). MiniMax H3 previews render a short clip, judged by its middle frame — the model's native regime.
+
+### Repair Studio
+
+A live slider per transformer block (32 on Klein, up to 50 + the token refiners on MiniMax H3) with a side-by-side preview that updates as you drag. **Turbo Preview** caches per-block activations so late-block edits redraw up to 97% faster; the baked save is always exact. Blend blocks from a second **donor** LoRA, balance the pair per block, condition previews on a reference photo, and save a `.safetensors` that works in ComfyUI at strength 1.0. On MiniMax H3 the previews are **clips with sound**, played side by side in the app, with a per-block library and first/last-frame conditioning — see [Repair Studio on H3](MINIMAX_H3.md#repair-studio-on-h3). Krea 2 has its own **✨Text fusion** presets — see [KREA2.md](KREA2.md#help-map-krea-2s-blocks).
+
+### LoRA the Explorer
+
+Evolutionary discovery: the app mutates blocks and shows four variants — pick a favourite and it becomes the new baseline. Freeze what you like, set how far composition drifts, cycle seeds — and send any baseline to Repair Studio (and back) with one click. A **load strength** box sets the strength the LoRA is meant to be used at; it carries across every handoff between Repair Studio, LoRA the Explorer and back.
+
+### LoRA Royale
+
+Point it at a training run and it renders **every epoch on one fixed seed**, with a crossfade slider — drag until it looks best and stop. An optional **likeness score** (ArcFace, CPU) rates each epoch against a training photo and jumps you to the best. Then make it shareable: epoch-morph clips, seed / prompt / strength **travels**, a **comparison sheet** (with/without-LoRA grid, same seed per row), all exportable as looping MP4/GIF with an optional deflicker pass. Works on any folder of LoRAs, or a single file.
+
+### Profiler
+
+A per-block activation profile as a colour-coded HTML report — which blocks carry style, identity, and detail, and where they overlap. Repair Studio reads its sidecar automatically and shows the findings inline when you load the same LoRA. Klein's block map is in [KLEIN.md](KLEIN.md#block-map).
+
+### Extract
+
+Distil any Klein, Krea 2, MiniMax H3 or Qwen Image 2.1 LoRA to a lower rank — Fast presets run weight-only SVD with no models loaded; Klein's activation-weighted presets add block and timestep targeting. PEFT and LyCORIS sources supported.
