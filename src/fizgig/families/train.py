@@ -146,6 +146,46 @@ def _small_card_previews():
         return False
 
 
+def _read_sample_override(output_dir):
+    """The GUI's live sample override (<output_dir>/.sample_override.json, written by the status-bar panel):
+    {prompt, seed, width, height} while a prompt is set, else None. The reference image field is Klein's and ignored."""
+    path = os.path.join(output_dir, ".sample_override.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        prompt = str(d.get("prompt", "")).strip()
+        if prompt:
+            return {"prompt": prompt, "seed": int(d.get("seed", 1234)), "width": int(d.get("width", 1024)),
+                    "height": int(d.get("height", 1024))}
+    except (OSError, ValueError, TypeError):
+        pass
+    return None
+
+
+def _encode_override(driver, te_path, prompt, dit, device, parkable=True):
+    """Encode one override prompt mid-run. The text encoder loads beside the training DiT when it fits; otherwise the
+    DiT waits on CPU for the encode (a block-swapped DiT is small enough to stay, and the driver picks a smaller
+    encoder when VRAM is short)."""
+    from fizgig.families import quant
+    te_gb = os.path.getsize(te_path) / 1024 ** 3 if te_path and os.path.exists(te_path) else 0.0
+    free = torch.cuda.mem_get_info()[0] / 1024 ** 3 if torch.cuda.is_available() else 0.0
+    park = parkable and free < te_gb + 2.0
+    if park:
+        quant.move(dit, "cpu")
+        torch.cuda.empty_cache()
+    try:
+        te = driver.load_text_encoder(te_path, device)
+        try:
+            return driver.encode_text(te, [prompt])
+        finally:
+            driver.unload_text_encoder(te)
+            del te
+            torch.cuda.empty_cache()
+    finally:
+        if park:
+            quant.move(dit, device)
+
+
 def _cap_canvas(width, height, cap=768):
     long = max(width, height)
     if long <= cap:
@@ -393,12 +433,24 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     def previews(epoch):
         if encoded is None:
             return
-        _render_previews(driver, dit, net, vae, encoded, sample_dir, epoch, output_name=output_name,
-                         steps=sample_steps, cfg=sample_cfg_scale, neg=neg, width=sample_width, height=sample_height,
-                         seed=sample_seed, ema=ema,
+        conds, w, h, sd, prompts = encoded, sample_width, sample_height, sample_seed, sample_prompts
+        ov = _read_sample_override(output_dir)
+        if ov:
+            logger.info(f"[sample override] active - '{ov['prompt'][:60]}' seed={ov['seed']} {ov['width']}x{ov['height']}")
+            try:
+                conds = _encode_override(driver, te_path, ov["prompt"], dit, device, parkable=not swapped)
+                w, h, sd, prompts = ov["width"], ov["height"], ov["seed"], [ov["prompt"]]
+                if lowmem and max(w, h) > 768:
+                    w, h = _cap_canvas(w, h)
+            except Exception:
+                logger.exception("[sample override] could not encode the override prompt - using the configured ones")
+                conds = encoded
+        _render_previews(driver, dit, net, vae, conds, sample_dir, epoch, output_name=output_name,
+                         steps=sample_steps, cfg=sample_cfg_scale, neg=neg, width=w, height=h,
+                         seed=sd, ema=ema,
                          speed=speed_desc.settings if (speed_lora and speed_desc) else None, lowmem=lowmem,
                          swapped=bool(swapped))
-        last_prompt[0] = sample_prompts[-1] if sample_prompts else None
+        last_prompt[0] = prompts[-1] if prompts else None
 
     def state(epoch):
         _save_state(output_dir, output_name, net, optimizer, epoch=epoch, global_step=global_step, arch_id=arch,
