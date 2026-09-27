@@ -719,7 +719,7 @@ cd "$FIZGIG_ROOT"
 
 echo "============================================================"
 echo "  Fizgig Installer — AMD ROCm (Linux, pip wheels)"
-echo "  Klein 9B and Krea 2 LoRA Studio"
+echo "  LoRA and Fine-tune Studio"
 echo "  *** HIGHLY EXPERIMENTAL — Linux AMD is best-effort only ***"
 echo "============================================================"
 echo

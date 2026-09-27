@@ -1911,7 +1911,7 @@ class LoRATrainerGUI:
 
     def __init__(self, master):
         self.master = master
-        master.title("Fizgig — Klein 9B & Krea 2 LoRA Studio")
+        master.title("Fizgig — LoRA & Fine-tune Studio")
         master.geometry("1580x1124")  # wide enough that the IDLE/BUSY light clears the last tab ("Preferences") with the Metadata tab in the strip; +130 for the RefMod Studio tab (16 Sep 2026: 105 px of bold 11pt text + 12 px padding each side); +100 height for the bottom status bar
         master.minsize(1310, 900)  # keeps the tab row clear of the status light + tab content not cut off
         master.configure(bg=BG_COLOR)
@@ -3722,7 +3722,7 @@ class LoRATrainerGUI:
             lbl.bind("<Button-1>", lambda e, u=url: webbrowser.open(u))
 
         heading("Fizgig", 22)
-        tk.Label(pad, text="Klein 9B & Krea 2 LoRA Studio — by Peter Neill",
+        tk.Label(pad, text="LoRA & Fine-tune Studio — by Peter Neill",
                  font=(FONT_FAMILY, 11), fg=COLORS["text_explain"],
                  bg=COLORS["bg_deep"]).pack(anchor=tk.W, pady=(0, 4))
         tk.Label(pad, text=f"Version {_git_describe_version() or 'unknown'}",

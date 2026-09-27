@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 echo ============================================================
 echo   Fizgig Installer
-echo   Klein 9B LoRA Studio
+echo   LoRA and Fine-tune Studio
 echo ============================================================
 echo.
 

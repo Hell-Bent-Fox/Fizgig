@@ -36,7 +36,7 @@ set "BNB_WHEEL=https://github.com/0xDELUXA/bitsandbytes_win_rocm/releases/downlo
 
 echo ============================================================
 echo   Fizgig Installer - AMD ROCm (Windows)
-echo   Klein 9B and Krea 2 LoRA Studio
+echo   LoRA and Fine-tune Studio
 if !ROCM_EXPERIMENTAL!==1 (
     echo   Mode: --experimental ^(floating multi-arch, no torch pin^)
 ) else (

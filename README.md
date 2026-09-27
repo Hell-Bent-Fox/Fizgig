@@ -1,4 +1,4 @@
-<h1 align="center">Fizgig — Klein 9B, Krea 2 & MiniMax H3 LoRA Studio</h1>
+<h1 align="center">Fizgig — LoRA & Fine-tune Studio for Klein 9B, Krea 2, MiniMax H3 & Qwen Image 2.1</h1>
 
 <p align="center">
   <strong>Fine-tune base models on consumer GPUs — down to 16 GB. Fix broken LoRAs without retraining. Remix any LoRA into new variations in seconds.</strong><br>
@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=yrz0l6URGGk"><img src="assets/hero.png" alt="Fizgig LoRA Studio — watch the full video tutorial" width="600"></a>
+  <a href="https://www.youtube.com/watch?v=yrz0l6URGGk"><img src="assets/hero.png" alt="Fizgig LoRA & Fine-tune Studio — watch the full video tutorial" width="600"></a>
 </p>
 
 <p align="center">
