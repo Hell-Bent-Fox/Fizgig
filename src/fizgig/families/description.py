@@ -144,6 +144,10 @@ class FamilyDescription:
     # built-in Training-tab presets: ((name, {GUI setting key: value}), ...); the first is applied on a first visit
     presets: tuple = ()
 
+    # small files the text encoder / captioner load by repo name: ((repo, (allow_patterns...)), ...); the model
+    # downloader fetches them with the helper models so first use works offline
+    helper_files: tuple = ()
+
     # workbench tools that support this family ("repair", ...); the generic WorkbenchEngine drives them all
     workbench: tuple = ()
 

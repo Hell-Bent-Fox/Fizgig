@@ -90,6 +90,7 @@ QWEN_IMAGE_21 = FamilyDescription(
     train_memory={"bf16": (19.0, 0.44), "int8": (11.9, 0.19), "nf4": (9.5, 0.0)},
     optimizers=("adamw", "adamw8bit"),
     network_types=("lora", "lokr"),
+    helper_files=(("Qwen/Qwen-Image-2.1", ("processor/*",)),),   # tokenizer + image processor + chat template
 
     sampling=(
         SamplingSettings("ComfyUI template", steps=25, cfg=1.0, sampler="euler", scheduler="simple",

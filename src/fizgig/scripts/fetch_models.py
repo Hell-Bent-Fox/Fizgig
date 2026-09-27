@@ -141,10 +141,22 @@ def _described_families():
         from fizgig.families.registry import FAMILIES as _REG
     except Exception:
         return {}
+    # Every family's button also fetches the Captions tab's Qwen3-VL captioner, as the old families' lists do.
     return {d.key: [Weight(f.pref_key, f.repo, f.path, f.size_gb, f.label + (" — " + f.note if f.note else ""),
                            optional=not f.required, local_name=f.local_name or None)
-                    for f in d.model_files if f.repo and f.path]
+                    for f in d.model_files if f.repo and f.path] + [_CAPTION_TE]
             for d in _REG.values() if d.training_ready}
+
+
+def _described_helpers():
+    """Small tokenizer/processor files the described families' text encoders load by name (description
+    `helper_files`: (repo, allow_patterns) pairs), fetched with the other helpers so first use works offline."""
+    try:
+        from fizgig.families.registry import FAMILIES as _REG
+    except Exception:
+        return []
+    return [(f"hf-files:{repo}|{','.join(pats)}", 0.02, f"{d.display_name} tokenizer / processor")
+            for d in _REG.values() if d.training_ready for repo, pats in d.helper_files]
 
 
 DESCRIBED = _described_families()
@@ -166,6 +178,7 @@ TOOLS = [
     ("hf-config:Qwen/Qwen3-VL-4B-Instruct", 0.02, "Qwen3-VL tokenizer — Krea 2 offline"),
     ("hf-config:Qwen/Qwen3-8B", 0.02, "Qwen3 tokenizer — Klein offline"),
 ]
+TOOLS += _described_helpers()
 
 
 def _valid_safetensors(path, min_bytes):
@@ -375,6 +388,11 @@ def fetch_tool(spec, log=print, dry_run=False):
             from huggingface_hub import snapshot_download
             snapshot_download(repo_id=model_id.split(":", 1)[1],
                               allow_patterns=["*.json", "*.txt", "*.model"])
+        elif model_id.startswith("hf-files:"):
+            # A repo's small named files only (e.g. a processor/ folder), never its weights.
+            from huggingface_hub import snapshot_download
+            repo, _, pats = model_id[len("hf-files:"):].partition("|")
+            snapshot_download(repo_id=repo, allow_patterns=pats.split(","))
         elif model_id.startswith("hf-model:"):
             # Configs + tokenizer + the safetensors weights — skipping the .bin/.msgpack/.h5
             # duplicates these repos also carry. Keep in lockstep with the runtime's

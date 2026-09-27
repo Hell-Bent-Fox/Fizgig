@@ -19476,12 +19476,11 @@ class LoRATrainerGUI:
             note = f"~{f.size_gb:g} GB — {f.repo} → {os.path.basename(f.path)}" if url else None
             row = self._add_pref_row(card, row, f"{f.label}:", f.pref_key, hint, download_url=url,
                                      download_note=note)
-        total = sum(f.size_gb for f in d.model_files if f.required)
+        total = sum(f.size_gb for f in d.model_files if f.repo)
         self._add_fetch_models_row(
             card, row, d.key,
-            f"Fetches the required files above (~{total:.0f} GB) and fills in these paths for you, plus the small "
-            f"helper models. Optional files are left out unless you tick below.",
-            optional_label="Include the optional files")
+            f"Fetches every file above (~{total:.0f} GB) and fills in these paths for you, plus the Qwen3-VL "
+            f"captioner the Captions tab uses and the small helper models.")
 
     def create_prefs_tab(self):
         """Create the Preferences tab (Start-tab styled)."""
@@ -20284,8 +20283,8 @@ class LoRATrainerGUI:
             cmd = [sys.executable, "-m", "fizgig.scripts.fetch_models", "--progress",
                    "--family", "tools", "--family", family]
             _opt = getattr(self, f"_fetch_optional_{family}", None)
-            if _opt is not None and _opt.get():
-                cmd.append("--include-optional")
+            if (_opt is not None and _opt.get()) or any(d.key == family for d in DESCRIBED_FAMILIES.values()):
+                cmd.append("--include-optional")      # standard-layer families always fetch their whole list
             env = self._cuda_env_for_subprocess(dict(os.environ))
             env["PYTHONPATH"] = os.path.join(FIZGIG_DIR, "src")
             env["PYTHONUNBUFFERED"] = "1"
