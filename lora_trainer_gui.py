@@ -7420,7 +7420,8 @@ class LoRATrainerGUI:
     }
 
     # Training-tab settings that belong to standard-layer (described) families only.
-    _FAMILY_ENTRY_KEYS = frozenset({"FAMILY_TRAINING_ADAPTER", "FAMILY_EMA", "FAMILY_PRECISION"})
+    _FAMILY_ENTRY_KEYS = frozenset({"FAMILY_TRAINING_ADAPTER", "FAMILY_EMA", "FAMILY_PRECISION",
+                                    "FAMILY_TURBO_STRENGTH"})
     _FAMILY_PRECISION_LABELS = {"auto": "Auto (fits your free VRAM)", "bf16": "bf16 (full precision)",
                                 "int8": "INT8 (8-bit, fastest)", "nf4": "4-bit NF4 (smallest)"}
 
@@ -12737,6 +12738,16 @@ class LoRATrainerGUI:
         self.sample_steps_note = tk.Label(_steps_frame, text="Base samples only — Distilled is locked at 4 steps",
                  font=(FONT_FAMILY, 9), fg=COLORS["text_muted"], bg=COLORS["bg_surface"])
         self.sample_steps_note.pack(side=tk.LEFT, padx=(10, 0))
+        # Turbo LoRA strength for standard-layer families' previews (shown only when the family has one set).
+        self._family_turbo_label = tk.Label(_steps_frame, text="Turbo strength:", font=(FONT_FAMILY, 10),
+                                            fg=COLORS["text_secondary"], bg=COLORS["bg_surface"])
+        self.entries["FAMILY_TURBO_STRENGTH"] = ttk.Entry(_steps_frame, width=6)
+        self.entries["FAMILY_TURBO_STRENGTH"].insert(0, str(self.settings.get("FAMILY_TURBO_STRENGTH", "1.0")))
+        ToolTip(self.entries["FAMILY_TURBO_STRENGTH"],
+                "How strongly the turbo LoRA loads for previews. Below 1.0 (around 0.7) with more steps often gives "
+                "cleaner, more detailed previews; 1.0 with the turbo's own step count is the fastest.")
+        for _w in (self._family_turbo_label, self.entries["FAMILY_TURBO_STRENGTH"]):
+            _w._fizgig_described_family = "*"
 
         ttk.Label(prompt_card, text="Seed:").grid(row=5, column=0, sticky=tk.W, padx=(0, 10), pady=4)
         self.sample_seed_var = tk.StringVar(value=str(self.settings["SAMPLE_SEED"]))
@@ -13505,10 +13516,16 @@ class LoRATrainerGUI:
         other = desc.preview_steps if speed_on else (sp.settings.steps if sp else None)
         if hasattr(self, "sample_steps_var") and self.sample_steps_var.get().strip() in ("", str(other)):
             self.sample_steps_var.set(str(want))       # only switch between the two defaults, never a user value
+        if hasattr(self, "_family_turbo_label"):
+            for _w, _kw in ((self._family_turbo_label, {"padx": (14, 4)}), (self.entries["FAMILY_TURBO_STRENGTH"], {})):
+                if speed_on and not _w.winfo_manager():
+                    _w.pack(side=tk.LEFT, before=self.sample_steps_note, **_kw)
+                elif not speed_on:
+                    _w.pack_forget()
         if hasattr(self, "sample_steps_note"):
             self.sample_steps_note.configure(
-                text=(f"{desc.display_name}: {sp.settings.steps} steps with the {sp.name} (set in Preferences), "
-                      f"on the model being trained" if speed_on else
+                text=(f"{desc.display_name}: the {sp.name} (set in Preferences) is made for {sp.settings.steps} steps at "
+                      f"strength {sp.strength:g}. Other step counts use the model's standard schedule" if speed_on else
                       f"{desc.display_name}: {desc.preview_steps} steps at CFG {desc.preview_cfg:g}"
                       + (f" - set the {sp.name} in Preferences for {sp.settings.steps}-step previews" if sp else "")))
         if hasattr(self, "krea2_engine_frame"):
@@ -32683,7 +32700,8 @@ class LoRATrainerGUI:
             # standard-layer settings ride only with described families
             **({"FAMILY_TRAINING_ADAPTER": bool(self.entries["FAMILY_TRAINING_ADAPTER"].get()),
                 "FAMILY_EMA": self.entries["FAMILY_EMA"].get(),
-                "FAMILY_PRECISION": self.entries["FAMILY_PRECISION"].get()}
+                "FAMILY_PRECISION": self.entries["FAMILY_PRECISION"].get(),
+                "FAMILY_TURBO_STRENGTH": self.entries["FAMILY_TURBO_STRENGTH"].get()}
                if self._family_desc() is not None else {}),
             # experiment/tread: both ticks must be copied here or the builder reads a stale value
             "MINIMAX_TREAD": bool(self.entries["MINIMAX_TREAD"].get()),
@@ -33593,6 +33611,12 @@ class LoRATrainerGUI:
             speed_path = self._krea2_pref(sp.pref_key) if sp and sp.pref_key else ""
             if speed_path and os.path.exists(speed_path):
                 cmd += ["--speed_lora", speed_path]
+                try:
+                    _ts = float(str(st.get("FAMILY_TURBO_STRENGTH", "") or sp.strength))
+                except ValueError:
+                    _ts = sp.strength
+                if abs(_ts - sp.strength) > 1e-9:
+                    cmd += ["--speed_lora_strength", f"{max(0.0, min(2.0, _ts)):g}"]
             prompts = self._write_krea2_sample_prompts(filename=f"{desc.key}_prompts.txt")
             every = self.sample_every_n_epochs_var.get().strip()
             if prompts and every.isdigit() and int(every) > 0:

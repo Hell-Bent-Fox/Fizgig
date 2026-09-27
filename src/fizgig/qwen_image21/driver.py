@@ -44,8 +44,8 @@ class QwenImage21Driver(FamilyDriver):
     def load_text_encoder(self, path, device):
         """bf16 (17.5 GB) when it fits the free VRAM with room to run, else INT8 (about 9 GB)."""
         from fizgig.qwen_image21.embedder import Qwen21TextEncoder
-        free = torch.cuda.mem_get_info()[0] / 1024 ** 3 if torch.cuda.is_available() else 0.0
-        return Qwen21TextEncoder(path, device=device, int8=free < 19.5)
+        from fizgig.families.quant import free_vram_gb
+        return Qwen21TextEncoder(path, device=device, int8=free_vram_gb() < 19.5)
 
     def unload_text_encoder(self, te):
         te.unload()

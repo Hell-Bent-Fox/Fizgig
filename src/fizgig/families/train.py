@@ -258,7 +258,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  save_state_on_train_end=False, keep_last_n_states=2, seed=42, precision="bf16",
                  training_adapter=None, training_adapter_strength=1.0,
                  context_lora_path=None, context_lora_strength=1.0, min_timestep=0.0, max_timestep=1.0,
-                 speed_lora=None,
+                 speed_lora=None, speed_lora_strength=None,
                  vae_path=None, te_path=None, sample_prompts=None, sample_every_n_epochs=0, sample_width=None,
                  sample_height=None, sample_steps=None, sample_cfg_scale=None, sample_negative=None,
                  sample_at_first=False, sample_seed=42,
@@ -353,11 +353,11 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         logger.info(f"[context] {os.path.basename(context_lora_path)} frozen + active at {context_lora_strength:g} "
                     f"({n} Linears)")
     if speed_lora and encoded is not None:
-        n = net.add_file(speed_lora, SPEED, speed_desc.strength)
+        n = net.add_file(speed_lora, SPEED, speed_desc.strength if speed_lora_strength is None else speed_lora_strength)
         net.set_enabled(SPEED, False)
         net.move_adapter(SPEED, "cpu")
         logger.info(f"[sample] {speed_desc.name}: {n} Linears, on CPU between previews, on only while they render "
-                    f"({sample_steps} steps)")
+                    f"({sample_steps} steps, strength {speed_desc.strength if speed_lora_strength is None else speed_lora_strength:g})")
     if network_type == "lokr" and "lokr" not in desc.network_types:
         raise RuntimeError(f"{desc.display_name} does not offer LoKR")
     net.add_trainable(network_dim, network_alpha, kind=network_type, factor=lokr_factor)
@@ -558,6 +558,8 @@ def setup_parser():
                    help="blocks streamed between CPU and GPU (not with nf4); -1 = as few as fit free VRAM")
     p.add_argument("--network_dim", type=int, default=32)
     p.add_argument("--network_type", default="lora", choices=("lora", "lokr"))
+    p.add_argument("--speed_lora_strength", type=float, default=None,
+                   help="the preview speed LoRA's strength (default: the family's recommended value)")
     p.add_argument("--log_per_image_loss", action="store_true", help="detect problem images (Problem Images window)")
     p.add_argument("--per_image_lr", action="store_true", help="scale each step by the image's loss-watch multiplier")
     p.add_argument("--auto_recaption", action="store_true", help="recaption stuck images (families that can caption)")
@@ -627,7 +629,7 @@ def main():
             prompts = [ln.strip() for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
     train_family(
         a.family, a.dit, a.dataset_config, a.output_dir, a.output_name, precision=a.precision,
-        blocks_to_swap=a.blocks_to_swap, network_type=a.network_type, lokr_factor=a.lokr_factor,
+        blocks_to_swap=a.blocks_to_swap, speed_lora_strength=a.speed_lora_strength, network_type=a.network_type, lokr_factor=a.lokr_factor,
         log_per_image_loss=a.log_per_image_loss, per_image_lr=a.per_image_lr, auto_recaption=a.auto_recaption,
         warmup_look_outliers=a.warmup_look_outliers, trigger_word=a.trigger_word, trigger_position=a.trigger_position,
         recaption_instruction=a.recaption_instruction,
