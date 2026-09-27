@@ -36,7 +36,7 @@ QWEN_IMAGE_21 = FamilyDescription(
                   "text_encoders/qwen3vl_8b_bf16.safetensors", 17.53,
                   "Used for caching only, then unloaded before training steps.", role="text_encoder"),
         ModelFile("qwen21_training_adapter", "Fizgig training adapter", False,
-              "shootthesound/Fizgig-Qwen-Image-2.1-Training-Adapter",
+              "ShootTheSound/Fizgig-Qwen-Image-2.1-Training-Adapter",
               "fizgig_qwen_image_2.1_training_adapter.safetensors", 0.08,
               "Frozen during training, off in previews and saved LoRAs. Without it Qwen 2.1 LoRAs collapse or "
               "wobble; with it likeness was 77 vs 56 in Fizgig's A/B.", role="training_adapter"),
