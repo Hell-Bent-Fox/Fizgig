@@ -4691,7 +4691,7 @@ class LoRATrainerGUI:
         )
         adaptive_cb.grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(4, 0))
         self._adaptive_cb = adaptive_cb
-        # Shown while automagic3 is the optimizer (Krea 2): the rate is its to set.
+        # Shown while automagic3 is the optimizer (Krea 2, standard-layer families): the rate is its to set.
         self._automagic_note = tk.Label(
             training_content,
             text=("Adaptive LR, per-image adaptive LR and the look warm-up are off: automagic3 sets its "
@@ -10301,12 +10301,12 @@ class LoRATrainerGUI:
             self.scaled_var.set(False)
 
     def _refresh_automagic_gating(self, *args):
-        """Under Krea 2 with automagic3 picked: Adaptive LR, per-image adaptive LR and the look
-        warm-up are forced off and greyed (they set or scale a rate Automagic owns); the note says
-        why. Anything else: the batch-size rule alone decides, as before."""
+        """Under Krea 2 or a standard-layer family with automagic3 picked: Adaptive LR, per-image
+        adaptive LR and the look warm-up are forced off and greyed (they set or scale a rate Automagic
+        owns); the note says why. Anything else: the batch-size rule alone decides, as before."""
         combo = self.entries.get("OPTIMIZER_TYPE") if hasattr(self, "entries") else None
         try:
-            on = bool(combo is not None and self._is_krea2_arch()
+            on = bool(combo is not None and (self._is_krea2_arch() or self._family_desc() is not None)
                       and str(combo.get()).strip().lower() == "automagic3")
         except tk.TclError:
             on = False

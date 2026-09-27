@@ -371,7 +371,9 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     if owns_its_rate(optimizer):        # Automagic v3 sets its own rate: the watcher and schedulers stand down
         if adaptive_lr:
             logger.info("[adaptive_lr] ignored - the optimizer sets its own learning rate")
-        adaptive_lr = False
+        if per_image_lr or warmup_look_outliers:
+            logger.info("[per-image LR] per-image LR and the look warm-up are off - the optimizer sets its own rate")
+        adaptive_lr = per_image_lr = warmup_look_outliers = False
         logger.info(f"[optimizer] {opt_label} owns the learning rate from here ({learning_rate:.2e} is its start); "
                     f"the LR scheduler stands down")
     if adaptive_lr:                     # the watcher owns the rate: start at the geometric midpoint of Min/Max
