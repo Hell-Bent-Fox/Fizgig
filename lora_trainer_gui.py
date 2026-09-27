@@ -8936,12 +8936,16 @@ class LoRATrainerGUI:
 
         # Krea 2-ONLY controls (inverse of the above): the per-image loss watch toggles are only
         # wired into krea2_train for now — hide them under Klein.
-        for w in (self._krea2_losswatch_frame, self._krea2_perimglr_cb,
-                  self._krea2_autorecap_cb, self._krea2_warmuplook_cb,
-                  self._krea2_losswatch_hint, self._krea2_ft_cb,
+        for w in (self._krea2_ft_cb,
                   # torch.compile is wired into krea2_train only.
                   self._compile_blocks_label, self.compile_blocks_check, self._compile_blocks_hint):
             self._set_widget_visible(w, is_krea2)
+        # The per-image loss watch also runs for standard-layer families (families/loss_watch.py); auto-recaption
+        # only where the family's text encoder can caption images.
+        for w in (self._krea2_losswatch_frame, self._krea2_perimglr_cb, self._krea2_warmuplook_cb,
+                  self._krea2_losswatch_hint):
+            self._set_widget_visible(w, is_krea2 or desc is not None)
+        self._set_widget_visible(self._krea2_autorecap_cb, is_krea2 or self._family_can_caption(desc))
         # The FT sub-controls are gated by the checkbox as well as by the family. Gate on
         # the family, NOT native: each family's FT visibility logic also swaps the Network
         # Type rows, which the other family's logic must never touch. Away from a family,
@@ -9076,6 +9080,19 @@ class LoRATrainerGUI:
         self._set_training_section_visible("timestep", "optimizer", not native)
         self._apply_refmod_visibility()
         self._generic_training_visibility(desc)
+
+    def _family_can_caption(self, desc):
+        """Whether a described family's driver can caption images (auto-recaption). Cached per family."""
+        if desc is None:
+            return False
+        cache = self.__dict__.setdefault("_family_caption_cache", {})
+        if desc.key not in cache:
+            try:
+                from fizgig.families.loss_watch import driver_can_caption
+                cache[desc.key] = driver_can_caption(desc.load_driver())
+            except Exception:
+                cache[desc.key] = False
+        return cache[desc.key]
 
     def _generic_training_visibility(self, desc):
         """Standard layer: after the shared 'not Klein' hiding above, apply what the family's description
@@ -33493,6 +33510,31 @@ class LoRATrainerGUI:
             lab = str(st.get("FAMILY_PRECISION", "") or "")
             prec = next((k for k, v in self._FAMILY_PRECISION_LABELS.items() if v == lab), "auto")
             cmd += ["--precision", prec if prec == "auto" or prec in desc.precisions else "auto"]
+        # per-image loss watch (families/loss_watch.py): the same Training-tab toggles as Krea 2, batch size 1 only
+        try:
+            _bs1 = int(str(self.dataset_batch_size_var.get()).strip() or 1) <= 1
+        except (ValueError, AttributeError):
+            _bs1 = True
+        _watch = [(self.krea2_loss_watch_var, "--log_per_image_loss"), (self.krea2_per_image_lr_var, "--per_image_lr"),
+                  (self.krea2_warmup_look_var, "--warmup_look_outliers")]
+        if self._family_can_caption(desc):
+            _watch.append((self.krea2_auto_recaption_var, "--auto_recaption"))
+        if _bs1:
+            cmd += [flag for var, flag in _watch if var.get()]
+            if self._family_can_caption(desc) and self.krea2_auto_recaption_var.get():
+                _trig = (self.caption_trigger_var.get().strip() if hasattr(self, "caption_trigger_var") else "")
+                if _trig and _trig.lower() != "trigger_word":
+                    cmd += ["--trigger_word", _trig]      # leads each AI caption, as the Captions tab writes it
+                _ovr = self._caption_overrides()
+                for _key, _flag in (("training", "--recaption_instruction"),
+                                    ("exhaustive", "--recaption_instruction_detailed")):
+                    _instr = str(_ovr.get(_key, "") or "").strip()
+                    if _instr:
+                        cmd += [_flag, _instr]
+        elif any(var.get() for var, _ in _watch):
+            self.update_console("[loss-watch] per-image features skipped - they need Batch Size 1.\n")
+        if any(var.get() for var, _ in _watch) and "--text_encoder" not in cmd:
+            cmd += ["--text_encoder", self._krea2_pref(desc.pref_for("text_encoder"))]   # caption repair re-encodes
         if "lokr" in desc.network_types and str(st.get("NETWORK_TYPE", "")).startswith("LoKR"):
             cmd += ["--network_type", "lokr", "--lokr_factor", str(st.get("LOKR_FACTOR", 8))]
         raw_swap = self.entries["BLOCKS_SWAP"].get().strip()

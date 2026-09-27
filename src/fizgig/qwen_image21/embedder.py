@@ -125,6 +125,41 @@ class Qwen21TextEncoder:
             res.append(h[m][self.drop_idx:].to("cpu"))
         return res
 
+    @torch.no_grad()
+    def caption(self, image, *, detailed=False, instruction=None, max_new_tokens=120, megapixels=1.0):
+        """Caption an image with the same Qwen3-VL-8B (the ComfyUI file carries its LM head and vision tower), with
+        Krea 2's auto-recaption instructions and decoding: sampled at temperature 0.5 with a random seed, the torch RNG
+        saved and restored so training noise is untouched. image: a path or a PIL image."""
+        import random as _random
+        from PIL import Image
+        from transformers import Qwen3VLProcessor
+        from fizgig.krea2.embedder import (CAPTION_INSTRUCTION, DETAILED_CAPTION_INSTRUCTION, Qwen3VLConditioner,
+                                           _strip_caption_preamble)
+        if getattr(self, "_processor", None) is None:
+            # the class explicitly: the repo's processor/ folder carries no model_type for AutoProcessor to read
+            self._processor = Qwen3VLProcessor.from_pretrained(TOKENIZER_REPO, subfolder="processor")
+        proc = self._processor
+        src = Image.open(image) if isinstance(image, (str, os.PathLike)) else image
+        im = Qwen3VLConditioner._cap_image(src, megapixels)
+        instruction = instruction or (DETAILED_CAPTION_INSTRUCTION if detailed else CAPTION_INSTRUCTION)
+        if detailed:
+            max_new_tokens = max(max_new_tokens, 240)
+        messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": instruction}]}]
+        prompt = proc.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+        inputs = proc(text=[prompt], images=[im], return_tensors="pt").to(self.device)
+        cpu_state = torch.random.get_rng_state()
+        cuda_states = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        try:
+            torch.manual_seed(_random.randint(1, 2 ** 31 - 1))
+            out = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=True, temperature=0.5,
+                                      top_p=0.9)
+        finally:
+            torch.random.set_rng_state(cpu_state)
+            if cuda_states is not None:
+                torch.cuda.set_rng_state_all(cuda_states)
+        text = proc.batch_decode(out[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)[0]
+        return _strip_caption_preamble(" ".join(text.split()).strip())
+
     def unload(self):
         self.model.to("cpu")
         del self.model

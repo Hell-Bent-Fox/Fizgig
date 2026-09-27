@@ -67,6 +67,12 @@ class FamilyDriver:
         """Free the encoder's VRAM (caching and preview-prompt encoding load it, then drop it)."""
         raise NotImplementedError
 
+    def caption_image(self, te, image, detailed: bool = False, instruction=None) -> str:
+        """Optional: caption an image (a path or PIL image) with the loaded text encoder, for auto-recaption of stuck
+        images. Only for encoders that can see and generate (a vision-language model with its LM head). Without it the
+        family has no auto-recaption; the rest of the per-image loss watch still works."""
+        raise NotImplementedError
+
     def enable_gradient_checkpointing(self, dit, on: bool = True) -> None:
         raise NotImplementedError
 

@@ -50,6 +50,9 @@ class QwenImage21Driver(FamilyDriver):
     def unload_text_encoder(self, te):
         te.unload()
 
+    def caption_image(self, te, image, detailed=False, instruction=None):
+        return te.caption(image, detailed=detailed, instruction=instruction)
+
     def enable_gradient_checkpointing(self, dit, on=True):
         dit.enable_gradient_checkpointing(on)
 

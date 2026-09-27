@@ -268,7 +268,10 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  resume_state_dir=None, adaptive_lr=False, adaptive_lr_min=1e-4, adaptive_lr_max=2e-4,
                  max_grad_norm=1.0, ema_decay=0.0, optimizer_type="adamw", optimizer_args="",
                  lr_scheduler="constant", lr_warmup_steps=0, lr_scheduler_num_cycles=1, lr_scheduler_power=1.0,
-                 gradient_checkpointing=True, blocks_to_swap=0, network_type="lora", lokr_factor=8):
+                 gradient_checkpointing=True, blocks_to_swap=0, network_type="lora", lokr_factor=8,
+                 log_per_image_loss=False, per_image_lr=False, auto_recaption=False, warmup_look_outliers=False,
+                 trigger_word=None, trigger_position="start", recaption_instruction=None,
+                 recaption_instruction_detailed=None):
     desc = get_family(family)
     if desc is None or not desc.training_ready:
         raise RuntimeError(f"unknown or untrainable family {family!r}")
@@ -293,8 +296,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
 
     # ---- data ------------------------------------------------------------------------------------
     shared_epoch = Value("i", 0)
-    blueprint = BlueprintGenerator(ConfigSanitizer()).generate(
-        load_user_config(dataset_config), argparse.Namespace(), architecture=arch)
+    user_config = load_user_config(dataset_config)
+    blueprint = BlueprintGenerator(ConfigSanitizer()).generate(user_config, argparse.Namespace(), architecture=arch)
     group = generate_dataset_group_by_blueprint(blueprint.dataset_group, training=True, num_timestep_buckets=None,
                                                 shared_epoch=shared_epoch)
     if group.num_train_items == 0:
@@ -389,6 +392,13 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         if ema is not None and os.path.exists(os.path.join(resume_state_dir, "ema.pt")):
             ema.load_state_dict(torch.load(os.path.join(resume_state_dir, "ema.pt"), map_location="cpu"))
         logger.info(f"[resume] from {resume_state_dir}: continuing at epoch {start_epoch + 1}/{max_train_epochs}")
+    from fizgig.families.loss_watch import Watch
+    watch = Watch(output_dir, group, user_config, driver, log=log_per_image_loss, per_image_lr=per_image_lr,
+                  auto_recaption=auto_recaption, warmup_look=warmup_look_outliers,
+                  resume=bool(resume_state_dir), start_epoch=start_epoch, te_path=te_path,
+                  trigger_word=trigger_word, trigger_position=trigger_position,
+                  recaption_instruction=recaption_instruction,
+                  recaption_instruction_detailed=recaption_instruction_detailed)
     scheduler = None
     if not adaptive and not owns_its_rate(optimizer):
         scheduler = _step_scheduler(optimizer, lr_scheduler, lr_warmup_steps, steps_per_epoch * max_train_epochs,
@@ -470,11 +480,17 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         torch.cuda.reset_peak_memory_stats()
         t0 = time.time()
         for i, batch in enumerate(loader):
+            if watch.excluded(batch):          # two failed AI recaptions and still stuck: no forward, no loss
+                recorder.drop(step=i)
+                global_step += 1
+                progress.update(1)
+                continue
             latents = batch["latents"].to(device)
             cond = {k[len("cond__"):]: v.to(device) for k, v in batch.items() if k.startswith("cond__")}
             loss, _info = driver.training_loss(dit, latents, cond, gen, min_t=min_timestep, max_t=max_timestep)
             optimizer.zero_grad(set_to_none=True)
-            loss.backward()
+            mult = watch.multiplier(batch)     # per-image LR (batch size 1): the raw loss is still what's recorded
+            (loss * mult if mult != 1.0 else loss).backward()
             if max_grad_norm:
                 torch.nn.utils.clip_grad_norm_(params, max_grad_norm)
             optimizer.step()
@@ -484,6 +500,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                 ema.update()
             global_step += 1
             recorder.add(epoch=epoch, step=i, loss=loss.item())
+            watch.observe(epoch + 1, global_step, batch, _info.get("t", 0.5), loss.item())
             progress.set_postfix(avr_loss=f"{recorder.moving_average:.4f}", refresh=False)
             progress.update(1)
 
@@ -493,6 +510,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                     f"peak VRAM {torch.cuda.max_memory_reserved() / 1024 ** 3:.1f} GB")
         if adaptive:
             adaptive.epoch_boundary(epoch, recorder.moving_average, net.trainable_modules(), optimizer)
+        # problem-image verdicts + queued caption fixes / auto-recaptions, re-encoded before the next epoch
+        watch.boundary(epoch + 1, dit, device, parkable=not swapped)
 
         done = epoch + 1
         cadence = bool(save_every_n_epochs) and done % save_every_n_epochs == 0 and done < max_train_epochs
@@ -536,6 +555,13 @@ def setup_parser():
                    help="blocks streamed between CPU and GPU (not with nf4); -1 = as few as fit free VRAM")
     p.add_argument("--network_dim", type=int, default=32)
     p.add_argument("--network_type", default="lora", choices=("lora", "lokr"))
+    p.add_argument("--log_per_image_loss", action="store_true", help="detect problem images (Problem Images window)")
+    p.add_argument("--per_image_lr", action="store_true", help="scale each step by the image's loss-watch multiplier")
+    p.add_argument("--auto_recaption", action="store_true", help="recaption stuck images (families that can caption)")
+    p.add_argument("--warmup_look_outliers", action="store_true", help="LR warm-up for Look Filter outliers")
+    p.add_argument("--trigger_position", default="start", choices=("start", "end"))
+    p.add_argument("--recaption_instruction", default=None)
+    p.add_argument("--recaption_instruction_detailed", default=None)
     p.add_argument("--lokr_factor", type=int, default=8, help="LoKR only: w1 is about factor x factor")
     p.add_argument("--network_alpha", type=float, default=32)
     p.add_argument("--learning_rate", type=float, default=1e-4)
@@ -599,6 +625,10 @@ def main():
     train_family(
         a.family, a.dit, a.dataset_config, a.output_dir, a.output_name, precision=a.precision,
         blocks_to_swap=a.blocks_to_swap, network_type=a.network_type, lokr_factor=a.lokr_factor,
+        log_per_image_loss=a.log_per_image_loss, per_image_lr=a.per_image_lr, auto_recaption=a.auto_recaption,
+        warmup_look_outliers=a.warmup_look_outliers, trigger_word=a.trigger_word, trigger_position=a.trigger_position,
+        recaption_instruction=a.recaption_instruction,
+        recaption_instruction_detailed=a.recaption_instruction_detailed,
         network_dim=a.network_dim, network_alpha=a.network_alpha, learning_rate=a.learning_rate,
         max_train_epochs=a.max_train_epochs, save_every_n_epochs=a.save_every_n_epochs, save_state=a.save_state,
         save_state_on_train_end=a.save_state_on_train_end, keep_last_n_states=a.keep_last_n_states, seed=a.seed,
