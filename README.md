@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Fine-tune base models on consumer GPUs — down to 16 GB. Fix broken LoRAs without retraining. Remix any LoRA into new variations in seconds.</strong><br>
-  A train · fine-tune · repair · explore workbench built end-to-end for <strong>Flux 2 Klein 9B</strong>, <strong>Krea 2</strong> and <strong>MiniMax H3</strong> — training on photos, video, sound and voices, from quick LoRAs to the full base model.
+  A train · fine-tune · repair · explore workbench built end-to-end for <strong>Flux 2 Klein 9B</strong>, <strong>Krea 2</strong>, <strong>MiniMax H3</strong> and <strong>Qwen Image 2.1</strong> — training on photos, video, sound and voices, from quick LoRAs to the full base model.
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/models-Klein%209B%20%2B%20Krea%202%20%2B%20MiniMax%20H3-blue?style=for-the-badge" alt="Klein 9B + Krea 2 + MiniMax H3">
+  <img src="https://img.shields.io/badge/models-Klein%209B%20%2B%20Krea%202%20%2B%20MiniMax%20H3%20%2B%20Qwen%20Image%202.1-blue?style=for-the-badge" alt="Klein 9B + Krea 2 + MiniMax H3 + Qwen Image 2.1">
 </p>
 
 > ### 📰 Latest news
@@ -83,7 +83,7 @@ Point it at a training run and it renders **every epoch on one fixed seed**, wit
 A per-block activation profile as a colour-coded HTML report — which blocks carry style, identity, and detail, and where they overlap. Repair Studio reads its sidecar automatically and shows the findings inline when you load the same LoRA.
 
 ### Extract
-Distil any Klein, Krea 2 or MiniMax H3 LoRA to a lower rank — Fast presets run weight-only SVD with no models loaded; Klein's activation-weighted presets add block and timestep targeting. PEFT and LyCORIS sources supported.
+Distil any Klein, Krea 2, MiniMax H3 or Qwen Image 2.1 LoRA to a lower rank — Fast presets run weight-only SVD with no models loaded; Klein's activation-weighted presets add block and timestep targeting. PEFT and LyCORIS sources supported.
 
 ---
 

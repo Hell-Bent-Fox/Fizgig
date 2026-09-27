@@ -3941,9 +3941,9 @@ class LoRATrainerGUI:
                  font=(FONT_FAMILY, 22, "bold"),
                  fg=COLORS["text_primary"], bg=COLORS["bg_deep"]).pack(anchor=tk.W)
         tk.Label(container,
-                 text="A focused, local trainer and workbench for Flux 2 Klein 9B, Krea 2 and "
-                      "MiniMax H3 LoRAs — train, profile, repair, explore, and extract, all in "
-                      "one place.",
+                 text="A focused, local trainer and workbench for Flux 2 Klein 9B, Krea 2, "
+                      "MiniMax H3 and Qwen Image 2.1 LoRAs — train, profile, repair, explore, and "
+                      "extract, all in one place.",
                  font=(FONT_FAMILY, 11),
                  fg=COLORS["text_secondary"], bg=COLORS["bg_deep"],
                  wraplength=800, justify=tk.LEFT).pack(anchor=tk.W, pady=(4, 24))
@@ -4404,7 +4404,7 @@ class LoRATrainerGUI:
             )
             arch_combo.pack(side=tk.LEFT)
             arch_combo.bind("<<ComboboxSelected>>", self._on_architecture_selected)
-            ToolTip(arch_combo, "Model family to train (Klein 9B, Krea 2 or MiniMax H3)")
+            ToolTip(arch_combo, "Model family to train (Klein 9B, Krea 2, MiniMax H3 or Qwen Image 2.1)")
 
             # Training Base (MiniMax only) — which H3 fine-tune the run trains against, right
             # where the family was just chosen. A dedicated var kept OUT of self.entries and
@@ -4667,8 +4667,8 @@ class LoRATrainerGUI:
         self.entries["LORA_OUTPUT_DIR"].bind("<Return>", lambda e: self._save_last_used_paths())
         self._output_dir_hint = ttk.Label(
             output_content,
-            text="Remembered per model family — Klein, Krea 2 and MiniMax H3 each keep their own "
-                 "folder here. Default: output_loras inside Fizgig.",
+            text="Remembered per model family — Klein, Krea 2, MiniMax H3 and Qwen Image 2.1 each keep their "
+                 "own folder here. Default: output_loras inside Fizgig.",
             foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT, wraplength=720)
         self._output_dir_hint.grid(row=2, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(0, 4))
 
@@ -12631,7 +12631,7 @@ class LoRATrainerGUI:
             )
             samples_arch_combo.pack(side=tk.LEFT)
             samples_arch_combo.bind("<<ComboboxSelected>>", self._on_architecture_selected)
-            ToolTip(samples_arch_combo, "Model family to train (Klein 9B, Krea 2 or MiniMax H3)")
+            ToolTip(samples_arch_combo, "Model family to train (Klein 9B, Krea 2, MiniMax H3 or Qwen Image 2.1)")
             self._samples_arch_combo = samples_arch_combo
 
         # Grid holder — video warning / master checkbox / settings block all row-managed
@@ -18208,7 +18208,7 @@ class LoRATrainerGUI:
             outer,
             "Extract",
             "Distill an existing LoRA down to a lower rank. Klein: block + timestep targeting, optional "
-            "activation-weighted SVD. Krea 2 and MiniMax H3: pure weight SVD over all blocks (no block map yet).",
+            "activation-weighted SVD. Krea 2, MiniMax H3 and Qwen Image 2.1: pure weight SVD over all blocks.",
         )
 
         # Model family selector. Krea 2 / MiniMax H3 = pure weight SVD over all blocks (no pipeline /
@@ -20549,7 +20549,7 @@ class LoRATrainerGUI:
             outer,
             "Profiler",
             "Analyze a LoRA's per-block signature. Klein: full activation profile (5-bucket report). "
-            "Krea 2 and MiniMax H3: weight-only profile (flat per-block — no block-role map yet). "
+            "Krea 2, MiniMax H3 and Qwen Image 2.1: weight-only profile (flat per-block — no block-role map yet). "
             "All write a sidecar the Repair Studio reads inline.",
         )
 
