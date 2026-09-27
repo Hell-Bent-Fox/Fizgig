@@ -3,9 +3,9 @@ auto-recaption, on the shared PerImageLossWatch (training/loss_logger.py).
 
 This mirrors Krea 2's trainer integration (krea2/trainer.py) step for step - fresh-run cleanup, exclusion preflight,
 look-outlier warm-up, resume replay from the run's own JSONL and the applied-captions ledger, and the between-epoch
-caption repair - with the model-specific parts going through the family driver: captions are re-encoded with
-driver.encode_text into the family cache (cache.save_cond), and stuck images are recaptioned with driver.caption_image
-when the driver has it. The GUI's Problem Images window reads the same loss_log/ files as for Krea 2.
+caption repair. Stuck images are recaptioned by the shared captioner - Krea 2's Qwen3-VL-4B, the same model and
+instructions as the Captions tab, for every family - and captions are re-encoded with the family's own driver.encode_text
+into the family cache (cache.save_cond). The GUI's Problem Images window reads the same loss_log/ files as for Krea 2.
 """
 import gc
 import json
@@ -18,11 +18,6 @@ import torch
 logger = logging.getLogger(__name__)
 
 _IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
-
-
-def driver_can_caption(driver):
-    from fizgig.families.driver import FamilyDriver
-    return type(driver).caption_image is not FamilyDriver.caption_image
 
 
 def _find_key(d, key):
@@ -58,17 +53,20 @@ class Watch:
 
     def __init__(self, output_dir, group, user_config, driver, *, log=False, per_image_lr=False, auto_recaption=False,
                  warmup_look=False, resume=False, start_epoch=0, te_path=None, trigger_word=None,
-                 trigger_position="start", recaption_instruction=None, recaption_instruction_detailed=None):
+                 trigger_position="start", recaption_instruction=None, recaption_instruction_detailed=None,
+                 captioner_path=None):
         from fizgig.training.loss_logger import PerImageLossWatch, is_enabled as env_on
         self.output_dir, self.group, self.driver, self.te_path = output_dir, group, driver, te_path
         self.trigger_word, self.trigger_position = trigger_word, trigger_position
         self.instr, self.instr_detailed = recaption_instruction, recaption_instruction_detailed
         self.recaptioned = {}
+        self.captioner_path = captioner_path
         self.watch = None
         if not resume:
             _cleanup(output_dir)
-        if auto_recaption and not driver_can_caption(driver):
-            logger.info("[auto-recaption] this family's text encoder cannot caption images - off")
+        if auto_recaption and not (captioner_path and os.path.isfile(captioner_path)):
+            logger.warning("[auto-recaption] needs the captioner (--captioner: the Krea 2 Qwen3-VL-4B text encoder "
+                           "file) - off")
             auto_recaption = False
         if not (log or per_image_lr or auto_recaption or warmup_look or env_on()):
             self.auto_recaption = False
@@ -203,39 +201,13 @@ class Watch:
             torch.cuda.empty_cache()
         ok = False
         try:
-            try:        # manual edits only need encoding; captioning needs the full vision-language model
-                te = self.driver.load_text_encoder(self.te_path, device, for_captioning=bool(auto))
-            except torch.OutOfMemoryError:
-                if not auto:
-                    raise
-                logger.warning("[auto-recaption] off for the rest of this run: the captioning text encoder does not "
-                               "fit this card's VRAM. Training continues; manual caption edits still apply.")
-                self.auto_recaption = False
-                gc.collect()
-                torch.cuda.empty_cache()
-                _requeue(path, processing, updates)
+            if auto:
+                todo += self._recaption(auto, items, device)
+            if not todo:        # every stuck image failed to caption: nothing to re-encode, they retry next time
+                _remove(processing)
                 return
+            te = self.driver.load_text_encoder(self.te_path, device)
             try:
-                for k, img, attempt in auto:
-                    try:
-                        instr = (self.instr_detailed if attempt >= 2 else self.instr) or None
-                        cap = self.driver.caption_image(te, img, detailed=attempt >= 2, instruction=instr)
-                        if self.trigger_word:
-                            cap = (f"{cap}, {self.trigger_word}" if str(self.trigger_position) == "end"
-                                   else f"{self.trigger_word}, {cap}")
-                        try:
-                            with open(os.path.join(self.image_dir, os.path.basename(k) + self.caption_ext), "w",
-                                      encoding="utf-8") as f:
-                                f.write(cap)
-                        except OSError:
-                            logger.warning(f"[auto-recaption] could not write the .txt for {k} - this run is fixed, "
-                                           "a future re-cache will use the old caption")
-                        todo.append((k, items[k], cap, attempt))
-                        logger.info(f"[auto-recaption] {os.path.basename(k)} (attempt {attempt}/2"
-                                    f"{', detailed' if attempt >= 2 else ''}): \"{cap[:110]}\"")
-                    except Exception:
-                        logger.warning(f"[auto-recaption] captioning failed for {os.path.basename(k)} - retry next "
-                                       f"boundary", exc_info=True)
                 desc = self.driver.description
                 for i in range(0, len(todo), 4):
                     chunk = todo[i:i + 4]
@@ -267,6 +239,50 @@ class Watch:
         _remove(processing)
         logger.info(f"[caption-fix] {len(todo)} caption(s) re-encoded - next epoch trains on the fixed text. "
                     f"Loss-watch history reset for: " + ", ".join(os.path.basename(k) for k, _, _, _ in todo))
+
+    def _recaption(self, auto, items, device):
+        """Caption the stuck images with the shared captioner (Krea 2's Qwen3-VL-4B, loaded for the call and freed
+        before the family's encoder loads). Writes each .txt and returns (key, item, caption, attempt) rows to
+        re-encode. A captioner that does not fit the card turns auto-recaption off for the run."""
+        from fizgig.krea2.embedder import generate_caption
+        from fizgig.krea2.utils import load_krea2_text_encoder
+        try:
+            enc = load_krea2_text_encoder(self.captioner_path, dtype=torch.bfloat16, device=device)
+        except torch.OutOfMemoryError:
+            logger.warning("[auto-recaption] off for the rest of this run: the captioner does not fit this card's "
+                           "VRAM. Training continues; manual caption edits still apply.")
+            self.auto_recaption = False
+            gc.collect()
+            torch.cuda.empty_cache()
+            return []
+        rows = []
+        try:
+            for k, img, attempt in auto:
+                try:
+                    instr = (self.instr_detailed if attempt >= 2 else self.instr) or None
+                    cap = generate_caption(enc, img, detailed=attempt >= 2, instruction=instr)
+                    if self.trigger_word:
+                        cap = (f"{cap}, {self.trigger_word}" if str(self.trigger_position) == "end"
+                               else f"{self.trigger_word}, {cap}")
+                    try:
+                        with open(os.path.join(self.image_dir, os.path.basename(k) + self.caption_ext), "w",
+                                  encoding="utf-8") as f:
+                            f.write(cap)
+                    except OSError:
+                        logger.warning(f"[auto-recaption] could not write the .txt for {k} - this run is fixed, "
+                                       "a future re-cache will use the old caption")
+                    rows.append((k, items[k], cap, attempt))
+                    logger.info(f"[auto-recaption] {os.path.basename(k)} (attempt {attempt}/2"
+                                f"{', detailed' if attempt >= 2 else ''}): \"{cap[:110]}\"")
+                except Exception:
+                    logger.warning(f"[auto-recaption] captioning failed for {os.path.basename(k)} - retry next "
+                                   f"boundary", exc_info=True)
+        finally:
+            enc.to("cpu")
+            del enc
+            gc.collect()
+            torch.cuda.empty_cache()
+        return rows
 
 
 def _cleanup(output_dir):

@@ -121,7 +121,7 @@ Klein 9B, Krea 2 and Qwen Image 2.1 share the dataset format and most of the wor
 | Profiling | ✅ full activation profile | ✅ weight-only (`--krea2`) | GUI (Profiler tab) |
 | Activation-weighted (specialized) extraction | ✅ Klein only | ❌ (needs the Klein pipeline) | ❌ |
 
-The four intelligence toggles need a text encoder that can *see* for auto-recaption — Krea 2's Qwen3-VL-4B and Qwen Image 2.1's Qwen3-VL-8B are full vision-language models; Klein's stripped Qwen3-8B can't generate text or look at images, so Klein has none of them.
+Auto-recaption captions with Krea 2's Qwen3-VL-4B, the same model the GUI's Captions tab uses, whichever model you're training; Qwen Image 2.1 passes it as `--captioner`. Klein has none of the four intelligence toggles.
 
 **MiniMax H3** is the third family and has its own three scripts and flag set: photos, video clips with their sound, and voice recordings in one dataset; Optimised Likeness Learning on by default; an int8 or 4-bit base sized to your card; weight averaging; Turbo previews as clips with sound; Context LoRA, the training adapter, TREAD, pause/resume, and full fine-tuning. See [MiniMax H3 training](#minimax-h3-training).
 
@@ -341,7 +341,7 @@ Both trainers write the same `<name>-NNNNNN-state/` layout, where `NNNNNN` is th
 
 ## Krea 2 training
 
-Krea 2 (12.9B) is the second model family and the home of the intelligent-trainer features: the per-image loss watch, auto-recaptioning, per-image adaptive LR, and look-outlier warm-up are **Krea 2-only** (see the [family table](#whats-family-specific-at-a-glance)). You need the four Krea 2 files from the [download table](#model-files-where-they-come-from-where-they-go): the RAW DiT for training (fp8-quantized at load, ~14 GB resident), the fp8 Turbo for previews, the Qwen-Image VAE, and the Qwen3-VL-4B text encoder (which doubles as the vision model for auto-recaptioning).
+Krea 2 (12.9B) is the second model family and the home of the intelligent-trainer features: the per-image loss watch, auto-recaptioning, per-image adaptive LR, and look-outlier warm-up started here (Qwen Image 2.1 has them too; see the [family table](#whats-family-specific-at-a-glance)). You need the four Krea 2 files from the [download table](#model-files-where-they-come-from-where-they-go): the RAW DiT for training (fp8-quantized at load, ~14 GB resident), the fp8 Turbo for previews, the Qwen-Image VAE, and the Qwen3-VL-4B text encoder (which doubles as the vision model for auto-recaptioning).
 
 ### Full example
 
@@ -565,7 +565,7 @@ The other two presets change only a few flags. **Standard** is `--network_dim 16
 - `--network_type lokr --lokr_factor 8` — LoKR instead of LoRA.
 - `--min_timestep` / `--max_timestep` — restrict training to a noise band, on a 0-1 scale.
 
-**Per-image loss watch** — `--log_per_image_loss`, `--per_image_lr`, `--auto_recaption` and `--warmup_look_outliers` work as they do on [Krea 2](#krea-2-training). Auto-recaption uses Qwen's own Qwen3-VL-8B text encoder (pass `--text_encoder`); `--trigger_word` and `--trigger_position start|end` control where the trigger goes in rewritten captions.
+**Per-image loss watch** — `--log_per_image_loss`, `--per_image_lr`, `--auto_recaption` and `--warmup_look_outliers` work as they do on [Krea 2](#krea-2-training). Auto-recaption captions with Krea 2's Qwen3-VL-4B, as the Captions tab does. Pass it as `--captioner` (the `qwen3vl_4b_fp8_scaled.safetensors` file the Qwen download fetches), plus `--text_encoder` to re-encode the new caption. `--trigger_word` and `--trigger_position start|end` control where the trigger goes in rewritten captions.
 
 **Other** — `--context_lora_path FILE --context_lora_strength S` trains on top of an existing Qwen LoRA, frozen and active in training and previews. `--metadata_title/author/description/license/tags/trigger_phrase` are recorded in the saved LoRA. The saved file loads in ComfyUI's standard LoRA loader.
 
@@ -646,7 +646,7 @@ Klein's fp8 Base is only ~9.6 GB resident, so 16 GB+ cards skip swap entirely (f
 
 MiniMax H3 plans for itself: `--base_quant auto --blocks_to_swap auto` reads the free VRAM at launch and picks the base precision (int8 at ~21 GB resident on 32 GB cards, 4-bit at ~11 GB below that) and the swap together, and logs the plan as a `[vram]` line. Set either by hand to override.
 
-Qwen Image 2.1 plans the same way with `--precision auto --blocks_to_swap -1`: bf16 on 24 GB+ cards, INT8 with no swap on 12 and 16 GB cards and NF4 on 10 GB cards, at the presets' 0.5 MP. Below about 20 GB free the text encoder loads 8-bit, and text-only when it is only encoding (about 8 GB), which is what sets the 10 GB floor.
+Qwen Image 2.1 plans the same way with `--precision auto --blocks_to_swap -1`: bf16 on 24 GB+ cards, INT8 with no swap on 12 and 16 GB cards and NF4 on 10 GB cards, at the presets' 0.5 MP. The text encoder only encodes (no output head or vision tower) and loads 8-bit below about 20 GB free, about 8 GB in all, which is what sets the 10 GB floor.
 
 ---
 

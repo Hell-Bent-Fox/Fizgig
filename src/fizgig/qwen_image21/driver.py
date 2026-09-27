@@ -41,18 +41,15 @@ class QwenImage21Driver(FamilyDriver):
         from fizgig.qwen_image21.vae import load_qwen21_vae
         return load_qwen21_vae(path, device=device)
 
-    def load_text_encoder(self, path, device, for_captioning=False):
-        """bf16 when it fits the free VRAM with room to run, else INT8. Text-only (no LM head or vision tower,
-        about 1.8 GB less) unless it will caption: 8-bit text-only is about 8.5 GB, which fits a 10 GB card."""
+    def load_text_encoder(self, path, device):
+        """Text-only (no LM head or vision tower): bf16 when it fits the free VRAM with room to run, else INT8 -
+        about 8 GB, which fits a 10 GB card."""
         from fizgig.qwen_image21.embedder import Qwen21TextEncoder
         from fizgig.families.quant import free_vram_gb
-        return Qwen21TextEncoder(path, device=device, int8=free_vram_gb() < 19.5, text_only=not for_captioning)
+        return Qwen21TextEncoder(path, device=device, int8=free_vram_gb() < 19.5)
 
     def unload_text_encoder(self, te):
         te.unload()
-
-    def caption_image(self, te, image, detailed=False, instruction=None):
-        return te.caption(image, detailed=detailed, instruction=instruction)
 
     def enable_gradient_checkpointing(self, dit, on=True):
         dit.enable_gradient_checkpointing(on)

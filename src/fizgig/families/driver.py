@@ -60,19 +60,13 @@ class FamilyDriver:
     def load_vae(self, path: str, device):
         raise NotImplementedError
 
-    def load_text_encoder(self, path: str, device, for_captioning: bool = False):
-        """The text encoder, for encode_text. for_captioning: also for caption_image (the loss watch's auto-recaption
-        passes it), so an encoder may leave out what only captioning needs when it is False."""
+    def load_text_encoder(self, path: str, device):
+        """The text encoder, for encode_text only - captioning is the shared captioner's job (Krea 2's Qwen3-VL-4B),
+        so an encoder can leave out anything encoding does not use (an LM head, a vision tower)."""
         raise NotImplementedError
 
     def unload_text_encoder(self, te) -> None:
         """Free the encoder's VRAM (caching and preview-prompt encoding load it, then drop it)."""
-        raise NotImplementedError
-
-    def caption_image(self, te, image, detailed: bool = False, instruction=None) -> str:
-        """Optional: caption an image (a path or PIL image) with the loaded text encoder, for auto-recaption of stuck
-        images. Only for encoders that can see and generate (a vision-language model with its LM head). Without it the
-        family has no auto-recaption; the rest of the per-image loss watch still works."""
         raise NotImplementedError
 
     def enable_gradient_checkpointing(self, dit, on: bool = True) -> None:

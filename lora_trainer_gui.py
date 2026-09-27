@@ -9095,17 +9095,9 @@ class LoRATrainerGUI:
         self._generic_training_visibility(desc)
 
     def _family_can_caption(self, desc):
-        """Whether a described family's driver can caption images (auto-recaption). Cached per family."""
-        if desc is None:
-            return False
-        cache = self.__dict__.setdefault("_family_caption_cache", {})
-        if desc.key not in cache:
-            try:
-                from fizgig.families.loss_watch import driver_can_caption
-                cache[desc.key] = driver_can_caption(desc.load_driver())
-            except Exception:
-                cache[desc.key] = False
-        return cache[desc.key]
+        """Whether auto-recaption is available to a described family: every family captions with the shared
+        captioner (Krea 2's Qwen3-VL-4B, as the Captions tab), so it only needs that file set in Preferences."""
+        return desc is not None and bool(self._qwen_captioner_path())
 
     def _generic_training_visibility(self, desc):
         """Standard layer: after the shared 'not Klein' hiding above, apply what the family's description
@@ -33580,6 +33572,7 @@ class LoRATrainerGUI:
         if _bs1:
             cmd += [flag for var, flag in _watch if var.get()]
             if self._family_can_caption(desc) and self.krea2_auto_recaption_var.get():
+                cmd += ["--captioner", self._qwen_captioner_path()]
                 _trig = (self.caption_trigger_var.get().strip() if hasattr(self, "caption_trigger_var") else "")
                 if _trig and _trig.lower() != "trigger_word":
                     cmd += ["--trigger_word", _trig]      # leads each AI caption, as the Captions tab writes it

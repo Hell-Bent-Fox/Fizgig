@@ -270,7 +270,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  gradient_checkpointing=True, blocks_to_swap=0, network_type="lora", lokr_factor=8,
                  log_per_image_loss=False, per_image_lr=False, auto_recaption=False, warmup_look_outliers=False,
                  trigger_word=None, trigger_position="start", recaption_instruction=None,
-                 recaption_instruction_detailed=None):
+                 recaption_instruction_detailed=None, captioner=None):
     desc = get_family(family)
     if desc is None or not desc.training_ready:
         raise RuntimeError(f"unknown or untrainable family {family!r}")
@@ -405,7 +405,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                   resume=bool(resume_state_dir), start_epoch=start_epoch, te_path=te_path,
                   trigger_word=trigger_word, trigger_position=trigger_position,
                   recaption_instruction=recaption_instruction,
-                  recaption_instruction_detailed=recaption_instruction_detailed)
+                  recaption_instruction_detailed=recaption_instruction_detailed, captioner_path=captioner)
     scheduler = None
     if not adaptive and not owns_its_rate(optimizer):
         scheduler = _step_scheduler(optimizer, lr_scheduler, lr_warmup_steps, steps_per_epoch * max_train_epochs,
@@ -566,11 +566,13 @@ def setup_parser():
                    help="the preview speed LoRA's strength (default: the family's recommended value)")
     p.add_argument("--log_per_image_loss", action="store_true", help="detect problem images (Problem Images window)")
     p.add_argument("--per_image_lr", action="store_true", help="scale each step by the image's loss-watch multiplier")
-    p.add_argument("--auto_recaption", action="store_true", help="recaption stuck images (families that can caption)")
+    p.add_argument("--auto_recaption", action="store_true", help="recaption stuck images (needs --captioner)")
     p.add_argument("--warmup_look_outliers", action="store_true", help="LR warm-up for Look Filter outliers")
     p.add_argument("--trigger_position", default="start", choices=("start", "end"))
     p.add_argument("--recaption_instruction", default=None)
     p.add_argument("--recaption_instruction_detailed", default=None)
+    p.add_argument("--captioner", default=None,
+                   help="auto-recaption's captioner: the Krea 2 Qwen3-VL-4B text encoder file (as the Captions tab)")
     p.add_argument("--lokr_factor", type=int, default=8, help="LoKR only: w1 is about factor x factor")
     p.add_argument("--network_alpha", type=float, default=32)
     p.add_argument("--learning_rate", type=float, default=1e-4)
@@ -637,7 +639,7 @@ def main():
         log_per_image_loss=a.log_per_image_loss, per_image_lr=a.per_image_lr, auto_recaption=a.auto_recaption,
         warmup_look_outliers=a.warmup_look_outliers, trigger_word=a.trigger_word, trigger_position=a.trigger_position,
         recaption_instruction=a.recaption_instruction,
-        recaption_instruction_detailed=a.recaption_instruction_detailed,
+        recaption_instruction_detailed=a.recaption_instruction_detailed, captioner=a.captioner,
         network_dim=a.network_dim, network_alpha=a.network_alpha, learning_rate=a.learning_rate,
         max_train_epochs=a.max_train_epochs, save_every_n_epochs=a.save_every_n_epochs, save_state=a.save_state,
         save_state_on_train_end=a.save_state_on_train_end, keep_last_n_states=a.keep_last_n_states, seed=a.seed,
