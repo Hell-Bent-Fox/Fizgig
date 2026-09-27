@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import os
+import random
 import sys
 import time
 from multiprocessing import Value
@@ -462,6 +463,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             except Exception:
                 logger.exception("[sample override] could not encode the override prompt - using the configured ones")
                 conds = encoded
+        if not sd:          # seed 0 = a fresh random seed every preview round, as on the other trainers
+            sd = random.randint(1, 2 ** 31 - 1)
         _render_previews(driver, dit, net, vae, conds, sample_dir, epoch, output_name=output_name,
                          steps=sample_steps, cfg=sample_cfg_scale, neg=neg, width=w, height=h,
                          seed=sd, ema=ema,
