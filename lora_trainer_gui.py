@@ -5511,8 +5511,34 @@ class LoRATrainerGUI:
                  "an A/B.",
             foreground=COLORS["text_explain"], font=(FONT_FAMILY, 9, "italic"), justify=tk.LEFT, wraplength=720)
         self._family_ema_hint.grid(row=53, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(0, 4))
+        # --- Edit LoRA — standard-layer families whose model edits images (description.edit_training) ----
+        self.entries["FAMILY_EDIT"] = tk.BooleanVar(value=bool(self.settings.get("FAMILY_EDIT", False)))
+        self._family_edit_cb = ttk.Checkbutton(
+            training_content, text="Edit LoRA (learn a change from before/after pairs)",
+            variable=self.entries["FAMILY_EDIT"], command=lambda: self._family_edit_rows())
+        self._family_edit_cb.grid(row=54, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(10, 0))
+        self._family_edit_frame = ttk.Frame(training_content)
+        self._family_edit_frame.grid(row=55, column=0, columnspan=2, sticky=tk.W, padx=(21, 5), pady=(4, 0))
+        for _r, (_key, _label, _browse) in enumerate((
+                ("FAMILY_EDIT_DIR", "Before-images folder:", self._browse_family_edit_dir),
+                ("FAMILY_EDIT_REF", "Preview photo (optional):", self._browse_family_edit_ref))):
+            ttk.Label(self._family_edit_frame, text=_label).grid(row=_r, column=0, sticky=tk.W, pady=2)
+            self.entries[_key] = ttk.Entry(self._family_edit_frame, width=52)
+            self.entries[_key].insert(0, str(self.settings.get(_key, "") or ""))
+            self.entries[_key].grid(row=_r, column=1, sticky=tk.W, padx=(6, 4), pady=2)
+            ttk.Button(self._family_edit_frame, text="Browse", command=_browse).grid(row=_r, column=2, pady=2)
+        self._family_edit_hint = ttk.Label(
+            training_content,
+            text="The Start folder holds the AFTER images; this folder holds the BEFORE images with the same file "
+                 "names (photo.png pairs with photo.png; photo_0.png, photo_1.png give one after-image several "
+                 "before-images). Each caption is the instruction, e.g. \"Make it a pencil sketch.\" Previews edit "
+                 "the preview photo, or the first before-image when that is empty - pick a photo that is NOT in the "
+                 "dataset to see whether the edit carries over.",
+            foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT, wraplength=720)
+        self._family_edit_hint.grid(row=56, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(2, 4))
         for _w in (self._family_adapter_cb, self._family_adapter_hint, self._family_ema_label,
-                   self._family_ema_frame, self._family_ema_hint):
+                   self._family_ema_frame, self._family_ema_hint, self._family_edit_cb, self._family_edit_frame,
+                   self._family_edit_hint):
             _w._fizgig_described_family = "*"   # standard-layer widget: old-family goldens set it aside
             _w.grid_remove()
 
@@ -7428,14 +7454,77 @@ class LoRATrainerGUI:
 
     # Training-tab settings that belong to standard-layer (described) families only.
     _FAMILY_ENTRY_KEYS = frozenset({"FAMILY_TRAINING_ADAPTER", "FAMILY_EMA", "FAMILY_PRECISION",
-                                    "FAMILY_TURBO_STRENGTH"})
+                                    "FAMILY_TURBO_STRENGTH", "FAMILY_EDIT", "FAMILY_EDIT_DIR", "FAMILY_EDIT_REF"})
     _FAMILY_PRECISION_LABELS = {"auto": "Auto (fits your free VRAM)", "bf16": "bf16 (full precision)",
                                 "int8": "INT8 (8-bit, fastest)", "nf4": "4-bit NF4 (smallest)"}
+
+    def _family_edit_on(self, desc=None):
+        desc = desc if desc is not None else self._family_desc()
+        return bool(desc is not None and desc.edit_training and self.entries["FAMILY_EDIT"].get())
+
+    def _family_edit_rows(self):
+        """The before-images rows show only while Edit LoRA is ticked."""
+        desc = self._family_desc()
+        can = bool(desc is not None and desc.edit_training)
+        self._set_widget_visible(self._family_edit_cb, can)
+        for w in (self._family_edit_frame, self._family_edit_hint):
+            self._set_widget_visible(w, can and bool(self.entries["FAMILY_EDIT"].get()))
+
+    def _browse_family_edit_dir(self):
+        path = filedialog.askdirectory(title="Folder of BEFORE images (same names as the Start folder's)")
+        if path:
+            self.entries["FAMILY_EDIT_DIR"].delete(0, tk.END)
+            self.entries["FAMILY_EDIT_DIR"].insert(0, path)
+
+    def _browse_family_edit_ref(self):
+        path = filedialog.askopenfilename(title="Photo the previews edit",
+                                          filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp"), ("All", "*.*")])
+        if path:
+            self.entries["FAMILY_EDIT_REF"].delete(0, tk.END)
+            self.entries["FAMILY_EDIT_REF"].insert(0, path)
+
+    _EDIT_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+
+    def _family_edit_pairs(self):
+        """(after-images without a before-image, first before-image path) for the Start folder and the
+        before-images folder, matched the way the dataset loader matches them (name, or name_N)."""
+        after_dir = self.image_folder_var.get().strip()
+        before_dir = self.entries["FAMILY_EDIT_DIR"].get().strip()
+        stems = {}
+        for f in sorted(os.listdir(before_dir)):
+            b, e = os.path.splitext(f)
+            if e.lower() in self._EDIT_EXTS:
+                stems.setdefault(b, os.path.join(before_dir, f))
+                base, _, n = b.rpartition("_")
+                if base and n.isdigit():
+                    stems.setdefault(base, os.path.join(before_dir, f))
+        missing, first = [], None
+        for f in sorted(os.listdir(after_dir)):
+            b, e = os.path.splitext(f)
+            if e.lower() not in self._EDIT_EXTS:
+                continue
+            if b in stems:
+                first = first or stems[b]
+            else:
+                missing.append(f)
+        return missing, first
 
     def _generic_validate_paths(self, desc):
         """Standard layer: every required model file of a described family (plus its training adapter when the
         toggle is on) must be set on Preferences and exist."""
         errors = []
+        if self._family_edit_on(desc):
+            before = self.entries["FAMILY_EDIT_DIR"].get().strip()
+            ref = self.entries["FAMILY_EDIT_REF"].get().strip()
+            if not before or not os.path.isdir(before):
+                errors.append("Edit LoRA is on: set the Before-images folder (Training tab, Training Parameters)")
+            elif os.path.isdir(self.image_folder_var.get().strip()):
+                missing, _ = self._family_edit_pairs()
+                if missing:
+                    errors.append(f"Edit LoRA: {len(missing)} image(s) in the Start folder have no before-image of the "
+                                  f"same name in {before} (e.g. {', '.join(missing[:3])})")
+            if ref and not os.path.isfile(ref):
+                errors.append(f"Edit LoRA preview photo does not exist: {ref}")
         need = [f for f in desc.model_files if f.required]
         if desc.training_adapter and self.entries["FAMILY_TRAINING_ADAPTER"].get():
             need += [f for f in desc.model_files if f.pref_key == desc.training_adapter]
@@ -9127,6 +9216,7 @@ class LoRATrainerGUI:
         if desc is not None and len(desc.network_types) <= 1:
             for w in (self.labels["NETWORK_TYPE"], self._network_type_rowf):
                 self._set_widget_visible(w, False)
+        self._family_edit_rows()
 
     def _apply_refmod_visibility(self):
         """MiniMax H3 RefMod: the Training tab is Output + the RefMod card. Every other
@@ -31783,6 +31873,10 @@ class LoRATrainerGUI:
                             toml_lines.append("[[datasets]]")
                         toml_lines.append(
                             f'image_directory = "{_folder.replace(chr(92), "/")}"')
+                        if _i == 0 and self._family_edit_on():
+                            toml_lines.append('control_directory = "'
+                                              + self.entries["FAMILY_EDIT_DIR"].get().strip().replace(chr(92), "/")
+                                              + '"')
                         _cd = self._cache_dir_for(_root, _folder) if _root else ""
                         if _cd:
                             toml_lines.append(
@@ -32770,7 +32864,10 @@ class LoRATrainerGUI:
             **({"FAMILY_TRAINING_ADAPTER": bool(self.entries["FAMILY_TRAINING_ADAPTER"].get()),
                 "FAMILY_EMA": self.entries["FAMILY_EMA"].get(),
                 "FAMILY_PRECISION": self.entries["FAMILY_PRECISION"].get(),
-                "FAMILY_TURBO_STRENGTH": self.entries["FAMILY_TURBO_STRENGTH"].get()}
+                "FAMILY_TURBO_STRENGTH": self.entries["FAMILY_TURBO_STRENGTH"].get(),
+                "FAMILY_EDIT": self._family_edit_on(),
+                "FAMILY_EDIT_DIR": self.entries["FAMILY_EDIT_DIR"].get().strip(),
+                "FAMILY_EDIT_REF": self.entries["FAMILY_EDIT_REF"].get().strip()}
                if self._family_desc() is not None else {}),
             # experiment/tread: both ticks must be copied here or the builder reads a stale value
             "MINIMAX_TREAD": bool(self.entries["MINIMAX_TREAD"].get()),
@@ -33718,6 +33815,15 @@ class LoRATrainerGUI:
                     pass
                 if getattr(self, "sample_at_first_var", None) and self.sample_at_first_var.get():
                     cmd.append("--sample_at_first")
+                if st.get("FAMILY_EDIT"):
+                    ref = (st.get("FAMILY_EDIT_REF") or "").strip()
+                    if not ref:
+                        try:
+                            ref = self._family_edit_pairs()[1] or ""
+                        except OSError:
+                            ref = ""
+                    if ref:
+                        cmd += ["--sample_reference", ref]
         return cmd
 
     def _build_krea2_train_command(self):

@@ -135,8 +135,8 @@ def main():
     if args.stage == "latents":
         from fizgig.scripts.cache_latents import encode_datasets
         vae = driver.load_vae(args.model, device)
-        if pairs:       # a cache from before the pairs were added has no before-image latents: re-encode it
-            args.needs_reencode = lambda path: not _has_controls(path)
+        # a cache from before the pairs were added (or after they were removed) no longer fits: re-encode it
+        args.needs_reencode = lambda path: _has_controls(path) != pairs
 
         def encode(batch):
             imgs = [(it.content[0] if isinstance(it.content, list) else it.content) for it in batch]

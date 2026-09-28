@@ -132,6 +132,7 @@ class FamilyDescription:
     train_memory: dict = field(default_factory=dict)
     optimizers: tuple = ("adamw8bit", "adamw")
     network_types: tuple = ("lora",)
+    edit_training: bool = False       # Edit LoRA from before/after pairs (the driver's supports_references)
 
     # sampling
     sampling: tuple = ()              # SamplingSettings without any speed LoRA (first = default)

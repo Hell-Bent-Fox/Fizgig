@@ -2,9 +2,7 @@
 
 [← Back to the README](../README.md)
 
-Qwen Image 2.1 trains LoRAs and LoKRs in Fizgig, with turbo previews during training, the per-image loss watch, and all five workbench tools (Repair Studio, LoRA the Explorer, Profiler, Extract, LoRA Royale). Saved LoRAs, LoKRs, Repair Studio saves and Extract outputs load in ComfyUI's standard LoRA loader. It's the first model on Fizgig's driver system.
-
-**Coming soon:** edit training for Qwen Image 2.1.
+Qwen Image 2.1 trains LoRAs and LoKRs in Fizgig, including edit LoRAs learned from before/after pairs, with turbo previews during training, the per-image loss watch, and all five workbench tools (Repair Studio, LoRA the Explorer, Profiler, Extract, LoRA Royale). Saved LoRAs, LoKRs, Repair Studio saves and Extract outputs load in ComfyUI's standard LoRA loader. It's the first model on Fizgig's driver system.
 
 ## Getting set up
 
@@ -61,6 +59,23 @@ The text encoder only encodes, and loads in 8-bit below about 20 GB free (about 
 ## Previews and the turbo LoRA
 
 With Viggle's turbo LoRA set in Preferences, training previews render at its own settings: **strength 1.0 for 6 steps**. The Samples tab's **Turbo strength** box and step count change either. Without the turbo, previews render at 25 steps. The training adapter is off for previews; a Context LoRA stays on.
+
+## Edit LoRAs
+
+Qwen Image 2.1 is one model for text-to-image and editing, so a LoRA can learn a change: a grade, a style, a relight, a retouch. You give it pairs of the same picture before and after the change.
+
+1. Put the **after** images in the Start tab's folder and the **before** images in a second folder with the same file names. `photo.png` pairs with `photo.png`; `photo_0.png` and `photo_1.png` give one after-image two before-images.
+2. Caption each after-image with the instruction, e.g. "Make it a pencil sketch." The same instruction on every pair is fine for a single edit.
+3. On the Training tab, tick **Edit LoRA** under Training Parameters and set the **Before-images folder**. Start refuses to run if any after-image is missing its before-image.
+4. Previews edit the **Preview photo**, or the first before-image if you leave it empty. A photo from outside the dataset shows whether the edit carries over.
+
+In ComfyUI, load the LoRA as usual and use **Text Encode Qwen Image 2.1**: connect the VAE, plug the photo to edit into its first image input, write the instruction as the prompt, and sample from the node's **latent** output so the result keeps the photo's shape.
+
+In our tests, 40 pairs of a colour grade at 0.59 MP with rank 16 learned the grade on held-out photos within 6 epochs, about 8 minutes on an RTX 5090. Faces, poses and framing came through unchanged. Turbo previews score the same as 25-step ones, so they are a fair guide to an edit LoRA too.
+
+## Licence
+
+Qwen Image 2.1 is released under the Qwen Research License: non-commercial use only unless you get a commercial licence from the Qwen team, and a LoRA or fine-tune you share must say "Built with Qwen" or "Improved using Qwen". Read the [licence](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE) before publishing or selling anything made with it.
 
 ## The per-image loss watch
 

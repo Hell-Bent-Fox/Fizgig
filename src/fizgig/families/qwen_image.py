@@ -111,6 +111,7 @@ QWEN_IMAGE_21 = FamilyDescription(
                   "nf4": (((0.25, 6.0), (1.0, 9.5)), 0.0)},
     optimizers=("adamw", "adamw8bit"),
     network_types=("lora", "lokr"),
+    edit_training=True,             # one checkpoint for text-to-image and edits (up to 10 references)
     helper_files=(("Qwen/Qwen-Image-2.1", ("processor/*",)),),   # tokenizer + image processor + chat template
 
     sampling=(
