@@ -81,9 +81,23 @@ class FamilyDriver:
         """captions -> list of conditioning dicts (tensors on CPU)."""
         raise NotImplementedError
 
+    # ---- edit training (optional) -----------------------------------------------------------------
+    supports_references = False       # reference ("before") images: pair datasets and edit previews
+
+    def load_reference_text_encoder(self, path: str, device):
+        """The text encoder able to read reference images (encode_text_with_references)."""
+        raise NotImplementedError
+
+    def encode_text_with_references(self, te, captions: list, references: list) -> list:
+        """captions + one list of uint8 (H, W, 3) reference images per caption, each already at the size its latent
+        uses -> conditioning dicts. training_loss / generate get the references' latents as refs=."""
+        raise NotImplementedError
+
     # ---- training -------------------------------------------------------------------------------
-    def training_loss(self, dit, latents, cond: dict, generator, *, min_t: float = 0.0, max_t: float = 1.0):
-        """One training forward. latents (1, C, h, w) on device, cond = the cached dict (batched).
+    def training_loss(self, dit, latents, cond: dict, generator, *, min_t: float = 0.0, max_t: float = 1.0,
+                      refs=None):
+        """One training forward. latents (1, C, h, w) on device, cond = the cached dict (batched), refs = the pair's
+        reference latents [(1, C, rh, rw), ...] (edit training) or None.
         Returns (loss tensor, info dict e.g. {"t": 0.63}). Owns the family's noise/target/timestep rules."""
         raise NotImplementedError
 
@@ -94,8 +108,9 @@ class FamilyDriver:
         raise NotImplementedError
 
     def generate(self, dit, cond: dict, width: int, height: int, *, steps: int, seed: int, cfg: float = 1.0,
-                 neg_cond: Optional[dict] = None, sigmas=None, options=(), noise=None, on_step=None):
-        """Denoise one image from noise; returns latents in the driver's own layout (fed to decode).
+                 neg_cond: Optional[dict] = None, sigmas=None, options=(), noise=None, on_step=None, refs=None):
+        """Denoise one image from noise (refs: reference latents for an edit, with conditioning from
+        encode_text_with_references); returns latents in the driver's own layout (fed to decode).
         sigmas / options: an explicit schedule and driver-specific sampler options (e.g. from a speed LoRA's
         SamplingSettings); a driver ignores what it doesn't use. noise: a start from initial_noise() (or a blend of
         two) instead of the seed's. on_step(done, total): called before every step; it may raise to abort."""

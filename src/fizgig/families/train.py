@@ -163,7 +163,7 @@ def _read_sample_override(output_dir):
     return None
 
 
-def _encode_override(driver, te_path, prompt, dit, device, parkable=True):
+def _encode_override(driver, te_path, prompt, dit, device, parkable=True, references=None):
     """Encode one override prompt mid-run. The text encoder loads beside the training DiT when it fits; otherwise the
     DiT waits on CPU for the encode (a block-swapped DiT is small enough to stay, and the driver picks a smaller
     encoder when VRAM is short)."""
@@ -174,8 +174,13 @@ def _encode_override(driver, te_path, prompt, dit, device, parkable=True):
         quant.move(dit, "cpu")
         torch.cuda.empty_cache()
     try:
-        te = driver.load_text_encoder(te_path, device)
+        if references:
+            te = driver.load_reference_text_encoder(te_path, device)
+        else:
+            te = driver.load_text_encoder(te_path, device)
         try:
+            if references:
+                return driver.encode_text_with_references(te, [prompt], [references])
             return driver.encode_text(te, [prompt])
         finally:
             driver.unload_text_encoder(te)
@@ -195,12 +200,29 @@ def _cap_canvas(width, height, cap=768):
 
 
 @torch.no_grad()
+def _reference_size(w, h, area):
+    """An edit preview's canvas: the reference's aspect at `area` pixels, in multiples of 64 (a training bucket's
+    step, so the reference's vision tokens and latents line up as they do in training)."""
+    r = w / h
+    return max(64, round((area * r) ** 0.5 / 64) * 64), max(64, round((area / r) ** 0.5 / 64) * 64)
+
+
+def _load_references(paths, width, height):
+    """uint8 (H, W, 3) arrays of the preview's reference images at the first one's aspect and the preview's area,
+    and that (width, height)."""
+    import numpy as np
+    from PIL import Image, ImageOps
+    imgs = [Image.open(p).convert("RGB") for p in paths]
+    size = _reference_size(*imgs[0].size, width * height)
+    return [np.array(ImageOps.fit(im, size, Image.LANCZOS)) for im in imgs], size
+
+
 def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_name, steps, cfg, neg, width,
-                     height, seed, ema=None, speed=None, lowmem=False, swapped=False):
+                     height, seed, ema=None, speed=None, lowmem=False, swapped=False, refs=None):
     """Previews on the RESIDENT training model: training adapter OFF (the deployment setup), the family's speed
     LoRA ON if one is loaded (it lives on CPU between previews). On small cards the DiT parks on CPU for the
     decode. File names match the other trainers so the GUI gallery reads them:
-    <name>_e<epoch>_<idx>_<timestamp>_<seed>.png. `speed` is the speed LoRA's SamplingSettings or None."""
+    <name>_e<epoch>_<idx>_<timestamp>_<seed>.png. `speed` is the speed LoRA's SamplingSettings or None; `refs` the edit previews' reference latents."""
     os.makedirs(out_dir, exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     device = next(iter(dit.parameters())).device
@@ -216,15 +238,16 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
     if swapped:
         driver.block_swap_mode(dit, inference=True)
     paths = []
+    ref_kw = {"refs": [r.to(device) for r in refs]} if refs else {}
     try:
         lats = []
         for i, cond in enumerate(encoded):
             if speed is not None:
                 lats.append(driver.generate(dit, cond, width, height, steps=steps, seed=seed + i, cfg=speed.cfg,
-                                            sigmas=speed.sigmas, options=speed.options))
+                                            sigmas=speed.sigmas, options=speed.options, **ref_kw))
             else:
                 lats.append(driver.generate(dit, cond, width, height, steps=steps, seed=seed + i, cfg=cfg,
-                                            neg_cond=neg))
+                                            neg_cond=neg, **ref_kw))
         park = lowmem and not swapped      # a swapped DiT is already mostly on CPU; moving it would undo the layout
         if park:                            # #123: never hold the training DiT and the VAE decode together
             _preview_vram("before decode")
@@ -262,7 +285,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  speed_lora=None, speed_lora_strength=None,
                  vae_path=None, te_path=None, sample_prompts=None, sample_every_n_epochs=0, sample_width=None,
                  sample_height=None, sample_steps=None, sample_cfg_scale=None, sample_negative=None,
-                 sample_at_first=False, sample_seed=42,
+                 sample_at_first=False, sample_seed=42, sample_reference=None,
                  metadata_title=None, metadata_author=None, metadata_description=None, metadata_license=None,
                  metadata_tags=None, metadata_trigger_phrase=None, metadata_thumbnail=None,
                  resume_state_dir=None, adaptive_lr=False, adaptive_lr_min=1e-4, adaptive_lr_max=2e-4,
@@ -322,18 +345,32 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         logger.info(f"[precision] Auto plan: {precision}, block swap {blocks_to_swap} ({why}); asked {req}")
 
     # ---- previews: encode prompts once, keep the VAE ---------------------------------------------
-    encoded = neg = vae = None
+    encoded = neg = vae = ref_imgs = ref_latents = None
     sample_dir = os.path.join(output_dir, "sample")
+    if sample_reference and not driver.supports_references:
+        logger.warning(f"[sample] {desc.display_name} has no edit previews - ignoring --sample_reference")
+        sample_reference = None
     if sample_prompts and sample_every_n_epochs and te_path and vae_path:
         logger.info("[sample] encoding %d preview prompt(s) with %s", len(sample_prompts), desc.text_encoder_label)
-        te = driver.load_text_encoder(te_path, device)
-        encoded = driver.encode_text(te, sample_prompts)
-        if sample_cfg_scale > 1.0:
-            neg = driver.encode_text(te, [sample_negative or ""])[0]
+        if sample_reference:
+            ref_imgs, (sample_width, sample_height) = _load_references(sample_reference, sample_width, sample_height)
+            logger.info(f"[sample] edit previews from {len(ref_imgs)} reference image(s) at "
+                        f"{sample_width}x{sample_height}")
+            te = driver.load_reference_text_encoder(te_path, device)
+            encoded = driver.encode_text_with_references(te, sample_prompts, [ref_imgs] * len(sample_prompts))
+            if sample_cfg_scale > 1.0:
+                neg = driver.encode_text_with_references(te, [sample_negative or ""], [ref_imgs])[0]
+        else:
+            te = driver.load_text_encoder(te_path, device)
+            encoded = driver.encode_text(te, sample_prompts)
+            if sample_cfg_scale > 1.0:
+                neg = driver.encode_text(te, [sample_negative or ""])[0]
         driver.unload_text_encoder(te)
         del te
         torch.cuda.empty_cache()
         vae = driver.load_vae(vae_path, device)
+        if ref_imgs:
+            ref_latents = [z[None].cpu() for z in driver.encode_images(vae, ref_imgs)]
     elif sample_prompts and sample_every_n_epochs:
         logger.warning("[sample] previews need the text encoder and VAE paths - previews are off for this run")
 
@@ -464,10 +501,13 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         if ov:
             logger.info(f"[sample override] active - '{ov['prompt'][:60]}' seed={ov['seed']} {ov['width']}x{ov['height']}")
             try:
-                conds = _encode_override(driver, te_path, ov["prompt"], dit, device, parkable=not swapped)
-                w, h, sd, prompts = ov["width"], ov["height"], ov["seed"], [ov["prompt"]]
-                if lowmem and max(w, h) > 768:
-                    w, h = _cap_canvas(w, h)
+                conds = _encode_override(driver, te_path, ov["prompt"], dit, device, parkable=not swapped,
+                                         references=ref_imgs)
+                sd, prompts = ov["seed"], [ov["prompt"]]
+                if not ref_imgs:        # an edit keeps the reference's canvas: its latents are already encoded
+                    w, h = ov["width"], ov["height"]
+                    if lowmem and max(w, h) > 768:
+                        w, h = _cap_canvas(w, h)
             except Exception:
                 logger.exception("[sample override] could not encode the override prompt - using the configured ones")
                 conds = encoded
@@ -477,7 +517,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                          steps=sample_steps, cfg=sample_cfg_scale, neg=neg, width=w, height=h,
                          seed=sd, ema=ema,
                          speed=speed_desc.settings if (speed_lora and speed_desc) else None, lowmem=lowmem,
-                         swapped=bool(swapped))
+                         swapped=bool(swapped), refs=ref_latents)
         last_prompt[0] = prompts[-1] if prompts else None
 
     def state(epoch):
@@ -505,7 +545,10 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                 continue
             latents = batch["latents"].to(device)
             cond = {k[len("cond__"):]: v.to(device) for k, v in batch.items() if k.startswith("cond__")}
-            loss, _info = driver.training_loss(dit, latents, cond, gen, min_t=min_timestep, max_t=max_timestep)
+            refs = [batch[k].to(device) for k in sorted((k for k in batch if k.startswith("latents_control_")),
+                                                        key=lambda k: int(k.rsplit("_", 1)[1]))]
+            loss, _info = driver.training_loss(dit, latents, cond, gen, min_t=min_timestep, max_t=max_timestep,
+                                               **({"refs": refs} if refs else {}))
             optimizer.zero_grad(set_to_none=True)
             mult = watch.multiplier(batch)     # per-image LR (batch size 1): the raw loss is still what's recorded
             (loss * mult if mult != 1.0 else loss).backward()
@@ -612,6 +655,8 @@ def setup_parser():
     p.add_argument("--sample_negative", default=None)
     p.add_argument("--sample_at_first", action="store_true")
     p.add_argument("--sample_seed", type=int, default=42)
+    p.add_argument("--sample_reference", action="append", default=None,
+                   help="Edit previews: a before-image every preview prompt edits (repeat for several references)")
     for k in ("title", "author", "description", "license", "tags", "trigger_phrase", "thumbnail"):
         p.add_argument(f"--metadata_{k}", default=None)
     p.add_argument("--trigger_word", default=None, help="Recorded as the trigger phrase when none is given")
@@ -661,6 +706,7 @@ def main():
         sample_prompts=prompts, sample_every_n_epochs=a.sample_every_n_epochs, sample_width=a.sample_width,
         sample_height=a.sample_height, sample_steps=a.sample_steps, sample_cfg_scale=a.sample_cfg_scale,
         sample_negative=a.sample_negative, sample_at_first=a.sample_at_first, sample_seed=a.sample_seed,
+        sample_reference=a.sample_reference,
         metadata_title=a.metadata_title, metadata_author=a.metadata_author,
         metadata_description=a.metadata_description, metadata_license=a.metadata_license,
         metadata_tags=a.metadata_tags, metadata_trigger_phrase=a.metadata_trigger_phrase or a.trigger_word,

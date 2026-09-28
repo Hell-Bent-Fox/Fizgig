@@ -6,6 +6,8 @@ Everything Qwen-specific the generic cache/train/preview code needs, behind the 
 * training: flow matching, x_t = (1 - t) x0 + t noise, target = noise - x0, logit-normal t with the checkpoint's
   resolution-dependent exponential shift (the sampler's mu); block-causal joint forward, keep the image tokens
 * sampling: FlowMatch Euler with the reference schedule (sampling.py)
+* edit: reference images go into the text encoder's template as vision tokens (cond["ref_mask"] marks them) and
+  into the DiT sequence as clean latents ahead of the target; the checkpoint is one model for both (up to 10 refs)
 """
 import math
 
@@ -48,6 +50,14 @@ class QwenImage21Driver(FamilyDriver):
         from fizgig.families.quant import free_vram_gb
         return Qwen21TextEncoder(path, device=device, int8=free_vram_gb() < 19.5)
 
+    supports_references = True
+
+    def load_reference_text_encoder(self, path, device):
+        """With its vision tower (about 1 GB more than load_text_encoder's)."""
+        from fizgig.qwen_image21.embedder import Qwen21TextEncoder
+        from fizgig.families.quant import free_vram_gb
+        return Qwen21TextEncoder(path, device=device, int8=free_vram_gb() < 21.0, vision=True)
+
     def unload_text_encoder(self, te):
         te.unload()
 
@@ -66,6 +76,28 @@ class QwenImage21Driver(FamilyDriver):
     def encode_text(self, te, captions):
         return [{"hidden_states": h.to(torch.bfloat16).cpu()} for h in te.encode(captions)]
 
+    @torch.no_grad()
+    def encode_text_with_references(self, te, captions, references):
+        from PIL import Image
+        out = []
+        for cap, imgs in zip(captions, references):
+            h, m = te.encode_with_references(cap, [Image.fromarray(np.ascontiguousarray(a[..., :3])) for a in imgs])
+            out.append({"hidden_states": h.to(torch.bfloat16).cpu(), "ref_mask": m.cpu()})
+        return out
+
+    @staticmethod
+    def _ref_sequence(refs, ref_mask, device):
+        """Packed reference tokens + their img_shapes entries. Each vision token stands for 2x2 latent tokens, so the
+        references' latents must match the size the text encoder saw them at."""
+        refs = [r.float().to(device) for r in refs]
+        n_ref = sum(r.shape[-2] * r.shape[-1] for r in refs)
+        slots = int(ref_mask.sum()) if ref_mask is not None else 0
+        if slots * 4 != n_ref:
+            raise RuntimeError(f"reference size mismatch: the conditioning holds {slots} image tokens for "
+                               f"{n_ref // 4} expected - re-cache the text (Target Megapixels or the before-images "
+                               f"changed since it was cached)")
+        return torch.cat([S.pack(r) for r in refs], dim=1), [(1, r.shape[-2], r.shape[-1]) for r in refs]
+
     # ---- training -------------------------------------------------------------------------------
     @staticmethod
     def _sample_t(n_tokens, generator, min_t, max_t):
@@ -74,7 +106,7 @@ class QwenImage21Driver(FamilyDriver):
         t = math.exp(mu) / (math.exp(mu) + (1.0 / t - 1.0))
         return min_t + (max_t - min_t) * t
 
-    def training_loss(self, dit, latents, cond, generator, *, min_t=0.0, max_t=1.0):
+    def training_loss(self, dit, latents, cond, generator, *, min_t=0.0, max_t=1.0, refs=None):
         device = latents.device
         h, w = latents.shape[-2:]
         n = h * w
@@ -82,9 +114,16 @@ class QwenImage21Driver(FamilyDriver):
         noise = torch.randn(x0.shape, generator=generator).to(device)
         t = self._sample_t(n, generator, min_t, max_t)
         xt = (1 - t) * x0 + t * noise
-        enc, img_mask, enc_mask = S.model_inputs(cond["hidden_states"][0], n, device)
+        ref_mask = cond["ref_mask"][0] if "ref_mask" in cond else None
+        enc, img_mask, enc_mask = S.model_inputs(cond["hidden_states"][0], n, device, ref_mask=ref_mask)
+        shapes = [(1, h, w)]
+        if refs:
+            ref_tokens, ref_shapes = self._ref_sequence(refs, ref_mask, device)
+            xt, shapes = torch.cat([ref_tokens, xt], dim=1), ref_shapes + shapes
+        elif ref_mask is not None and ref_mask.any():
+            raise RuntimeError("edit conditioning without its reference latents - re-cache the latents")
         tt = torch.tensor([t], device=device, dtype=torch.bfloat16)
-        pred = dit(xt.to(torch.bfloat16), enc.to(torch.bfloat16), tt, [[(1, h, w)]], img_mask, enc_mask)[:, -n:]
+        pred = dit(xt.to(torch.bfloat16), enc.to(torch.bfloat16), tt, [shapes], img_mask, enc_mask)[:, -n:]
         return F.mse_loss(pred.float(), noise - x0), {"t": t}
 
     # ---- sampling -------------------------------------------------------------------------------
@@ -94,7 +133,7 @@ class QwenImage21Driver(FamilyDriver):
 
     @torch.no_grad()
     def generate(self, dit, cond, width, height, *, steps, seed, cfg=1.0, neg_cond=None, sigmas=None, options=(),
-                 noise=None, on_step=None):
+                 noise=None, on_step=None, refs=None):
         device = next(dit.parameters()).device
         neg = neg_cond["hidden_states"] if (neg_cond is not None and cfg > 1.0) else None
         neg_mask = neg_cond.get("mask") if neg is not None else None
@@ -104,7 +143,8 @@ class QwenImage21Driver(FamilyDriver):
             sigmas = None                   # an explicit schedule only applies at its own step count
         return S.sample(dit, cond["hidden_states"], height, width, steps=steps, seed=seed, cfg=cfg, neg_emb=neg,
                         device=device, sigmas=sigmas, shift_terminal=shift_terminal, noise=noise, on_step=on_step,
-                        text_mask=cond.get("mask"), neg_mask=neg_mask)
+                        text_mask=cond.get("mask"), neg_mask=neg_mask, ref_latents=refs or None,
+                        ref_mask=cond.get("ref_mask"), neg_ref_mask=neg_cond.get("ref_mask") if neg is not None else None)
 
     def pad_conditioning(self, conds):
         """Pad prompts to one length (zeros) with a mask so they can be blended (prompt travel). The DiT masks the

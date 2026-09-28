@@ -6,6 +6,11 @@
 Uses Fizgig's dataset framework (bucketing, stale-cache cleanup, --skip_existing) exactly like the per-family
 scripts. Latents are stored as `latent_{h}x{w}`; conditioning as `cond__<driver key>` (passed through verbatim by
 the dataset loader and handed back to the driver as the same dict).
+
+Edit pairs (a dataset with `control_directory`, for a driver with supports_references): the before-images are cached
+beside each target as `latent_control_{i}_{h}x{w}`, at the target's bucket, and the text stage encodes every caption
+WITH its before-images at that same size (the text encoder sees the references, and its image tokens must line up
+with their latents). The text cache records that size, so a changed Target Megapixels re-encodes it.
 """
 import argparse
 import logging
@@ -36,19 +41,68 @@ def _clean(t, what, key):
     return t
 
 
-def save_latents(desc, item, latent):
+def save_latents(desc, item, latent, controls=()):
     _, h, w = latent.shape
     os.makedirs(os.path.dirname(item.latent_cache_path), exist_ok=True)
-    save_file({f"latent_{h}x{w}": _clean(latent, "latent", item.item_key)}, item.latent_cache_path, metadata={
+    sd = {f"latent_{h}x{w}": _clean(latent, "latent", item.item_key)}
+    for i, c in enumerate(controls):
+        sd[f"latent_control_{i}_{c.shape[-2]}x{c.shape[-1]}"] = _clean(c, "control latent", item.item_key)
+    save_file(sd, item.latent_cache_path, metadata={
         "architecture": desc.arch_id, "width": str(item.original_size[0]), "height": str(item.original_size[1]),
         "dtype": dtype_to_str(latent.dtype), "format_version": FORMAT_VERSION})
 
 
-def save_cond(desc, item, cond):
+def _ref_sizes(item):
+    """'WxH,WxH' of an item's before-images as cached (the text cache is only valid at these)."""
+    return ",".join(f"{c.shape[1]}x{c.shape[0]}" for c in (item.control_content or []))
+
+
+def save_cond(desc, item, cond, refs=""):
     os.makedirs(os.path.dirname(item.text_encoder_output_cache_path), exist_ok=True)
+    md = {"architecture": desc.arch_id, "caption1": item.caption, "format_version": FORMAT_VERSION}
+    if refs:
+        md["reference_sizes"] = refs
     save_file({f"cond__{k}": _clean(v, k, item.item_key) for k, v in cond.items()},
-              item.text_encoder_output_cache_path,
-              metadata={"architecture": desc.arch_id, "caption1": item.caption, "format_version": FORMAT_VERSION})
+              item.text_encoder_output_cache_path, metadata=md)
+
+
+def _cached_matches(path, caption, refs):
+    """An existing text cache that still fits: same caption and same before-image sizes."""
+    from safetensors import safe_open
+    try:
+        with safe_open(path, framework="pt") as f:
+            md = f.metadata() or {}
+    except Exception:
+        return False
+    return md.get("caption1") == caption and md.get("reference_sizes", "") == refs
+
+
+def _has_controls(path):
+    from safetensors import safe_open
+    try:
+        with safe_open(path, framework="pt") as f:
+            return any(k.startswith("latent_control_") for k in f.keys())
+    except Exception:
+        return False
+
+
+def _encode_text_with_references(args, datasets, driver, te, desc):
+    """The text stage for edit pairs: walks the latent batches (they carry the bucket-sized before-images)."""
+    from fizgig.scripts.cache_text import post_process, prepare_cache_files_and_paths
+    files, paths = prepare_cache_files_and_paths(datasets)
+    workers = args.num_workers if args.num_workers is not None else max(1, os.cpu_count() - 1)
+    for i, ds in enumerate(datasets):
+        logger.info(f"Encoding dataset [{i}] with its before-images")
+        for _, batch in ds.retrieve_latent_cache_batches(workers):
+            for it in batch:
+                p, refs = os.path.normpath(it.text_encoder_output_cache_path), _ref_sizes(it)
+                paths[i].add(p)
+                if args.skip_existing and p in files[i] and _cached_matches(p, it.caption, refs):
+                    continue
+                c = driver.encode_text_with_references(te, [it.caption], [it.control_content])[0]
+                logger.info(f"text cache: {it.item_key} with {len(it.control_content)} before-image(s) at {refs}")
+                save_cond(desc, it, c, refs)
+    post_process(datasets, files, paths, args.keep_cache)
 
 
 def main():
@@ -74,19 +128,31 @@ def main():
     blueprint = BlueprintGenerator(ConfigSanitizer()).generate(load_user_config(args.dataset_config), args,
                                                                architecture=desc.arch_id)
     datasets = generate_dataset_group_by_blueprint(blueprint.dataset_group).datasets
+    pairs = any(getattr(ds, "has_control", False) for ds in datasets)
+    if pairs and not driver.supports_references:
+        raise SystemExit(f"{desc.display_name} has no edit training: remove control_directory from the dataset")
 
     if args.stage == "latents":
         from fizgig.scripts.cache_latents import encode_datasets
         vae = driver.load_vae(args.model, device)
+        if pairs:       # a cache from before the pairs were added has no before-image latents: re-encode it
+            args.needs_reencode = lambda path: not _has_controls(path)
 
         def encode(batch):
             imgs = [(it.content[0] if isinstance(it.content, list) else it.content) for it in batch]
             for it, z in zip(batch, driver.encode_images(vae, imgs)):
-                logger.info(f"latent cache: {it.item_key} -> {tuple(z.shape)}")
-                save_latents(desc, it, z)
+                ctrl = driver.encode_images(vae, it.control_content) if it.control_content else []
+                logger.info(f"latent cache: {it.item_key} -> {tuple(z.shape)}"
+                            + (f" + {len(ctrl)} before-image(s)" if ctrl else ""))
+                save_latents(desc, it, z, ctrl)
         encode_datasets(datasets, encode, args)
     else:
         from fizgig.scripts.cache_text import post_process, prepare_cache_files_and_paths, process_batches
+        if pairs:
+            te = driver.load_reference_text_encoder(args.model, device)
+            _encode_text_with_references(args, datasets, driver, te, desc)
+            driver.unload_text_encoder(te)
+            return
         if args.batch_size is None:
             args.batch_size = 8
         files, paths = prepare_cache_files_and_paths(datasets)
