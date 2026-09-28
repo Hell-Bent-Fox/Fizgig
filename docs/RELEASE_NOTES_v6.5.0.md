@@ -65,12 +65,9 @@ Every epoch is saved, so if a later epoch starts to look softer than you'd like,
 
 On an RTX 5090 limited to 12 GB, the Fast preset trained on INT8 with no block swap and a 9.9 GB peak, previews included. Limited to 10 GB, it trained on 4-bit NF4 with a 7.3 GB peak. Real 10 and 12 GB cards make the same choices but run slower than the 5090's 0.9 to 1 s per step.
 
-## Tip: Viggle turbo below full strength in ComfyUI
+## A note on the Qwen turbo LoRA
 
-In our ComfyUI tests, running Viggle's turbo LoRA below full strength (around 0.7) and giving it more steps than its default 6 gives much better results. This holds with or without a Fizgig LoRA loaded, so it's worth trying on any Qwen Image 2.1 workflow that uses the turbo.
-
-Fizgig's Qwen training previews now use this by default: the turbo at 0.7 for 10 steps. The Samples tab has a new **Turbo strength** box beside the step count if you want to change either.
-
+Fizgig uses Viggle's current turbo LoRA for Qwen samples, at 6 steps and strength 1.0 (I've just updated Fizgig to that setting). That turbo isn't mature yet: it sometimes produces body horror that the same seed and prompt don't show without it. For now I'd almost recommend setting **Turbo strength to 0** and **steps to 25** in the Samples tab for Qwen. I'm also training my own turbo, and I'm sure Viggle's will improve over time too.
 
 ## The download button fetches everything for Qwen
 
