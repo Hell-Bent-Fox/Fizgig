@@ -49,11 +49,14 @@ def unpack(latents: torch.Tensor, h: int, w: int) -> torch.Tensor:
     return latents.transpose(1, 2).reshape(b, c, 1, h, w)
 
 
-def model_inputs(text_emb: torch.Tensor, n_tokens: int, device, text_mask=None):
-    """Batch-1 text-to-image conditioning tensors for QwenImage21DiT.forward from one [L, 4096] embedding.
-    text_mask: optional [L] bool marking real tokens (padded prompts, e.g. prompt travel); default all real."""
+def model_inputs(text_emb: torch.Tensor, n_tokens: int, device, text_mask=None, ref_mask=None):
+    """Batch-1 conditioning tensors for QwenImage21DiT.forward from one [L, 4096] embedding.
+    text_mask: optional [L] bool marking real tokens (padded prompts, e.g. prompt travel); default all real.
+    ref_mask: optional [L] bool marking reference images' vision tokens (edit), whose rows the DiT replaces with the
+    references' latents (IMG_TOKENS_PER_SLOT latent tokens per vision token)."""
     L = text_emb.shape[0]
-    img_mask = torch.cat([torch.zeros(L, dtype=torch.bool), torch.ones(n_tokens // 4, dtype=torch.bool)])[None]
+    txt_img = torch.zeros(L, dtype=torch.bool) if ref_mask is None else ref_mask.to(torch.bool).cpu()
+    img_mask = torch.cat([txt_img, torch.ones(n_tokens // 4, dtype=torch.bool)])[None]
     enc_mask = torch.ones(1, L, dtype=torch.bool) if text_mask is None else text_mask.reshape(1, L)
     return text_emb[None].to(device), img_mask.to(device), enc_mask.to(device)
 
@@ -61,7 +64,7 @@ def model_inputs(text_emb: torch.Tensor, n_tokens: int, device, text_mask=None):
 @torch.no_grad()
 def sample(dit, text_emb, height, width, steps=25, seed=0, sigmas=None, shift_terminal=SHIFT_TERMINAL,
            cfg=1.0, neg_emb=None, device="cuda", dtype=torch.bfloat16, generator_device="cpu", noise=None,
-           on_step=None, text_mask=None, neg_mask=None):
+           on_step=None, text_mask=None, neg_mask=None, ref_latents=None, ref_mask=None, neg_ref_mask=None):
     """Denoise one image; returns packed latents [1, N, 64] in float32. noise: a [1, 64, h, w] start (seed travel)
     instead of the seed's; on_step(done, total) is called before each step and may raise to abort."""
     h, w = latent_hw(height, width)
@@ -70,18 +73,21 @@ def sample(dit, text_emb, height, width, steps=25, seed=0, sigmas=None, shift_te
         noise = initial_noise(seed, height, width, generator_device)
     x = noise.float().to(device).reshape(1, 64, n).transpose(1, 2).contiguous()   # reference pack
     sched = sigma_schedule(steps, n, sigmas, shift_terminal).to(device)
-    enc, img_mask, enc_mask = model_inputs(text_emb, n, device, text_mask)
+    enc, img_mask, enc_mask = model_inputs(text_emb, n, device, text_mask, ref_mask)
     if cfg > 1.0 and neg_emb is not None:
-        nenc, nmask, nenc_mask = model_inputs(neg_emb, n, device, neg_mask)
-    shapes = [[(1, h, w)]]
+        nenc, nmask, nenc_mask = model_inputs(neg_emb, n, device, neg_mask, neg_ref_mask)
+    refs = [r.float().to(device) for r in (ref_latents or [])]        # each [1, 64, rh, rw], clean
+    ref_tokens = torch.cat([pack(r) for r in refs], dim=1) if refs else None
+    shapes = [[(1, r.shape[-2], r.shape[-1]) for r in refs] + [(1, h, w)]]
     for i in range(len(sched) - 1):
         if on_step is not None:
             on_step(i, len(sched) - 1)
         s, s_next = sched[i], sched[i + 1]
         t = s.view(1).to(dtype)
-        v = dit(x.to(dtype), enc.to(dtype), t, shapes, img_mask, enc_mask)[:, -n:].float()
+        xin = x if ref_tokens is None else torch.cat([ref_tokens, x], dim=1)
+        v = dit(xin.to(dtype), enc.to(dtype), t, shapes, img_mask, enc_mask)[:, -n:].float()
         if cfg > 1.0 and neg_emb is not None:
-            vn = dit(x.to(dtype), nenc.to(dtype), t, shapes, nmask, nenc_mask)[:, -n:].float()
+            vn = dit(xin.to(dtype), nenc.to(dtype), t, shapes, nmask, nenc_mask)[:, -n:].float()
             v = vn + cfg * (v - vn)
         x = x + (s_next - s) * v
     return x

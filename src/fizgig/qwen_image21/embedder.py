@@ -74,9 +74,9 @@ def _int8_weights(model, prefix, device):
 
 class Qwen21TextEncoder:
     def __init__(self, model_path, tokenizer_dir=None, device="cuda", dtype=torch.bfloat16, config_path=None,
-                 int8=False):
-        """Text encoding only: the LM head and the vision tower are dropped at load (about 1.8 GB that encoding never
-        uses; captioning is the shared Krea 2 captioner's job). int8: the language model's Linears as INT8 (about 8 GB
+                 int8=False, vision=False):
+        """The LM head is dropped at load (captioning is the shared Krea 2 captioner's job), and the vision tower too
+        unless `vision` (edit training: reference images are encoded with the prompt, see encode_with_references). int8: the language model's Linears as INT8 (about 8 GB
         in all instead of 16), for cards that cannot hold the bf16 encoder - small enough for a 10 GB card. Quantised
         one Linear at a time from CPU, so the bf16 model is never resident."""
         from accelerate import init_empty_weights
@@ -100,7 +100,9 @@ class Qwen21TextEncoder:
             raise RuntimeError(f"Qwen3-VL-8B checkpoint mismatch: missing={info.missing_keys[:8]}, "
                                f"unexpected={info.unexpected_keys[:8]}")
         model.lm_head = None
-        model.model.visual = None
+        if not vision:
+            model.model.visual = None
+        self.vision = vision
         del sd
         if int8:
             n = _int8_weights(model, "language_model.layers.", self.device)
@@ -131,6 +133,33 @@ class Qwen21TextEncoder:
         for h, m in zip(hs, tok.attention_mask.bool()):
             res.append(h[m][self.drop_idx:].to("cpu"))
         return res
+
+    @torch.no_grad()
+    def encode_with_references(self, prompt, images):
+        """Edit conditioning: the prompt with its reference images in the template (<imageN> + a vision block per image
+        before the prompt, as the reference pipeline and ComfyUI build it). `images` are PIL RGB images already at
+        multiples of 32 px (the same size their VAE latents use, so each vision token covers 2x2 latent tokens).
+        -> ([L, 4096] hidden states on CPU, [L] bool True at the reference images' vision tokens)."""
+        if not self.vision:
+            raise RuntimeError("this Qwen3-VL encoder was loaded without its vision tower (vision=False)")
+        from transformers import Qwen3VLProcessor
+        if getattr(self, "_processor", None) is None:
+            self._processor = Qwen3VLProcessor.from_pretrained(TOKENIZER_REPO, subfolder="processor")
+        refs = " ".join(f"<image{i + 1}><|vision_start|><|image_pad|><|vision_end|>" for i in range(len(images)))
+        text = TEMPLATE_T2I.format(refs + (prompt if prompt else " "))
+        inputs = self._processor(text=[text], images=list(images), return_tensors="pt",
+                                 images_kwargs={"do_resize": False}).to(self.device)
+        lm = getattr(self.model.model, "language_model", self.model.model)
+        handle = lm.norm.register_forward_hook(lambda m, args, out: args[0])
+        try:
+            out = self.model.model(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"],
+                                   pixel_values=inputs["pixel_values"].to(self.dtype),
+                                   image_grid_thw=inputs["image_grid_thw"], output_hidden_states=True)
+        finally:
+            handle.remove()
+        pad_id = self._processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
+        ids = inputs["input_ids"][0][self.drop_idx:]
+        return out.hidden_states[-1][0][self.drop_idx:].to("cpu"), (ids == pad_id).to("cpu")
 
     def unload(self):
         self.model.to("cpu")
