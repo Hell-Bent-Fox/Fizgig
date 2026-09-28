@@ -94,7 +94,7 @@ def _save_state(output_dir, output_name, net, optimizer, *, epoch, global_step, 
 
 
 def _load_state(state_dir, net, optimizer, device):
-    for need in ("lora.safetensors", "training_state.json"):
+    for need in ("lora.safetensors", "optimizer.pt", "training_state.json"):
         if not os.path.isfile(os.path.join(state_dir, need)):
             raise RuntimeError(f"[resume] {state_dir} is not a saved training state (missing {need}). Pick the "
                                f"folder named like '<lora name>-000012-state'.")
@@ -357,6 +357,14 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                     f"({n} Linears)")
     if speed_lora and encoded is not None:
         n = net.add_file(speed_lora, SPEED, desc.preview_speed_defaults()[1] if speed_lora_strength is None else speed_lora_strength)
+    if speed_lora and encoded is not None and n == 0:
+        net.remove(SPEED)
+        logger.warning(f"[sample] {os.path.basename(speed_lora)} matched no {desc.display_name} layers "
+                       f"(a turbo LoRA for another model?) - previews render without it, at "
+                       f"{desc.preview_steps} steps")
+        speed_lora = None
+        sample_steps = desc.preview_steps
+    elif speed_lora and encoded is not None:
         net.set_enabled(SPEED, False)
         net.move_adapter(SPEED, "cpu")
         logger.info(f"[sample] {speed_desc.name}: {n} Linears, on CPU between previews, on only while they render "
