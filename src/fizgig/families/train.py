@@ -281,7 +281,11 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     if speed_lora and speed_desc is None:
         logger.warning(f"[sample] {desc.display_name} declares no preview speed LoRA - ignoring --speed_lora")
         speed_lora = None
-    sample_steps = sample_steps or (desc.preview_speed_defaults()[0] if speed_desc else desc.preview_steps)
+    if speed_desc is not None and speed_lora_strength is not None and speed_lora_strength <= 0:
+        logger.info(f"[sample] {speed_desc.name} at strength 0 - previews render without it")
+        speed_lora = speed_desc = None
+    # --speed_lora on its own means the turbo's own recipe (strength, steps); the GUI passes its Samples-tab values
+    sample_steps = sample_steps or (speed_desc.settings.steps if speed_desc else desc.preview_steps)
     sample_cfg_scale = desc.preview_cfg if sample_cfg_scale is None else sample_cfg_scale
     sample_width = sample_width or desc.preview_width
     sample_height = sample_height or desc.preview_height
@@ -356,7 +360,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         logger.info(f"[context] {os.path.basename(context_lora_path)} frozen + active at {context_lora_strength:g} "
                     f"({n} Linears)")
     if speed_lora and encoded is not None:
-        n = net.add_file(speed_lora, SPEED, desc.preview_speed_defaults()[1] if speed_lora_strength is None else speed_lora_strength)
+        n = net.add_file(speed_lora, SPEED, speed_desc.strength if speed_lora_strength is None else speed_lora_strength)
     if speed_lora and encoded is not None and n == 0:
         net.remove(SPEED)
         logger.warning(f"[sample] {os.path.basename(speed_lora)} matched no {desc.display_name} layers "
@@ -368,7 +372,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         net.set_enabled(SPEED, False)
         net.move_adapter(SPEED, "cpu")
         logger.info(f"[sample] {speed_desc.name}: {n} Linears, on CPU between previews, on only while they render "
-                    f"({sample_steps} steps, strength {desc.preview_speed_defaults()[1] if speed_lora_strength is None else speed_lora_strength:g})")
+                    f"({sample_steps} steps, strength {speed_desc.strength if speed_lora_strength is None else speed_lora_strength:g})")
     if network_type == "lokr" and "lokr" not in desc.network_types:
         raise RuntimeError(f"{desc.display_name} does not offer LoKR")
     net.add_trainable(network_dim, network_alpha, kind=network_type, factor=lokr_factor)

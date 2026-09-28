@@ -60,7 +60,7 @@ The text encoder only encodes, and loads in 8-bit below about 20 GB free (about 
 
 ## Previews and the turbo LoRA
 
-With Viggle's turbo LoRA set in Preferences, training previews render at its own settings: **strength 1.0 for 6 steps**. The Samples tab's **Turbo strength** box and step count change either. Without the turbo, previews render at 25 steps. The training adapter is off for previews; a Context LoRA stays on.
+Training previews render on the plain model at **25 steps** by default, with the Samples tab's **Turbo strength** at 0. For faster previews, set Turbo strength to **1.0** and steps to **6**: that renders them with Viggle's turbo LoRA (set in Preferences). The training adapter is off for previews; a Context LoRA stays on.
 
 ## The per-image loss watch
 
