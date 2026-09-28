@@ -157,6 +157,7 @@ QWEN_IMAGE_21 = FamilyDescription(
     # steps (Krea 2 pattern: live training model, family turbo LoRA, no model swap). The turbo runs at its own
     # 1.0 / 6 steps (Peter, 28 Sep).
     preview_speed_lora="Viggle turbo v0.2.1 (6-step)",
+    retired_preview_defaults=((10, 0.7),),    # v6.5.0 shipped the turbo at 0.7 for 10 steps
     preview_steps=25,
     preview_cfg=1.0,
     preview_width=1024,

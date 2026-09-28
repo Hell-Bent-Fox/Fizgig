@@ -143,6 +143,9 @@ class FamilyDescription:
     preview_speed_lora: str = ""      # name of the SpeedLoRA previews use when its file is set in Preferences
     preview_speed_steps: int = 0      # preview steps with it (0 = the SpeedLoRA's own)
     preview_speed_strength: float = 0.0   # preview strength for it (0 = the SpeedLoRA's own)
+    # (steps, strength) preview defaults an older release shipped; the Samples tab replaces them with the current
+    # ones, so a setting saved under the old default moves on instead of sticking
+    retired_preview_defaults: tuple = ()
 
     # built-in Training-tab presets: ((name, {GUI setting key: value}), ...); the first is applied on a first visit
     presets: tuple = ()

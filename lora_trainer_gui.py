@@ -13559,6 +13559,21 @@ class LoRATrainerGUI:
         sp_steps, sp_strength = desc.preview_speed_defaults() or (None, None)
         want = sp_steps if speed_on else desc.preview_steps
         other = desc.preview_steps if speed_on else sp_steps
+        # A family's retired turbo defaults (desc.retired_preview_defaults) are replaced too, so settings saved by an
+        # older release move to the current default instead of sticking.
+        _old_steps = {str(s) for s, _ in getattr(desc, "retired_preview_defaults", ())}
+        _old_strengths = {f"{float(v):g}" for _, v in getattr(desc, "retired_preview_defaults", ())}
+        if speed_on and self.sample_steps_var.get().strip() in _old_steps:
+            self.sample_steps_var.set(str(want))
+        if speed_on and hasattr(self, "_family_turbo_label"):
+            _e = self.entries["FAMILY_TURBO_STRENGTH"]
+            try:
+                _cur = f"{float(_e.get().strip()):g}"
+            except ValueError:
+                _cur = ""
+            if _cur in _old_strengths:
+                _e.delete(0, tk.END)
+                _e.insert(0, f"{sp_strength:g}")
         if hasattr(self, "sample_steps_var") and self.sample_steps_var.get().strip() in ("", str(other)):
             self.sample_steps_var.set(str(want))       # only switch between the two defaults, never a user value
         if hasattr(self, "_family_turbo_label"):
@@ -20500,6 +20515,12 @@ class LoRATrainerGUI:
             self.prefs.update(fresh)
         except Exception:
             pass
+        # A freshly downloaded turbo LoRA changes the Samples tab's default steps (standard-layer families).
+        if self._family_desc() is not None:
+            try:
+                self._generic_samples_ui(self._family_desc())
+            except Exception:
+                pass
         status = getattr(self, f"_fetch_status_{family}", None)
         if status:
             status.config(text="done — paths filled in" if ok else "finished with items missing (see console)",
@@ -33656,6 +33677,12 @@ class LoRATrainerGUI:
         if trig and trig.lower() != "trigger_word":
             cmd += ["--metadata_trigger_phrase", trig]
         if self.sample_enabled_var.get():
+            # Re-check the turbo file now: set or downloaded since the Samples tab last refreshed, its default steps
+            # would otherwise be missed (swaps only between the two defaults, never a typed value).
+            try:
+                self._generic_samples_ui(desc)
+            except Exception:
+                pass
             sp = desc.preview_speed()
             speed_path = self._krea2_pref(sp.pref_key) if sp and sp.pref_key else ""
             if speed_path and os.path.exists(speed_path):
