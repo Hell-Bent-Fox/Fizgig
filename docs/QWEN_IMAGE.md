@@ -64,12 +64,12 @@ With Viggle's turbo LoRA set in Preferences, training previews render at its own
 
 Qwen Image 2.1 is one model for text-to-image and editing, so a LoRA can learn a change: a grade, a style, a relight, a retouch. You give it pairs of the same picture before and after the change.
 
-1. Put the **after** images in the Start tab's folder and the **before** images in a second folder with the same file names. `photo.png` pairs with `photo.png`; `photo_0.png` and `photo_1.png` give one after-image two before-images.
+1. Put the **after** images in the Start tab's folder and the **before** images in a second folder with the same file names. `photo.png` pairs with `photo.png`. Several before-images per after-image (`photo_0.png`, `photo_1.png`) also train, but that is experimental: in our tests a two-image edit learned far less than a one-image edit from the same number of pairs.
 2. Caption each after-image with the instruction, e.g. "Make it a pencil sketch." The same instruction on every pair is fine for a single edit.
 3. On the Training tab, tick **Edit LoRA** under Training Parameters and set the **Before-images folder**. Start refuses to run if any after-image is missing its before-image.
 4. Previews edit the **Preview photo**, or the first before-image if you leave it empty. A photo from outside the dataset shows whether the edit carries over.
 
-In ComfyUI, load the LoRA as usual and use **Text Encode Qwen Image 2.1**: connect the VAE, plug the photo to edit into its first image input, write the instruction as the prompt, and sample from the node's **latent** output so the result keeps the photo's shape.
+In ComfyUI, load the LoRA as usual and use **Text Encode Qwen Image 2.1**: connect the VAE, plug the photo to edit into its first image input, write the instruction as the prompt, and sample from the node's **latent** output so the result keeps the photo's shape. The node's **resolution** works best near the size the LoRA trained at: in our tests an edit LoRA trained at 0.5 MP matched its Fizgig previews at resolution 768 and came out slightly less exact at the default 1024.
 
 In our tests, 40 pairs of a colour grade at 0.59 MP with rank 16 learned the grade on held-out photos within 6 epochs, about 8 minutes on an RTX 5090. Faces, poses and framing came through unchanged. Turbo previews score the same as 25-step ones, so they are a fair guide to an edit LoRA too.
 
