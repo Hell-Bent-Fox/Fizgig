@@ -5515,7 +5515,8 @@ class LoRATrainerGUI:
         self.entries["FAMILY_EDIT"] = tk.BooleanVar(value=bool(self.settings.get("FAMILY_EDIT", False)))
         self._family_edit_cb = ttk.Checkbutton(
             training_content, text="Edit LoRA (learn a change from before/after pairs)",
-            variable=self.entries["FAMILY_EDIT"], command=lambda: self._family_edit_rows())
+            variable=self.entries["FAMILY_EDIT"])
+        self.entries["FAMILY_EDIT"].trace_add("write", lambda *_: self._family_edit_rows())   # presets set it too
         self._family_edit_cb.grid(row=54, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(10, 0))
         self._family_edit_frame = ttk.Frame(training_content)
         self._family_edit_frame.grid(row=55, column=0, columnspan=2, sticky=tk.W, padx=(21, 5), pady=(4, 0))
@@ -7464,6 +7465,8 @@ class LoRATrainerGUI:
 
     def _family_edit_rows(self):
         """The before-images rows show only while Edit LoRA is ticked."""
+        if getattr(self, "_family_edit_hint", None) is None:
+            return                      # a preset set the var before the rows were built
         desc = self._family_desc()
         can = bool(desc is not None and desc.edit_training)
         self._set_widget_visible(self._family_edit_cb, can)
