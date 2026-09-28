@@ -64,7 +64,7 @@ With Viggle's turbo LoRA set in Preferences, training previews render at its own
 
 Qwen Image 2.1 is one model for text-to-image and editing, so a LoRA can learn a change: a grade, a style, a relight, a retouch. You give it pairs of the same picture before and after the change.
 
-1. Put the **after** images in the Start tab's folder and the **before** images in a second folder with the same file names. `photo.png` pairs with `photo.png`. Several before-images per after-image (`photo_0.png`, `photo_1.png`) also train, but that is experimental: in our tests a two-image edit learned far less than a one-image edit from the same number of pairs.
+1. Put the **after** images in the Start tab's folder and the **before** images in a second folder with the same file names. `photo.png` pairs with `photo.png`, one before-image per after-image.
 2. Caption each after-image with the instruction, e.g. "Make it a pencil sketch." The same instruction on every pair is fine for a single edit.
 3. On the Training tab, tick **Edit LoRA** under Training Parameters and set the **Before-images folder**. Start refuses to run if any after-image is missing its before-image.
 4. Previews edit the **Preview photo**, or the first before-image if you leave it empty. A photo from outside the dataset shows whether the edit carries over.

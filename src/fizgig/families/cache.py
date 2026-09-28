@@ -7,7 +7,8 @@ Uses Fizgig's dataset framework (bucketing, stale-cache cleanup, --skip_existing
 scripts. Latents are stored as `latent_{h}x{w}`; conditioning as `cond__<driver key>` (passed through verbatim by
 the dataset loader and handed back to the driver as the same dict).
 
-Edit pairs (a dataset with `control_directory`, for a driver with supports_references): the before-images are cached
+Edit pairs (a dataset with `control_directory`, for a driver with supports_references; one before-image per
+after-image): the before-images are cached
 beside each target as `latent_control_{i}_{h}x{w}`, at the target's bucket, and the text stage encodes every caption
 WITH its before-images at that same size (the text encoder sees the references, and its image tokens must line up
 with their latents). The text cache records that size, so a changed Target Megapixels re-encodes it.
@@ -131,6 +132,11 @@ def main():
     pairs = any(getattr(ds, "has_control", False) for ds in datasets)
     if pairs and not driver.supports_references:
         raise SystemExit(f"{desc.display_name} has no edit training: remove control_directory from the dataset")
+    for ds in datasets:        # edit training is one before-image per after-image
+        many = [os.path.basename(p) for p, m in getattr(ds.datasource, "control_paths", {}).items() if len(m) > 1]
+        if many:
+            raise SystemExit(f"{len(many)} after-image(s) match more than one before-image (e.g. {', '.join(many[:3])}): "
+                             f"keep one before-image per after-image, named the same")
 
     if args.stage == "latents":
         from fizgig.scripts.cache_latents import encode_datasets

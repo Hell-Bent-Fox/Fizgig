@@ -5531,8 +5531,7 @@ class LoRATrainerGUI:
         self._family_edit_hint = ttk.Label(
             training_content,
             text="The Start folder holds the AFTER images; this folder holds the BEFORE images with the same file "
-                 "names (photo.png pairs with photo.png; photo_0.png, photo_1.png give one after-image several "
-                 "before-images). Each caption is the instruction, e.g. \"Make it a pencil sketch.\" Previews edit "
+                 "names (photo.png pairs with photo.png), one before-image per after-image. Each caption is the instruction, e.g. \"Make it a pencil sketch.\" Previews edit "
                  "the preview photo, or the first before-image when that is empty - pick a photo that is NOT in the "
                  "dataset to see whether the edit carries over.",
             foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT, wraplength=720)
@@ -7489,28 +7488,24 @@ class LoRATrainerGUI:
     _EDIT_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
 
     def _family_edit_pairs(self):
-        """(after-images without a before-image, first before-image path) for the Start folder and the
-        before-images folder, matched the way the dataset loader matches them (name, or name_N)."""
+        """(after-images without a before-image, after-images with more than one, first before-image path) for the
+        Start folder and the before-images folder, matched the way the dataset loader matches them: a before-image
+        belongs to photo.png when it is photo.<ext> or photo_<anything>.<ext>."""
         after_dir = self.image_folder_var.get().strip()
         before_dir = self.entries["FAMILY_EDIT_DIR"].get().strip()
-        stems = {}
-        for f in sorted(os.listdir(before_dir)):
-            b, e = os.path.splitext(f)
-            if e.lower() in self._EDIT_EXTS:
-                stems.setdefault(b, os.path.join(before_dir, f))
-                base, _, n = b.rpartition("_")
-                if base and n.isdigit():
-                    stems.setdefault(base, os.path.join(before_dir, f))
-        missing, first = [], None
+        befores = sorted(f for f in os.listdir(before_dir) if os.path.splitext(f)[1].lower() in self._EDIT_EXTS)
+        missing, multiple, first = [], [], None
         for f in sorted(os.listdir(after_dir)):
             b, e = os.path.splitext(f)
             if e.lower() not in self._EDIT_EXTS:
                 continue
-            if b in stems:
-                first = first or stems[b]
-            else:
+            m = [x for x in befores if x.startswith(b + ".") or x.startswith(b + "_")]
+            if not m:
                 missing.append(f)
-        return missing, first
+            elif len(m) > 1:
+                multiple.append(f)
+            first = first or (os.path.join(before_dir, m[0]) if m else None)
+        return missing, multiple, first
 
     def _generic_validate_paths(self, desc):
         """Standard layer: every required model file of a described family (plus its training adapter when the
@@ -7522,10 +7517,14 @@ class LoRATrainerGUI:
             if not before or not os.path.isdir(before):
                 errors.append("Edit LoRA is on: set the Before-images folder (Training tab, Training Parameters)")
             elif os.path.isdir(self.image_folder_var.get().strip()):
-                missing, _ = self._family_edit_pairs()
+                missing, multiple, _ = self._family_edit_pairs()
                 if missing:
                     errors.append(f"Edit LoRA: {len(missing)} image(s) in the Start folder have no before-image of the "
                                   f"same name in {before} (e.g. {', '.join(missing[:3])})")
+                if multiple:
+                    errors.append(f"Edit LoRA: {len(multiple)} image(s) in the Start folder match more than one "
+                                  f"before-image (e.g. {', '.join(multiple[:3])}) - keep one before-image per "
+                                  f"after-image, named the same")
             if ref and not os.path.isfile(ref):
                 errors.append(f"Edit LoRA preview photo does not exist: {ref}")
         need = [f for f in desc.model_files if f.required]
@@ -33822,7 +33821,7 @@ class LoRATrainerGUI:
                     ref = (st.get("FAMILY_EDIT_REF") or "").strip()
                     if not ref:
                         try:
-                            ref = self._family_edit_pairs()[1] or ""
+                            ref = self._family_edit_pairs()[2] or ""
                         except OSError:
                             ref = ""
                     if ref:

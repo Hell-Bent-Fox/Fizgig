@@ -655,8 +655,7 @@ def setup_parser():
     p.add_argument("--sample_negative", default=None)
     p.add_argument("--sample_at_first", action="store_true")
     p.add_argument("--sample_seed", type=int, default=42)
-    p.add_argument("--sample_reference", action="append", default=None,
-                   help="Edit previews: a before-image every preview prompt edits (repeat for several references)")
+    p.add_argument("--sample_reference", default=None, help="Edit previews: the photo every preview prompt edits")
     for k in ("title", "author", "description", "license", "tags", "trigger_phrase", "thumbnail"):
         p.add_argument(f"--metadata_{k}", default=None)
     p.add_argument("--trigger_word", default=None, help="Recorded as the trigger phrase when none is given")
@@ -706,7 +705,7 @@ def main():
         sample_prompts=prompts, sample_every_n_epochs=a.sample_every_n_epochs, sample_width=a.sample_width,
         sample_height=a.sample_height, sample_steps=a.sample_steps, sample_cfg_scale=a.sample_cfg_scale,
         sample_negative=a.sample_negative, sample_at_first=a.sample_at_first, sample_seed=a.sample_seed,
-        sample_reference=a.sample_reference,
+        sample_reference=[a.sample_reference] if a.sample_reference else None,
         metadata_title=a.metadata_title, metadata_author=a.metadata_author,
         metadata_description=a.metadata_description, metadata_license=a.metadata_license,
         metadata_tags=a.metadata_tags, metadata_trigger_phrase=a.metadata_trigger_phrase or a.trigger_word,
