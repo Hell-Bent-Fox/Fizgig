@@ -4909,7 +4909,20 @@ class LoRATrainerGUI:
                   foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT, wraplength=720).pack(
             anchor=tk.W)
         self._clip_mp_frame = ttk.Frame(_mp_block)
-        ttk.Label(self._clip_mp_frame, text="Clip Target Megapixels:").pack(side=tk.LEFT, padx=(0, 10))
+        self._clip_mp_labelbox = tk.Frame(self._clip_mp_frame, height=1, bg=COLORS["bg_surface"])
+        self._clip_mp_labelbox.pack(side=tk.LEFT, fill=tk.Y)
+        self._clip_mp_labelbox.pack_propagate(False)       # width set to line the box up with Target MP's
+
+        def _clip_mp_align(_e=None):
+            try:
+                px = self._mp_combo.winfo_rootx() - self._clip_mp_frame.winfo_rootx()
+                if px > 0 and px != self._clip_mp_labelbox.winfo_reqwidth():
+                    self._clip_mp_labelbox.configure(width=px)
+            except tk.TclError:
+                pass
+        self._clip_mp_frame.bind("<Map>", lambda e: self._clip_mp_frame.after(20, _clip_mp_align))
+        self._clip_mp_frame.bind("<Configure>", _clip_mp_align)
+        ttk.Label(self._clip_mp_labelbox, text="Clip Target Megapixels:").pack(side=tk.LEFT)
         ttk.Combobox(self._clip_mp_frame, textvariable=self.clip_megapixels_var,
                      values=["0.25", "0.37", "0.5", "0.75", "1.0", "1.5", "2.0", "2.4", "3.0", "4.2"],
                      width=8).pack(side=tk.LEFT)
@@ -11459,6 +11472,8 @@ class LoRATrainerGUI:
                     if not self._clip_mp_frame.winfo_manager():
                         self._clip_mp_frame.pack(anchor=tk.W, pady=(8, 2))
                         self._clip_mp_hint.pack(anchor=tk.W)
+
+
                 else:
                     self._clip_mp_frame.pack_forget()
                     self._clip_mp_hint.pack_forget()
