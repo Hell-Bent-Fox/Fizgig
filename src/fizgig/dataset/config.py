@@ -66,6 +66,7 @@ class BaseDatasetParams:
     cache_directory: Optional[str] = None
     debug_dataset: bool = False
     architecture: str = "no_default"
+    clip_megapixels: Optional[float] = None
 
 
 @dataclass
@@ -128,6 +129,8 @@ class ConfigSanitizer:
         ),
         "enable_bucket": bool,
         "bucket_no_upscale": bool,
+        # MiniMax H3: clips are cached and trained at this size or smaller, photos at resolution
+        "clip_megapixels": Any(int, float),
     }
 
     # Fields specific to an image dataset entry

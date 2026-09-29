@@ -2014,6 +2014,8 @@ class LoRATrainerGUI:
         self.dataset_caption_ext_var = tk.StringVar(value=".txt")
         self.dataset_jsonl_file_var = tk.StringVar()
         self.dataset_megapixels_var = tk.StringVar(value="0.25")
+        # MiniMax H3, datasets with clips: clips cache and train at this size or smaller
+        self.clip_megapixels_var = tk.StringVar(value="0.25")
         # Image Prep's target area. Training buckets by AREA and never upscales, so prepping to a
         # longest-edge cap silently pushed every non-square image below the training target and
         # threw away detail training could not get back (issue #44). Defaults to 1.0 MP — NOT the
@@ -2069,7 +2071,8 @@ class LoRATrainerGUI:
                 self.auto_save_dataset_config_silent()
         for _v in (self.image_folder_var, self.dataset_caption_ext_var,
                    self.dataset_megapixels_var, self.dataset_batch_size_var,
-                   self.dataset_enable_bucket_var, self.dataset_no_upscale_var):
+                   self.dataset_enable_bucket_var, self.dataset_no_upscale_var,
+                   self.clip_megapixels_var):
             _v.trace_add("write", _auto_save_ds)
         # Multi Concept adds [[datasets]] blocks, so its toggle and folders have to rewrite the
         # TOML too — they are created later (Training tab), hence the deferred hook-up.
@@ -4895,12 +4898,30 @@ class LoRATrainerGUI:
                        "example: 512² = 512×512 pixels, or any other width × height with a similar pixel area",
                   foreground=COLORS["text_explain"], font=(FONT_FAMILY, 9), wraplength=620,
                   justify=tk.LEFT).pack(side=tk.LEFT)
-        ttk.Label(training_content,
+        # Row 17 holds the hint and, under it, the Clip Target Megapixels row (MiniMax H3 with clips
+        # in the dataset only; rows 18/19 are Network Type's).
+        _mp_block = ttk.Frame(training_content)
+        _mp_block.grid(row=17, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(0, 4))
+        ttk.Label(_mp_block,
                   text="Images are resized to this area. Any aspect ratio, no additional prep needed "
                        "beyond the Image Prep tab. Higher = more detail, more VRAM per step; 4.2 MP "
                        "wants 24-32 GB.",
-                  foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT, wraplength=720).grid(
-            row=17, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(0, 4))
+                  foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT, wraplength=720).pack(
+            anchor=tk.W)
+        self._clip_mp_frame = ttk.Frame(_mp_block)
+        ttk.Label(self._clip_mp_frame, text="Clip Target Megapixels:").pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Combobox(self._clip_mp_frame, textvariable=self.clip_megapixels_var,
+                     values=["0.25", "0.37", "0.5", "0.75", "1.0", "1.5", "2.0", "2.4", "3.0", "4.2"],
+                     width=8).pack(side=tk.LEFT)
+        self._clip_mp_hint = ttk.Label(
+            _mp_block,
+            text="The size your video clips are cached and trained at; photos keep the Target Megapixels "
+                 "above. A clip takes far more memory and time than a photo of the same size, so e.g. "
+                 "photos at 1.0 with clips at 0.25 keeps caching and training fast. A clip that would not "
+                 "fit in your card's free memory is cached smaller still.",
+            foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT, wraplength=720)
+        for _w in (self._clip_mp_frame, self._clip_mp_hint):
+            _w._fizgig_described_family = "*"   # standard-layer widget: old-family goldens set it aside
 
         # --- Per-image loss watch (Krea 2 only for now — hidden under Klein via
         # _apply_training_arch_visibility). Two tiers sharing one watcher in the trainer:
@@ -6824,6 +6845,8 @@ class LoRATrainerGUI:
             self.dataset_caption_ext_var.set(preset["DATASET_CAPTION_EXT"])
         if "DATASET_MEGAPIXELS" in preset and hasattr(self, "dataset_megapixels_var"):
             self.dataset_megapixels_var.set(preset["DATASET_MEGAPIXELS"])
+        if "CLIP_MEGAPIXELS" in preset and hasattr(self, "clip_megapixels_var"):
+            self.clip_megapixels_var.set(preset["CLIP_MEGAPIXELS"])
         if "DATASET_BATCH_SIZE" in preset and hasattr(self, "dataset_batch_size_var"):
             self.dataset_batch_size_var.set(preset["DATASET_BATCH_SIZE"])
         # Run card's Enable Cache checkbox
@@ -7915,6 +7938,8 @@ class LoRATrainerGUI:
         _grab("dataset_no_upscale_var", "BUCKET_NO_UPSCALE")
         _grab("dataset_caption_ext_var", "DATASET_CAPTION_EXT")
         _grab("dataset_megapixels_var", "DATASET_MEGAPIXELS")
+        if self._minimax_dataset_has_clips():
+            _grab("clip_megapixels_var", "CLIP_MEGAPIXELS")
         _grab("dataset_batch_size_var", "DATASET_BATCH_SIZE")
         # Gradient mining
         _grab("gradient_mining_var", "GRADIENT_MINING")
@@ -11429,6 +11454,14 @@ class LoRATrainerGUI:
                         row=27, column=0, columnspan=3, sticky=tk.W, padx=(12, 5), pady=(0, 4))
                 else:
                     self._minimax_structure_voice_note.grid_remove()
+            if hasattr(self, "_clip_mp_frame"):
+                if self._minimax_dataset_has_clips():
+                    if not self._clip_mp_frame.winfo_manager():
+                        self._clip_mp_frame.pack(anchor=tk.W, pady=(8, 2))
+                        self._clip_mp_hint.pack(anchor=tk.W)
+                else:
+                    self._clip_mp_frame.pack_forget()
+                    self._clip_mp_hint.pack_forget()
             # Per-category retirement rows: only when the dataset is genuinely MIXED — with
             # one category there is nothing to finish separately.
             if hasattr(self, "_mixed_stop_label"):
@@ -11446,6 +11479,32 @@ class LoRATrainerGUI:
                     self._mixed_stop_hint.grid_remove()
         except tk.TclError:
             pass
+
+    def _minimax_dataset_has_clips(self):
+        """MiniMax H3 with at least one video clip in the training folder(s) — when the Clip Target
+        Megapixels row shows and the TOML carries clip_megapixels."""
+        if not self._is_minimax_arch():
+            return False
+        try:
+            folders = self._dataset_folders()
+        except Exception:
+            folders = [self.image_folder_var.get().strip()]
+        for folder in folders:
+            try:
+                if folder and os.path.isdir(folder) and any(
+                        f.lower().endswith(".mp4") for f in os.listdir(folder)):
+                    return True
+            except OSError:
+                pass
+        return False
+
+    def _clip_megapixels(self):
+        """The Clip Target Megapixels value, or None when it is not a number."""
+        try:
+            v = float(str(self.clip_megapixels_var.get()).strip())
+            return v if v > 0 else None
+        except (ValueError, AttributeError):
+            return None
 
     def _minimax_dataset_mixed(self):
         """True when the training folder holds BOTH voice recordings and visuals — the only
@@ -32266,6 +32325,8 @@ class LoRATrainerGUI:
             toml_lines.append(f"num_repeats = {num_repeats}")
             toml_lines.append(f"enable_bucket = {'true' if self.dataset_enable_bucket_var.get() else 'false'}")
             toml_lines.append(f"bucket_no_upscale = {'true' if self.dataset_no_upscale_var.get() else 'false'}")
+            if self._clip_megapixels() and self._minimax_dataset_has_clips():
+                toml_lines.append(f"clip_megapixels = {self._clip_megapixels():g}")
             toml_lines.append("")
             toml_lines.append("[[datasets]]")
 
