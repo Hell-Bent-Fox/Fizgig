@@ -5514,30 +5514,30 @@ class LoRATrainerGUI:
         # --- Edit LoRA — standard-layer families whose model edits images (description.edit_training) ----
         self.entries["FAMILY_EDIT"] = tk.BooleanVar(value=bool(self.settings.get("FAMILY_EDIT", False)))
         self._family_edit_cb = ttk.Checkbutton(
-            training_content, text="Edit LoRA: teach the model a change to make to a photo",
+            training_content, text="Edit LoRA (train from original + edited photo pairs)",
             variable=self.entries["FAMILY_EDIT"])
         self.entries["FAMILY_EDIT"].trace_add("write", lambda *_: self._family_edit_rows())   # presets set it too
         self._family_edit_cb.grid(row=54, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(10, 0))
         self._family_edit_hint = ttk.Label(
             training_content,
-            text="For a grade, a look, a relight or a retouch. You give it pairs of the same photo, before and after "
-                 "the change, and it learns to make that change to any photo.",
+            text="Teach the model an edit (a grade, a look, a relight) from pairs of the same photo: the original, "
+                 "and your edited version. The LoRA learns to make that edit to new photos.",
             foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT, wraplength=720)
         self._family_edit_hint.grid(row=55, column=0, columnspan=2, sticky=tk.W, padx=(26, 5), pady=(0, 4))
         self._family_edit_frame = ttk.Frame(training_content)
         self._family_edit_frame.grid(row=56, column=0, columnspan=2, sticky=tk.W, padx=(26, 5), pady=(2, 4))
+        # (heading, explanation, entry key or the Start folder var, browse)
         _blocks = (
-            ("Before-images folder",
-             "Your photos BEFORE the change. The Start folder holds the same photos AFTER it. Each pair shares a file "
-             "name: IMG_0001.jpg in both folders, one before-image for each after-image.",
+            ("1. Originals folder (before editing)",
+             "Your original, unedited photos. No captions needed.",
              "FAMILY_EDIT_DIR", self._browse_family_edit_dir),
-            ("Captions",
-             "Only the after-images in the Start folder need caption .txt files; the before-images need none. Write "
-             "each caption as the instruction, e.g. \"Apply my concert grade.\" The same instruction on every pair "
-             "is fine.", None, None),
-            ("Preview photo (optional)",
-             "The photo your training previews edit. Choose one that is in neither folder to see the change on a new "
-             "photo. Left empty, previews edit the first before-image.",
+            ("2. Edited folder (after editing)",
+             "The same photos after your edit, with the same file names as the originals. Each needs a caption .txt "
+             "saying what the edit is, e.g. \"Apply my concert grade.\" This is the same folder as on the Start tab.",
+             self.image_folder_var, self._browse_image_folder),
+            ("3. Test photo for previews (optional)",
+             "An original photo that is in neither folder. The previews during training show the edit applied to it. "
+             "Leave empty to use the first original.",
              "FAMILY_EDIT_REF", self._browse_family_edit_ref))
         _r = 0
         for _head, _text, _key, _browse in _blocks:
@@ -5545,15 +5545,16 @@ class LoRATrainerGUI:
                 row=_r, column=0, sticky=tk.W, pady=(8 if _r else 0, 0))
             ttk.Label(self._family_edit_frame, text=_text, foreground=COLORS["text_explain"], font=HINT_FONT,
                       justify=tk.LEFT, wraplength=690).grid(row=_r + 1, column=0, sticky=tk.W, pady=(1, 2))
-            _r += 2
-            if _key:
-                _row = ttk.Frame(self._family_edit_frame)
-                _row.grid(row=_r, column=0, sticky=tk.W)
+            _row = ttk.Frame(self._family_edit_frame)
+            _row.grid(row=_r + 2, column=0, sticky=tk.W)
+            if isinstance(_key, str):
                 self.entries[_key] = ttk.Entry(_row, width=60)
                 self.entries[_key].insert(0, str(self.settings.get(_key, "") or ""))
                 self.entries[_key].pack(side=tk.LEFT)
-                ttk.Button(_row, text="Browse", command=_browse).pack(side=tk.LEFT, padx=(6, 0))
-                _r += 1
+            else:
+                ttk.Entry(_row, textvariable=_key, width=60).pack(side=tk.LEFT)
+            ttk.Button(_row, text="Browse", command=_browse).pack(side=tk.LEFT, padx=(6, 0))
+            _r += 3
         for _w in (self._family_adapter_cb, self._family_adapter_hint, self._family_ema_label,
                    self._family_ema_frame, self._family_ema_hint, self._family_edit_cb, self._family_edit_frame,
                    self._family_edit_hint):
@@ -7533,18 +7534,18 @@ class LoRATrainerGUI:
             before = self.entries["FAMILY_EDIT_DIR"].get().strip()
             ref = self.entries["FAMILY_EDIT_REF"].get().strip()
             if not before or not os.path.isdir(before):
-                errors.append("Edit LoRA is on: set the Before-images folder (Training tab, Training Parameters)")
+                errors.append("Edit LoRA is on: set the Originals folder (Training tab, Training Parameters)")
             elif os.path.isdir(self.image_folder_var.get().strip()):
                 missing, multiple, _ = self._family_edit_pairs()
                 if missing:
-                    errors.append(f"Edit LoRA: {len(missing)} image(s) in the Start folder have no before-image of the "
-                                  f"same name in {before} (e.g. {', '.join(missing[:3])})")
+                    errors.append(f"Edit LoRA: {len(missing)} edited photo(s) have no original with the same file "
+                                  f"name in {before} (e.g. {', '.join(missing[:3])})")
                 if multiple:
-                    errors.append(f"Edit LoRA: {len(multiple)} image(s) in the Start folder match more than one "
-                                  f"before-image (e.g. {', '.join(multiple[:3])}) - keep one before-image per "
-                                  f"after-image, named the same")
+                    errors.append(f"Edit LoRA: {len(multiple)} edited photo(s) match more than one original (e.g. "
+                                  f"{', '.join(multiple[:3])}) - keep one original per edited photo, with the "
+                                  f"same file name")
             if ref and not os.path.isfile(ref):
-                errors.append(f"Edit LoRA preview photo does not exist: {ref}")
+                errors.append(f"Edit LoRA test photo for previews does not exist: {ref}")
         need = [f for f in desc.model_files if f.required]
         if desc.training_adapter and self.entries["FAMILY_TRAINING_ADAPTER"].get():
             need += [f for f in desc.model_files if f.pref_key == desc.training_adapter]

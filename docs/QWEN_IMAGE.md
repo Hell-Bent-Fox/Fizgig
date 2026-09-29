@@ -62,12 +62,14 @@ Training previews render on the plain model at **25 steps** by default, with the
 
 ## Edit LoRAs
 
-Qwen Image 2.1 is one model for text-to-image and editing, so a LoRA can learn a change: a grade, a style, a relight, a retouch. You give it pairs of the same picture before and after the change.
+Qwen Image 2.1 is one model for text-to-image and editing, so a LoRA can learn an edit: a grade, a look, a relight, a retouch. You train it on pairs of the same photo, the original and your edited version, and it learns to make that edit to new photos.
 
-1. Put the **after** images in the Start tab's folder and the **before** images in a second folder with the same file names. `photo.png` pairs with `photo.png`, one before-image per after-image.
-2. Caption each after-image with the instruction, e.g. "Make it a pencil sketch." The same instruction on every pair is fine for a single edit.
-3. On the Training tab, tick **Edit LoRA** under Training Parameters and set the **Before-images folder**. Start refuses to run if any after-image is missing its before-image.
-4. Previews edit the **Preview photo**, or the first before-image if you leave it empty. A photo from outside the dataset shows whether the edit carries over.
+1. On the Training tab, pick the **Qwen 2.1 Edit** preset (it ticks **Edit LoRA** under Training Parameters).
+2. **Originals folder (before editing):** your original, unedited photos. They need no captions.
+3. **Edited folder (after editing):** the same photos after your edit, with the same file names as the originals (`IMG_0001.jpg` in both), one edited photo per original. This is the same folder as on the Start tab. Each edited photo needs a caption `.txt` saying what the edit is, e.g. "Apply my concert grade." The same caption on every photo is fine.
+4. **Test photo for previews (optional):** an original photo that is in neither folder. The previews during training show the edit applied to it; left empty, they use the first original.
+
+Start refuses to run if an edited photo has no original with the same file name.
 
 In ComfyUI, load the LoRA as usual and use **Text Encode Qwen Image 2.1**: connect the VAE, plug the photo to edit into its first image input, write the instruction as the prompt, and sample from the node's **latent** output so the result keeps the photo's shape. The node's **resolution** works best near the size the LoRA trained at: in our tests an edit LoRA trained at 0.5 MP matched its Fizgig previews at resolution 768 and came out slightly less exact at the default 1024.
 
