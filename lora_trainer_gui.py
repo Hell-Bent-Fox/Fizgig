@@ -7512,7 +7512,7 @@ class LoRATrainerGUI:
                                                                   "the same crop and shape.")
         edit_on = can and bool(self.entries["FAMILY_EDIT"].get())
         if getattr(self, "_sample_edit_note", None) is not None:
-            for w in (self.sample_prompt_text, self._sample_prompt_hint):
+            for w in (self.sample_prompt_text, self._sample_edit_note._prompt_hint):
                 self._set_widget_visible(w, not edit_on)
             self._set_widget_visible(self._sample_edit_note, edit_on)
         for w in (self._family_edit_cb, self._family_edit_hint):
@@ -12966,13 +12966,13 @@ class LoRATrainerGUI:
         self.sample_prompt_text.bind("<KeyRelease>", lambda e: self._save_last_used_paths())
         # Issue #49: "Multi-line prompt" read as ONE prompt that may contain line breaks — two
         # users only discovered multiple prompts by accident. Say what a line actually does.
-        self._sample_prompt_hint = tk.Label(
+        _prompt_hint = tk.Label(
             prompt_card,
             text="Each line is a SEPARATE prompt — press Enter to add another sample per "
                  "epoch. Keep a single prompt on one line (long ones wrap by themselves).",
             font=(FONT_FAMILY, 9, "italic"), fg=COLORS["text_explain"],
             bg=COLORS["bg_surface"], wraplength=520, justify=tk.LEFT)
-        self._sample_prompt_hint.grid(row=1, column=1, columnspan=2, sticky=tk.W, pady=(0, 6))
+        _prompt_hint.grid(row=1, column=1, columnspan=2, sticky=tk.W, pady=(0, 6))
         # Edit LoRA (Training tab): previews apply the edit instruction to the test photo, so no prompts here
         self._sample_edit_note = tk.Label(
             prompt_card,
@@ -12982,6 +12982,8 @@ class LoRATrainerGUI:
             justify=tk.LEFT)
         self._sample_edit_note.grid(row=0, column=1, columnspan=2, sticky=tk.W, pady=4)
         self._sample_edit_note.grid_remove()
+        self._sample_edit_note._prompt_hint = _prompt_hint        # hidden with the prompt box in Edit mode
+        self._sample_edit_note._fizgig_described_family = "*"    # standard-layer widget: old-family goldens set it aside
 
         ttk.Label(prompt_card, text="Width:").grid(row=2, column=0, sticky=tk.W, padx=(0, 10), pady=4)
         self.sample_width_var = tk.StringVar(value=str(self.settings["SAMPLE_WIDTH"]))
