@@ -5591,8 +5591,8 @@ class LoRATrainerGUI:
         _r[0] = 0
         _block("Where the two ends come from",
                "Photo pairs: two folders of the same shots, one folder for each end of the dial (e.g. the same "
-               "person smiling, and not smiling). 4 to 10 pairs, each pair framed the same. Prompts: no photos - "
-               "you describe the picture and what each end adds.")
+               "person smiling, and not smiling). 4 to 10 pairs, each pair framed the same.\n"
+               "Prompts: no photos - you describe the picture and what each end adds.")
         self.entries["FAMILY_SLIDER_SOURCE"] = tk.StringVar(value=str(self.settings.get("FAMILY_SLIDER_SOURCE",
                                                                                         "pairs") or "pairs"))
         _src = _row()
@@ -5612,9 +5612,11 @@ class LoRATrainerGUI:
                                    "name as its +1 photo. No captions in this folder.")
         _path_row("FAMILY_SLIDER_DIR", self._browse_family_slider_dir)
         _block("3. Captions (one line, used for every pair)",
-               "Type what is the SAME in both photos of a pair, e.g. \"a portrait photo of a woman\", and press "
-               "Write captions: it saves that line as the caption of every photo in the +1 folder. Don't mention the "
-               "change itself (not \"smiling\"): the dial learns the change from the photos.")
+               "Describe what the two photos of a pair have in common, and leave out the difference. For a smile "
+               "dial, where the +1 photos show a woman smiling and the -1 photos show her not smiling, the caption "
+               "is \"a portrait photo of a woman\" - not \"a smiling woman\", because the smile is the "
+               "difference the dial learns from the photos. Type it and press Write captions: it is saved as the "
+               "caption of every photo in the +1 folder.")
         _cr = _row()
         self.entries["FAMILY_SLIDER_CAPTION"] = ttk.Entry(_cr, width=60)
         self.entries["FAMILY_SLIDER_CAPTION"].insert(0, str(self.settings.get("FAMILY_SLIDER_CAPTION", "") or ""))
