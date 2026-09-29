@@ -84,6 +84,32 @@ In ComfyUI, load the LoRA as usual and use **Text Encode Qwen Image 2.1**: conne
 
 In our tests, 40 pairs of a colour grade at 0.59 MP with rank 16 learned the grade on held-out photos within 6 epochs, about 8 minutes on an RTX 5090. Faces, poses and framing came through unchanged. Turbo previews score the same as 25-step ones, so they are a fair guide to an edit LoRA too.
 
+## Slider LoRAs
+
+A slider LoRA is a dial between two looks: strength +1 moves a picture toward one look (happy, warm), -1 toward the opposite (sad, cool), and anything in between gives a bit of either. Sliders are trained at +1 and -1, but most will also go further, so try 1.5 or 2 (or -1.5, -2) for a stronger effect; how far a slider goes before the picture breaks down varies from one to the next.
+
+On the Training tab, pick **Kind of LoRA: Slider** under Training Parameters, or load **✨ Qwen 2.1 Slider (rank 4, 2e-4)**, which selects it (rank 4, learning rate 2e-4, 30 epochs). Then choose where the two ends come from.
+
+**From photo pairs:** two folders of the same shots, one for each end of the dial. 4 to 10 pairs is enough.
+
+1. **+1 end folder:** the photos at the +1 end, e.g. smiling. This is the same folder as on the Start tab, and the captions go here.
+2. **-1 end folder:** the same shots at the -1 end, each with the same file name as its +1 photo. No captions.
+3. **Captions:** describe what the two photos of a pair have in common and leave out the difference, e.g. "a portrait photo of a woman", not "a smiling woman". **Write captions** saves it as the caption of every +1 photo.
+
+Frame each pair the same way. Handheld shots from the same spot are fine; what matters is that the only change every pair has in common is the one you want the dial to learn. Start refuses to run if a photo has no partner with the same file name, has no caption, or has a different shape from its partner.
+
+**From prompts:** no photos. Fizgig renders its own practice pictures from your description and trains on them.
+
+1. **What the picture is:** the start of the prompt. Each end's words are added after it with a space, so end it with a comma if you want one.
+2. **The +1 end adds** and **The -1 end adds:** e.g. "happy" and "sad".
+3. **Push strength:** how hard the two ends are pushed apart. 2 is a good start; higher gives a stronger dial but can change more than the one thing you asked for.
+
+Describe one person in the first line ("a close-up photo of a young woman with short dark hair,") and the dial changes her expression and keeps her the same. Keep it general ("a close-up photo of a person who is") and each practice picture shows a different person, so the dial learns only the change and works on anyone. Words like "sad" can bring more than a face (grey light, rain); if the whole scene changes, try a narrower word such as "unsmiling".
+
+**Previews** are strips of three pictures on one seed, at strength -1, 0 and +1. They use the slider's own prompt (the shared caption, or the "What the picture is" line); the Samples tab sets the seed, size and steps.
+
+Sliders are always a plain LoRA (a LoKR setting is switched to LoRA for the run), and Adaptive LR, EMA and the per-image loss watch are off for them. A Context LoRA works: the dial is learned on top of it, so use the slider with the same context LoRA at the same strength. In ComfyUI, load the slider like any LoRA and set its strength.
+
 ## Licence
 
 Qwen Image 2.1 is released under the Qwen Research License: non-commercial use only unless you get a commercial licence from the Qwen team, and a LoRA or fine-tune you share must say "Built with Qwen" or "Improved using Qwen". Read the [licence](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE) before publishing or selling anything made with it.

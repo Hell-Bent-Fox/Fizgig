@@ -569,6 +569,8 @@ The other two presets change only a few flags. **Standard** is `--network_dim 16
 
 **Edit LoRAs** — add `control_directory = "/data/before"` under `[[datasets]]` in the TOML, beside `image_directory` (the after-images). Before-images match after-images by file name, one each (`photo.png` pairs with `photo.png`). The cache script then stores each before-image's latent and encodes the caption with the before-images, so run both cache stages again after changing the pairs or the resolution. `--sample_reference FILE` makes the previews edits of that photo. Everything else is as above.
 
+**Slider LoRAs** — from photo pairs: put the -1 photos in `control_directory` (same file names as the +1 photos in `image_directory`), run both cache stages with `--slider` (it caches the -1 latents and encodes the captions as plain text), then train with `--slider_pairs`. `--slider_diff_weight` (default 1) concentrates the loss where the two photos of a pair differ; 0 is the plain loss. From prompts: no dataset and no caching, just `--slider_prompts "BASE" "BASE +1 WORDS" "BASE -1 WORDS"` with `--text_encoder` and `--vae`; `--slider_guidance` (default 3, the GUI uses 2) is the push strength, `--slider_bank` (16) and `--slider_bank_res` (768) set the practice pictures. Sliders train a plain LoRA with Adaptive LR, EMA and the per-image watch off; previews render at -1 / 0 / +1.
+
 **Other** — `--context_lora_path FILE --context_lora_strength S` trains on top of an existing Qwen LoRA, frozen and active in training and previews. `--metadata_title/author/description/license/tags/trigger_phrase` are recorded in the saved LoRA. The saved file loads in ComfyUI's standard LoRA loader.
 
 ---

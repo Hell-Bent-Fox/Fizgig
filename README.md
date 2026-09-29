@@ -29,6 +29,7 @@
 </p>
 
 > ### 📰 Latest news
+> - **Fizgig 6.7 — Qwen slider LoRAs.** A LoRA whose strength is a dial between two looks (sad to happy, cool to warm), trained from a few photo pairs or from a few words. [Release notes](docs/RELEASE_NOTES_v6.7.0.md)
 > - **Fizgig 6.6 — Qwen edit LoRAs.** Teach Qwen Image 2.1 your own edit (a grade, a look, a relight) from pairs of original and edited photos, then apply it to any photo. [Release notes](docs/RELEASE_NOTES_v6.6.0.md)
 > - **Fizgig 6.5.1 — Klein on 10 GB cards.** Base precision on the Training tab for Klein, with Auto picking 4-bit on cards under 16 GB; plus Qwen preview fixes. [Release notes](docs/RELEASE_NOTES_v6.5.1.md)
 > - **Fizgig 6.5 — Qwen Image 2.1.** LoRA and LoKR training with Fizgig's own training adapter, turbo previews, the per-image loss watch and every workbench tool, on cards down to 10 GB. [Guide](docs/QWEN_IMAGE.md)
