@@ -408,7 +408,9 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         if slider_prompts and (len(slider_prompts) != 3 or not all(str(x).strip() for x in slider_prompts[1:])):
             raise RuntimeError("[slider] prompt pairs need NEUTRAL POSITIVE NEGATIVE (the two poles non-empty)")
         if network_type != "lora":
-            raise RuntimeError("[slider] sliders train a plain LoRA (Network Type LoRA)")
+            logger.info("[slider] network type %s -> LoRA: a slider is a plain LoRA whose strength is the dial",
+                        network_type)
+            network_type = "lora"
         if str(optimizer_type).lower().startswith("automagic"):
             logger.info("[slider] optimizer %s -> adamw8bit: the +1/-1 flip every step reads as noise to an "
                         "optimizer that sets its own rate", optimizer_type)

@@ -34184,7 +34184,8 @@ class LoRATrainerGUI:
             self.update_console("[loss-watch] per-image features skipped - they need Batch Size 1.\n")
         if any(var.get() for var, _ in _watch) and "--text_encoder" not in cmd:
             cmd += ["--text_encoder", self._krea2_pref(desc.pref_for("text_encoder"))]   # caption repair re-encodes
-        if "lokr" in desc.network_types and str(st.get("NETWORK_TYPE", "")).startswith("LoKR"):
+        if ("lokr" in desc.network_types and str(st.get("NETWORK_TYPE", "")).startswith("LoKR")
+                and not st.get("FAMILY_SLIDER")):        # a slider is always a plain LoRA
             cmd += ["--network_type", "lokr", "--lokr_factor", str(st.get("LOKR_FACTOR", 8))]
         raw_swap = self.entries["BLOCKS_SWAP"].get().strip()
         if raw_swap.lower().startswith("auto"):
