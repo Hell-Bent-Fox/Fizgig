@@ -18,7 +18,7 @@ My first real test was one of my own film grades, from a recent photo trip to Se
 
 **What to do:**
 
-1. On the Training tab, pick Qwen Image 2.1 and load the new **✨ Qwen 2.1 Edit** preset. It ticks **Edit LoRA** under Training Parameters.
+1. On the Training tab, pick Qwen Image 2.1 and load one of the two new Edit presets (see below). Each ticks **Edit LoRA** under Training Parameters.
 2. **Originals folder (before editing):** your original, unedited photos. They need no captions.
 3. **Edited folder (after editing):** the same photos after your edit, with the same file names as the originals (`IMG_0001.jpg` in both). This is the same folder as on the Start tab.
 4. **Captions for the edited photos:** type what the edit is, e.g. "Apply my concert grade.", and press **Write captions**. It saves that text as the caption of every edited photo.
@@ -28,7 +28,12 @@ Start checks your pairs before training: it stops and names the files if an edit
 
 While Edit LoRA is on, the previews use your edit instruction as their prompt, and the Samples tab says so in place of its prompt box.
 
-**The Edit preset** trains rank 16 at a flat 2e-4 for 8 epochs, saving every epoch, with EMA 0.98 and the training adapter. In our tests an edit was learned within 4–6 epochs and kept improving slowly to 8. Pick your epoch in LoRA Royale.
+**Two Edit presets**, both 12 epochs at 0.5 MP, saving every epoch, with EMA 0.98 and the training adapter:
+
+- **✨ Qwen 2.1 Edit (rank 8, adaptive LR):** the settings from my Sedona grade above, Adaptive LR 2e-4 to 4e-4. For most edits.
+- **✨ Qwen 2.1 Edit Strong (rank 16, adaptive LR):** more capacity for trickier edits, Adaptive LR 1e-4 to 2e-4.
+
+Pick your epoch in LoRA Royale; my grade was best at epoch 9.
 
 **Speed and memory:** edit training is slower per step than normal training, because the model reads the original photo as well as the edited one on every step: about 2 s per step on an RTX 5090 at 0.5 MP. A 40-pair, 10-epoch run takes around 15 minutes there, previews included. It trains on 16 GB cards too; Auto picks INT8 with no block swap.
 
