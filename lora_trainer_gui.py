@@ -2377,7 +2377,7 @@ class LoRATrainerGUI:
         self.captioning_stop_flag = False
         self.caption_thumbnails = {}
         self.current_caption_page = 0
-        self.images_per_page = 12
+        self._caption_page_size()
 
         # Load architecture defaults first (populates optimizer / fp8 / timestep
         # fields that the built-in presets don't explicitly set), then overlay
@@ -11038,6 +11038,34 @@ class LoRATrainerGUI:
             fg=COLORS["accent"], bg=COLORS["bg_surface"],
             wraplength=760, justify=tk.LEFT)
 
+        # Find: narrow the grid to file names containing the text (#151 - big datasets).
+        find_row = tk.Frame(preview_card, bg=COLORS["bg_surface"])
+        find_row.pack(fill=tk.X, pady=(0, 8))
+        tk.Label(find_row, text="Find:", font=(FONT_FAMILY, 10), fg=COLORS["text_primary"],
+                 bg=COLORS["bg_surface"]).pack(side=tk.LEFT, padx=(0, 6))
+        self.caption_search_var = tk.StringVar(value="")
+        _find = ttk.Entry(find_row, textvariable=self.caption_search_var, width=32)
+        _find.pack(side=tk.LEFT)
+        ttk.Button(find_row, text="Clear", command=lambda: self.caption_search_var.set("")).pack(
+            side=tk.LEFT, padx=(6, 0))
+        tk.Label(find_row, text="shows only files whose name contains this", font=HINT_FONT,
+                 fg=COLORS["text_explain"], bg=COLORS["bg_surface"]).pack(side=tk.LEFT, padx=(10, 0))
+        self._caption_search_after = None
+
+        def _on_find(*_):
+            if self._caption_search_after is not None:
+                try:
+                    self.master.after_cancel(self._caption_search_after)
+                except Exception:
+                    pass
+
+            def _apply():
+                self._caption_search_after = None
+                self.current_caption_page = 0
+                self.refresh_caption_images()
+            self._caption_search_after = self.master.after(300, _apply)
+        self.caption_search_var.trace_add("write", _on_find)
+
         self.caption_grid_frame = tk.Frame(preview_card, bg=COLORS["bg_surface"])
         self.caption_grid_frame.pack(fill=tk.BOTH, expand=True)
         for _c in range(4):
@@ -11051,6 +11079,20 @@ class LoRATrainerGUI:
                                            fg=COLORS["text_secondary"], bg=COLORS["bg_surface"])
         self.caption_page_label.pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(pagination_frame, text="Next >>", command=self.caption_next_page).pack(side=tk.LEFT, padx=(0, 16))
+        tk.Label(pagination_frame, text="Go to page:", font=(FONT_FAMILY, 10), fg=COLORS["text_primary"],
+                 bg=COLORS["bg_surface"]).pack(side=tk.LEFT, padx=(0, 4))
+        self.caption_goto_var = tk.StringVar(value="")
+        _goto = ttk.Entry(pagination_frame, textvariable=self.caption_goto_var, width=5)
+        _goto.pack(side=tk.LEFT)
+        _goto.bind("<Return>", lambda e: self.caption_goto_page())
+        ttk.Button(pagination_frame, text="Go", command=self.caption_goto_page).pack(side=tk.LEFT, padx=(4, 16))
+        tk.Label(pagination_frame, text="Per page:", font=(FONT_FAMILY, 10), fg=COLORS["text_primary"],
+                 bg=COLORS["bg_surface"]).pack(side=tk.LEFT, padx=(0, 4))
+        self.caption_per_page_var = tk.StringVar(value=str(self._caption_page_size()))
+        _per = ttk.Combobox(pagination_frame, textvariable=self.caption_per_page_var, width=5, state="readonly",
+                            values=[str(n) for n in self.CAPTION_PAGE_SIZES])
+        _per.pack(side=tk.LEFT, padx=(0, 16))
+        _per.bind("<<ComboboxSelected>>", lambda e: self.caption_set_per_page())
         ttk.Button(pagination_frame, text="Refresh", command=self.refresh_caption_images).pack(side=tk.LEFT)
 
         # Card 6: Progress
@@ -11294,6 +11336,11 @@ class LoRATrainerGUI:
         self.caption_thumbnails.clear()
 
         images = self.get_caption_image_files()
+        _in_folder = len(images)
+        _needle = (self.caption_search_var.get().strip().lower()
+                   if hasattr(self, "caption_search_var") else "")
+        if _needle:
+            images = [p for p in images if _needle in os.path.basename(p).lower()]
         total_images = len(images)
 
         # Audio never enters the grid; count it so the tab explains itself rather than showing
@@ -11320,7 +11367,9 @@ class LoRATrainerGUI:
         self.current_caption_page = max(0, self.current_caption_page)
 
         # Update page label
-        self.caption_page_label.config(text=f"Page {self.current_caption_page + 1} of {total_pages} ({total_images} images)")
+        self.caption_page_label.config(
+            text=(f"Page {self.current_caption_page + 1} of {total_pages} "
+                  + (f"({total_images} of {_in_folder} images match)" if _needle else f"({total_images} images)")))
 
         # Get images for current page
         start_idx = self.current_caption_page * self.images_per_page
@@ -11422,10 +11471,51 @@ class LoRATrainerGUI:
     def caption_next_page(self):
         """Go to next page of images"""
         images = self.get_caption_image_files()
+        _needle = self.caption_search_var.get().strip().lower() if hasattr(self, "caption_search_var") else ""
+        if _needle:
+            images = [p for p in images if _needle in os.path.basename(p).lower()]
         total_pages = max(1, (len(images) + self.images_per_page - 1) // self.images_per_page)
         if self.current_caption_page < total_pages - 1:
             self.current_caption_page += 1
             self.refresh_caption_images()
+
+    # Cards per Captions page. 200 is the ceiling: 50 rows of ~300 px cards stay well inside Tk's
+    # 32,767 px scroll limit alongside the rest of the tab (#140, #151).
+    CAPTION_PAGE_SIZES = (12, 24, 48, 96, 200)
+
+    def _caption_page_size(self):
+        """The remembered cards-per-page (12 unless a valid size was saved). Idempotent: the
+        Captions tab is built before the rest of __init__ runs."""
+        if not hasattr(self, "images_per_page"):
+            try:
+                per = int(self.last_used.get("caption_per_page", 12))
+            except (TypeError, ValueError):
+                per = 12
+            self.images_per_page = per if per in self.CAPTION_PAGE_SIZES else 12
+        return self.images_per_page
+
+    def caption_goto_page(self):
+        """Jump to the typed page number (clamped to the range by the refresh)."""
+        try:
+            n = int(self.caption_goto_var.get().strip())
+        except ValueError:
+            return
+        self.current_caption_page = max(0, n - 1)
+        self.caption_goto_var.set("")
+        self.refresh_caption_images()
+
+    def caption_set_per_page(self):
+        """New page size: keep the first card on screen in view, remember the choice."""
+        try:
+            per = int(self.caption_per_page_var.get())
+        except ValueError:
+            return
+        first = self.current_caption_page * self.images_per_page
+        self.images_per_page = per
+        self.current_caption_page = first // per
+        self.last_used["caption_per_page"] = per
+        self._save_last_used_paths()
+        self.refresh_caption_images()
 
     def show_edit_caption_dialog(self, img_path):
         """Live caption editor: no Save button, no confirmation popups. Edits save themselves
