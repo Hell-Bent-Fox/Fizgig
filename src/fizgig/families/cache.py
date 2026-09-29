@@ -117,6 +117,9 @@ def main():
     p.add_argument("--num_workers", type=int, default=None)
     p.add_argument("--skip_existing", action="store_true")
     p.add_argument("--keep_cache", action="store_true")
+    p.add_argument("--slider", action="store_true",
+                   help="the control_directory holds a slider's other pole: cache its latents, encode captions "
+                        "plainly (not as edit pairs)")
     args = p.parse_args()
     from fizgig.families.quant import apply_vram_cap
     apply_vram_cap()                # FIZGIG_SIM_VRAM_GB: behave like a smaller card
@@ -130,7 +133,9 @@ def main():
                                                                architecture=desc.arch_id)
     datasets = generate_dataset_group_by_blueprint(blueprint.dataset_group).datasets
     pairs = any(getattr(ds, "has_control", False) for ds in datasets)
-    if pairs and not driver.supports_references:
+    if pairs and args.slider and not desc.slider_training:
+        raise SystemExit(f"{desc.display_name} has no slider training")
+    if pairs and not args.slider and not driver.supports_references:
         raise SystemExit(f"{desc.display_name} has no edit training: remove control_directory from the dataset")
     for ds in datasets:        # edit training is one before-image per after-image
         many = [os.path.basename(p) for p, m in getattr(ds.datasource, "control_paths", {}).items() if len(m) > 1]
@@ -154,7 +159,7 @@ def main():
         encode_datasets(datasets, encode, args)
     else:
         from fizgig.scripts.cache_text import post_process, prepare_cache_files_and_paths, process_batches
-        if pairs:
+        if pairs and not args.slider:
             te = driver.load_reference_text_encoder(args.model, device)
             _encode_text_with_references(args, datasets, driver, te, desc)
             driver.unload_text_encoder(te)

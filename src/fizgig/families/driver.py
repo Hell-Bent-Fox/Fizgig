@@ -95,10 +95,22 @@ class FamilyDriver:
 
     # ---- training -------------------------------------------------------------------------------
     def training_loss(self, dit, latents, cond: dict, generator, *, min_t: float = 0.0, max_t: float = 1.0,
-                      refs=None):
+                      refs=None, diff_ref=None, diff_weight: float = 0.0):
         """One training forward. latents (1, C, h, w) on device, cond = the cached dict (batched), refs = the pair's
-        reference latents [(1, C, rh, rw), ...] (edit training) or None.
+        reference latents [(1, C, rh, rw), ...] (edit training) or None. diff_ref / diff_weight (image-pair
+        sliders): weight each token's error by how much latents and diff_ref differ there, so the slider learns
+        what changes between the poles and not what they share.
         Returns (loss tensor, info dict e.g. {"t": 0.63}). Owns the family's noise/target/timestep rules."""
+        raise NotImplementedError
+
+    # ---- prompt-pair sliders (optional) ------------------------------------------------------------
+    def noise_latents(self, latents, generator, *, min_t: float = 0.0, max_t: float = 1.0) -> dict:
+        """A noised training input for latents (1, C, h, w), drawn by the family's own timestep rule. Opaque to
+        the caller; handed back to predict()."""
+        raise NotImplementedError
+
+    def predict(self, dit, state: dict, cond: dict):
+        """The model's prediction at a noise_latents() state for this conditioning (batched dict)."""
         raise NotImplementedError
 
     # ---- sampling -------------------------------------------------------------------------------

@@ -163,6 +163,15 @@ class FamilyLoRA:
                 else:
                     w.add(TRAINABLE, rank, alpha, True)
         self.rank, self.alpha, self.kind, self.factor = rank, alpha, kind, factor
+        self._trainable_scale = {full: w.scales[TRAINABLE] for full, w in self.wrapped.items()
+                                 if TRAINABLE in w.adapters}
+
+    def set_trainable_multiplier(self, m):
+        """Signed strength of the trainable adapter (sliders train it at +1 and -1, previews show -1 / 0 / +1).
+        Takes effect on the next forward - and on a checkpointed block's recompute, so backward each pole
+        before flipping."""
+        for full, base in getattr(self, "_trainable_scale", {}).items():
+            self.wrapped[full].scales[TRAINABLE] = base * float(m)
 
     def trainable_modules(self):
         return nn.ModuleList([w.adapters[TRAINABLE] for w in self.wrapped.values() if TRAINABLE in w.adapters])

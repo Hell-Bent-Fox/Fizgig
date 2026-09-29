@@ -106,7 +106,8 @@ class QwenImage21Driver(FamilyDriver):
         t = math.exp(mu) / (math.exp(mu) + (1.0 / t - 1.0))
         return min_t + (max_t - min_t) * t
 
-    def training_loss(self, dit, latents, cond, generator, *, min_t=0.0, max_t=1.0, refs=None):
+    def training_loss(self, dit, latents, cond, generator, *, min_t=0.0, max_t=1.0, refs=None, diff_ref=None,
+                      diff_weight=0.0):
         device = latents.device
         h, w = latents.shape[-2:]
         n = h * w
@@ -124,7 +125,33 @@ class QwenImage21Driver(FamilyDriver):
             raise RuntimeError("edit conditioning without its reference latents - re-cache the latents")
         tt = torch.tensor([t], device=device, dtype=torch.bfloat16)
         pred = dit(xt.to(torch.bfloat16), enc.to(torch.bfloat16), tt, [shapes], img_mask, enc_mask)[:, -n:]
+        if diff_ref is not None and diff_weight > 0.0:
+            # slider disentanglement: tokens where the two poles differ count more (Krea 2's formula)
+            d = S.pack((latents.float() - diff_ref.to(device).float()).abs()).mean(dim=-1)     # (1, N)
+            dm = d.mean(dim=1, keepdim=True)
+            r = (d / dm.clamp_min(1e-8)).clamp(max=8.0)
+            w = (1.0 - float(diff_weight)) + float(diff_weight) * r
+            w = w / w.mean(dim=1, keepdim=True).clamp_min(1e-8)
+            w = torch.where(dm > 1e-6, w, torch.ones_like(w))      # identical pair: uniform, never all-zero
+            se = (pred.float() - (noise - x0)).pow(2).mean(dim=-1)
+            return (se * w).mean(), {"t": t}
         return F.mse_loss(pred.float(), noise - x0), {"t": t}
+
+    def noise_latents(self, latents, generator, *, min_t=0.0, max_t=1.0):
+        h, w = latents.shape[-2:]
+        x0 = S.pack(latents.float())
+        noise = torch.randn(x0.shape, generator=generator).to(latents.device)
+        t = self._sample_t(h * w, generator, min_t, max_t)
+        return {"xt": (1 - t) * x0 + t * noise, "t": t, "hw": (h, w)}
+
+    def predict(self, dit, state, cond):
+        h, w = state["hw"]
+        n = h * w
+        device = state["xt"].device
+        enc, img_mask, enc_mask = S.model_inputs(cond["hidden_states"][0], n, device)
+        tt = torch.tensor([state["t"]], device=device, dtype=torch.bfloat16)
+        return dit(state["xt"].to(torch.bfloat16), enc.to(torch.bfloat16), tt, [[(1, h, w)]], img_mask,
+                   enc_mask)[:, -n:]
 
     # ---- sampling -------------------------------------------------------------------------------
     @torch.no_grad()

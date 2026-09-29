@@ -134,6 +134,8 @@ class FamilyDescription:
     network_types: tuple = ("lora",)
     edit_training: bool = False       # Edit LoRA from before/after pairs (the driver's supports_references)
     edit_note: str = ""               # the Edit LoRA section's "What you need" line: pair count and photo size
+    slider_training: bool = False     # Slider LoRAs (strength is a dial between two looks); the driver needs
+    #                                   training_loss(diff_ref=, diff_weight=) and noise_latents / predict
 
     # sampling
     sampling: tuple = ()              # SamplingSettings without any speed LoRA (first = default)
