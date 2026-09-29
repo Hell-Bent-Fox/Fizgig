@@ -5590,8 +5590,9 @@ class LoRATrainerGUI:
         _f = self._family_slider_frame
         _r[0] = 0
         _block("Where the two ends come from",
-               "Photo pairs: the same shots at both ends (e.g. smiling and not smiling), 4 to 10 pairs, same framing "
-               "at both ends. Prompts: no photos, just a description and what each end adds.")
+               "Photo pairs: two folders of the same shots, one folder for each end of the dial (e.g. the same "
+               "person smiling, and not smiling). 4 to 10 pairs, each pair framed the same. Prompts: no photos - "
+               "you describe the picture and what each end adds.")
         self.entries["FAMILY_SLIDER_SOURCE"] = tk.StringVar(value=str(self.settings.get("FAMILY_SLIDER_SOURCE",
                                                                                         "pairs") or "pairs"))
         _src = _row()
@@ -5604,15 +5605,16 @@ class LoRATrainerGUI:
         self._family_slider_prompts.grid(row=_r[0] + 1, column=0, sticky=tk.W)
         _f = self._family_slider_pairs
         _r[0] = 0
-        _block("1. +1 end folder", "Your photos at the +1 end of the dial (e.g. smiling). This is the same folder "
-                                   "as on the Start tab.")
+        _block("1. +1 end folder", "Photos showing the +1 end of the dial, e.g. the person smiling. The captions "
+                                   "go in this folder (step 3). This is the same folder as on the Start tab.")
         _path_row(self.image_folder_var, self._browse_image_folder)
-        _block("2. -1 end folder", "The same shots at the -1 end (e.g. not smiling), with the same file names as "
-                                   "the +1 photos.")
+        _block("2. -1 end folder", "The same shots showing the -1 end, e.g. not smiling, each with the same file "
+                                   "name as its +1 photo. No captions in this folder.")
         _path_row("FAMILY_SLIDER_DIR", self._browse_family_slider_dir)
-        _block("3. Caption for every photo",
-               "What both ends share, e.g. \"a portrait photo of a woman\" - leave the change itself out. Write "
-               "captions saves it as the caption of every photo in the +1 folder.")
+        _block("3. Captions (one line, used for every pair)",
+               "Type what is the SAME in both photos of a pair, e.g. \"a portrait photo of a woman\", and press "
+               "Write captions: it saves that line as the caption of every photo in the +1 folder. Don't mention the "
+               "change itself (not \"smiling\"): the dial learns the change from the photos.")
         _cr = _row()
         self.entries["FAMILY_SLIDER_CAPTION"] = ttk.Entry(_cr, width=60)
         self.entries["FAMILY_SLIDER_CAPTION"].insert(0, str(self.settings.get("FAMILY_SLIDER_CAPTION", "") or ""))
