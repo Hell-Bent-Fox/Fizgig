@@ -5595,6 +5595,7 @@ class LoRATrainerGUI:
                "Prompts: no photos - you describe the picture and what each end adds.")
         self.entries["FAMILY_SLIDER_SOURCE"] = tk.StringVar(value=str(self.settings.get("FAMILY_SLIDER_SOURCE",
                                                                                         "pairs") or "pairs"))
+        self.entries["FAMILY_SLIDER_SOURCE"].trace_add("write", lambda *_: self._family_edit_rows())  # loaded settings
         _src = _row()
         for _k, _lab in (("pairs", "Photo pairs"), ("prompts", "Prompts")):
             ttk.Radiobutton(_src, text=_lab, value=_k, variable=self.entries["FAMILY_SLIDER_SOURCE"],
