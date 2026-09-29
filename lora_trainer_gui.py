@@ -5514,28 +5514,46 @@ class LoRATrainerGUI:
         # --- Edit LoRA — standard-layer families whose model edits images (description.edit_training) ----
         self.entries["FAMILY_EDIT"] = tk.BooleanVar(value=bool(self.settings.get("FAMILY_EDIT", False)))
         self._family_edit_cb = ttk.Checkbutton(
-            training_content, text="Edit LoRA (learn a change from before/after pairs)",
+            training_content, text="Edit LoRA: teach the model a change to make to a photo",
             variable=self.entries["FAMILY_EDIT"])
         self.entries["FAMILY_EDIT"].trace_add("write", lambda *_: self._family_edit_rows())   # presets set it too
         self._family_edit_cb.grid(row=54, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(10, 0))
-        self._family_edit_frame = ttk.Frame(training_content)
-        self._family_edit_frame.grid(row=55, column=0, columnspan=2, sticky=tk.W, padx=(21, 5), pady=(4, 0))
-        for _r, (_key, _label, _browse) in enumerate((
-                ("FAMILY_EDIT_DIR", "Before-images folder:", self._browse_family_edit_dir),
-                ("FAMILY_EDIT_REF", "Preview photo (optional):", self._browse_family_edit_ref))):
-            ttk.Label(self._family_edit_frame, text=_label).grid(row=_r, column=0, sticky=tk.W, pady=2)
-            self.entries[_key] = ttk.Entry(self._family_edit_frame, width=52)
-            self.entries[_key].insert(0, str(self.settings.get(_key, "") or ""))
-            self.entries[_key].grid(row=_r, column=1, sticky=tk.W, padx=(6, 4), pady=2)
-            ttk.Button(self._family_edit_frame, text="Browse", command=_browse).grid(row=_r, column=2, pady=2)
         self._family_edit_hint = ttk.Label(
             training_content,
-            text="The Start folder holds the AFTER images; this folder holds the BEFORE images with the same file "
-                 "names (photo.png pairs with photo.png), one before-image per after-image. Each caption is the instruction, e.g. \"Make it a pencil sketch.\" Previews edit "
-                 "the preview photo, or the first before-image when that is empty - pick a photo that is NOT in the "
-                 "dataset to see whether the edit carries over.",
+            text="For a grade, a look, a relight or a retouch. You give it pairs of the same photo, before and after "
+                 "the change, and it learns to make that change to any photo.",
             foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT, wraplength=720)
-        self._family_edit_hint.grid(row=56, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(2, 4))
+        self._family_edit_hint.grid(row=55, column=0, columnspan=2, sticky=tk.W, padx=(26, 5), pady=(0, 4))
+        self._family_edit_frame = ttk.Frame(training_content)
+        self._family_edit_frame.grid(row=56, column=0, columnspan=2, sticky=tk.W, padx=(26, 5), pady=(2, 4))
+        _blocks = (
+            ("Before-images folder",
+             "Your photos BEFORE the change. The Start folder holds the same photos AFTER it. Each pair shares a file "
+             "name: IMG_0001.jpg in both folders, one before-image for each after-image.",
+             "FAMILY_EDIT_DIR", self._browse_family_edit_dir),
+            ("Captions",
+             "Only the after-images in the Start folder need caption .txt files; the before-images need none. Write "
+             "each caption as the instruction, e.g. \"Apply my concert grade.\" The same instruction on every pair "
+             "is fine.", None, None),
+            ("Preview photo (optional)",
+             "The photo your training previews edit. Choose one that is in neither folder to see the change on a new "
+             "photo. Left empty, previews edit the first before-image.",
+             "FAMILY_EDIT_REF", self._browse_family_edit_ref))
+        _r = 0
+        for _head, _text, _key, _browse in _blocks:
+            ttk.Label(self._family_edit_frame, text=_head, font=(FONT_FAMILY, 10, "bold")).grid(
+                row=_r, column=0, sticky=tk.W, pady=(8 if _r else 0, 0))
+            ttk.Label(self._family_edit_frame, text=_text, foreground=COLORS["text_explain"], font=HINT_FONT,
+                      justify=tk.LEFT, wraplength=690).grid(row=_r + 1, column=0, sticky=tk.W, pady=(1, 2))
+            _r += 2
+            if _key:
+                _row = ttk.Frame(self._family_edit_frame)
+                _row.grid(row=_r, column=0, sticky=tk.W)
+                self.entries[_key] = ttk.Entry(_row, width=60)
+                self.entries[_key].insert(0, str(self.settings.get(_key, "") or ""))
+                self.entries[_key].pack(side=tk.LEFT)
+                ttk.Button(_row, text="Browse", command=_browse).pack(side=tk.LEFT, padx=(6, 0))
+                _r += 1
         for _w in (self._family_adapter_cb, self._family_adapter_hint, self._family_ema_label,
                    self._family_ema_frame, self._family_ema_hint, self._family_edit_cb, self._family_edit_frame,
                    self._family_edit_hint):
@@ -7468,9 +7486,9 @@ class LoRATrainerGUI:
             return                      # a preset set the var before the rows were built
         desc = self._family_desc()
         can = bool(desc is not None and desc.edit_training)
-        self._set_widget_visible(self._family_edit_cb, can)
-        for w in (self._family_edit_frame, self._family_edit_hint):
-            self._set_widget_visible(w, can and bool(self.entries["FAMILY_EDIT"].get()))
+        for w in (self._family_edit_cb, self._family_edit_hint):
+            self._set_widget_visible(w, can)
+        self._set_widget_visible(self._family_edit_frame, can and bool(self.entries["FAMILY_EDIT"].get()))
 
     def _browse_family_edit_dir(self):
         path = filedialog.askdirectory(title="Folder of BEFORE images (same names as the Start folder's)")
