@@ -254,7 +254,7 @@ def _slider_strip(frames, multipliers):
     for k, (im, m) in enumerate(zip(frames, multipliers)):
         x = k * (w + gap)
         strip.paste(im, (x, band))
-        draw.text((x + 8, 7), "strength 0 (base model)" if m == 0 else f"strength {m:+g}", fill=(236, 236, 236),
+        draw.text((x + 8, 7), "strength 0 (slider off)" if m == 0 else f"strength {m:+g}", fill=(236, 236, 236),
                   font=font)
     return strip
 
