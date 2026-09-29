@@ -307,8 +307,9 @@ def setup_parser() -> argparse.ArgumentParser:
                         "matmul (qkv/out/fc1/fc2) across EVERY block per window, on an "
                         "NF4-resident base — full model depth each epoch; the saved "
                         "checkpoint is still exact int8.")
-    p.add_argument("--finetune_start_window", type=int, default=0,
-                   help="Continue a fine-tune mid-cycle (printed at every save)")
+    p.add_argument("--finetune_start_window", type=int, default=None,
+                   help="Continue a fine-tune mid-cycle (printed at every save). Default: the "
+                        "window recorded in the --dit checkpoint, or 0 for a fresh run")
     p.add_argument("--finetune_fused_backward", action="store_true", default=True,
                    help="Free each gradient as it lands (per-tensor optimizers; "
                         "disables grad clipping and accumulation)")

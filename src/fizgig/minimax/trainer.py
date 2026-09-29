@@ -2593,7 +2593,7 @@ def train_minimax(
     finetune_rotation: int = 0,
     finetune_rotate_every: int = 1,
     finetune_rotation_mode: str = "component",
-    finetune_start_window: int = 0,
+    finetune_start_window: int = None,      # None = the checkpoint's own continuation point
     finetune_fused_backward: bool = True,
     finetune_scope: str = "all",            # "all" | "photo"
     finetune_blocks: str = None,
@@ -2686,6 +2686,21 @@ def train_minimax(
         if ft_epoch_offset:
             logger.info("[h3-ft] continuing from %s — checkpoint numbering starts at "
                         "epoch %d", os.path.basename(dit_path), ft_epoch_offset + 1)
+        if finetune_start_window is None:
+            # #159: every FT checkpoint (cycle save, pause, final) stamps where the rotation
+            # picks back up. Continuing from one without an explicit window resumes there,
+            # not at window 0 - the same as the GUI's Resume, after a restart too.
+            finetune_start_window = 0
+            if ft_epoch_offset:
+                try:
+                    from safetensors import safe_open as _so_sw
+                    with _so_sw(dit_path, framework="pt") as _fsw:
+                        finetune_start_window = int((_fsw.metadata() or {}).get(
+                            "fizgig_next_start_window", 0))
+                except Exception:
+                    finetune_start_window = 0
+                logger.info("[h3-ft] rotation resumes at window %d (recorded in the "
+                            "checkpoint)", finetune_start_window)
         # Structural disarms (each mirrors a Krea FT coercion):
         blocks_to_swap = 0          # the H2D offloader would fight the rotator for qdata
         # Component windows only coexist with an NF4 trunk: one matmul across every block
@@ -5623,7 +5638,11 @@ def train_minimax(
         if adaptive is not None:
             adaptive.epoch_boundary(epoch, loss_recorder.moving_average, network, optimizer)
         ft_ckpt_saved_this_epoch = False
-        if save_every_n_epochs and (epoch + 1) % save_every_n_epochs == 0 and (epoch + 1) < max_train_epochs:
+        # The WHOLE run's epoch (#159): a fine-tune continued from a pause checkpoint counts
+        # local epochs from the pause, so a local test missed the cycle-boundary save.
+        # ft_epoch_offset is 0 for every other run.
+        _run_epoch = epoch + 1 + ft_epoch_offset
+        if save_every_n_epochs and _run_epoch % save_every_n_epochs == 0 and (epoch + 1) < max_train_epochs:
             ckpt = os.path.join(output_dir, f"{output_name}-{epoch + 1:06d}.safetensors")
             if rotator is not None:
                 # The full checkpoint IS the resumable state under FT (the continuation is
@@ -5674,7 +5693,7 @@ def train_minimax(
         # epoch always previews — its checkpoint is the final save after the loop.
         # Sample-every-N still doesn't apply; the Samples tab still gates previews on/off.
         _ft_saved_this_epoch = bool(save_every_n_epochs
-                                    and (epoch + 1) % save_every_n_epochs == 0
+                                    and _run_epoch % save_every_n_epochs == 0
                                     and (epoch + 1) < max_train_epochs)
         _prev_due = ((_ft_saved_this_epoch or (epoch + 1) >= max_train_epochs)
                      if rotator is not None
