@@ -14,7 +14,7 @@ _VIGGLE = "https://huggingface.co/Viggle/Qwen-Image-2.1-viggle-turbo"
 _TEMPLATE = "Comfy-Org workflow_templates templates/image_qwen_image_2_1_t2i.json"
 _REDDIT = "r/StableDiffusion 'Qwen Image 2.1 4 Steps Turbo Lora is here by Viggle' (community, Sep 2026)"
 
-def _preset(rank, lr=1e-4, adaptive=None, epochs=30, edit=False):
+def _preset(rank, lr=1e-4, adaptive=None, epochs=30, edit=False, slider=False):
     # 0.5 MP, adamw8bit, 30 epochs saved every epoch. adaptive=(min, max) turns Adaptive LR on (the run starts at
     # the geometric midpoint and the LR box is ignored); None trains flat at lr. Detection runs; per-image LR is
     # off, as in the runs these were measured on.
@@ -22,6 +22,7 @@ def _preset(rank, lr=1e-4, adaptive=None, epochs=30, edit=False):
     return {
         "NETWORK_DIM": rank, "NETWORK_ALPHA": rank, "NETWORK_TYPE": "LoRA (standard)", "LEARNING_RATE": lr,
         "MAX_TRAIN_EPOCHS": epochs, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42, "FAMILY_EDIT": edit,
+        "FAMILY_SLIDER": slider,
         "ADAPTIVE_LR": adaptive is not None, "ADAPTIVE_LR_MIN": lo, "ADAPTIVE_LR_MAX": hi,
         "OPTIMIZER_TYPE": "adamw8bit", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
         "DATASET_MEGAPIXELS": "0.5", "BLOCKS_SWAP": "Auto (detect from GPU)",
@@ -195,6 +196,9 @@ QWEN_IMAGE_21 = FamilyDescription(
         # Edit Strong: rank 16 for trickier edits, at Standard's halved range (rank 16 at Fast's overcooked).
         ("✨ Qwen 2.1 Edit Strong (rank 16, adaptive LR) - trickier edits",
          _preset(16, adaptive=("1e-4", "2e-4"), epochs=12, edit=True)),
+        # Slider (29 Sep): sliders run hot and short (Concept Sliders / AI-Toolkit: rank 4, 2e-4, a few hundred
+        # steps). Measured on Qwen: a prompt smile slider was clear by 160 steps, a 40-pair warmth slider by 160.
+        ("✨ Qwen 2.1 Slider (rank 4, 2e-4)", _preset(4, lr=2e-4, epochs=30, slider=True)),
     ),
     workbench=("repair", "explorer", "profiler", "extract", "royale"),
 

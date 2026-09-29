@@ -5513,15 +5513,24 @@ class LoRATrainerGUI:
         self._family_ema_hint.grid(row=53, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(0, 4))
         # --- Edit LoRA — standard-layer families whose model edits images (description.edit_training) ----
         self.entries["FAMILY_EDIT"] = tk.BooleanVar(value=bool(self.settings.get("FAMILY_EDIT", False)))
-        self._family_edit_cb = ttk.Checkbutton(
-            training_content, text="Edit LoRA (train from original + edited photo pairs)",
-            variable=self.entries["FAMILY_EDIT"])
-        self.entries["FAMILY_EDIT"].trace_add("write", lambda *_: self._family_edit_rows())   # presets set it too
+        self.entries["FAMILY_SLIDER"] = tk.BooleanVar(value=bool(self.settings.get("FAMILY_SLIDER", False)))
+        # Kind of LoRA: one choice, stored as the two flags presets and the builders read
+        self._family_kind_var = tk.StringVar(value=("edit" if self.entries["FAMILY_EDIT"].get() else
+                                                    "slider" if self.entries["FAMILY_SLIDER"].get() else "standard"))
+        self._family_edit_cb = ttk.Frame(training_content)          # the Kind of LoRA row
+        ttk.Label(self._family_edit_cb, text="Kind of LoRA:").pack(side=tk.LEFT, padx=(0, 10))
+        self._family_kind_buttons = {}
+        for _k, _lab in (("standard", "Standard"), ("edit", "Edit (original + edited photo pairs)"),
+                         ("slider", "Slider (a dial between two looks)")):
+            self._family_kind_buttons[_k] = ttk.Radiobutton(self._family_edit_cb, text=_lab, value=_k,
+                                                            variable=self._family_kind_var,
+                                                            command=self._family_kind_chosen)
+            self._family_kind_buttons[_k].pack(side=tk.LEFT, padx=(0, 14))
+        for _flag in ("FAMILY_EDIT", "FAMILY_SLIDER"):                  # presets set the flags
+            self.entries[_flag].trace_add("write", lambda *_: self._family_edit_rows())
         self._family_edit_cb.grid(row=54, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(10, 0))
         self._family_edit_hint = ttk.Label(
-            training_content,
-            text="Teach the model an edit (a grade, a look, a relight) from pairs of the same photo: the original, "
-                 "and your edited version. The LoRA learns to make that edit to new photos.",
+            training_content, text="",
             foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT, wraplength=720)
         self._family_edit_hint.grid(row=55, column=0, columnspan=2, sticky=tk.W, padx=(26, 5), pady=(0, 4))
         self._family_edit_frame = ttk.Frame(training_content)
@@ -5574,9 +5583,61 @@ class LoRATrainerGUI:
                "An original photo that is in neither folder. The previews during training show the edit applied to it. "
                "Any size: it is fitted to the preview size automatically. Leave empty to use the first original.")
         _path_row("FAMILY_EDIT_REF", self._browse_family_edit_ref)
+
+        # --- Slider card: where the dial's two ends come from ----------------------------------------------
+        self._family_slider_frame = ttk.Frame(training_content)
+        self._family_slider_frame.grid(row=57, column=0, columnspan=2, sticky=tk.W, padx=(26, 5), pady=(2, 4))
+        _f = self._family_slider_frame
+        _r[0] = 0
+        _block("Where the two ends come from",
+               "Photo pairs: the same shots at both ends (e.g. smiling and not smiling), 4 to 10 pairs, same framing "
+               "at both ends. Prompts: no photos, just a description and what each end adds.")
+        self.entries["FAMILY_SLIDER_SOURCE"] = tk.StringVar(value=str(self.settings.get("FAMILY_SLIDER_SOURCE",
+                                                                                        "pairs") or "pairs"))
+        _src = _row()
+        for _k, _lab in (("pairs", "Photo pairs"), ("prompts", "Prompts")):
+            ttk.Radiobutton(_src, text=_lab, value=_k, variable=self.entries["FAMILY_SLIDER_SOURCE"],
+                            command=self._family_edit_rows).pack(side=tk.LEFT, padx=(0, 14))
+        self._family_slider_pairs = ttk.Frame(_f)
+        self._family_slider_pairs.grid(row=_r[0], column=0, sticky=tk.W)
+        self._family_slider_prompts = ttk.Frame(_f)
+        self._family_slider_prompts.grid(row=_r[0] + 1, column=0, sticky=tk.W)
+        _f = self._family_slider_pairs
+        _r[0] = 0
+        _block("1. +1 end folder", "Your photos at the +1 end of the dial (e.g. smiling). This is the same folder "
+                                   "as on the Start tab.")
+        _path_row(self.image_folder_var, self._browse_image_folder)
+        _block("2. -1 end folder", "The same shots at the -1 end (e.g. not smiling), with the same file names as "
+                                   "the +1 photos.")
+        _path_row("FAMILY_SLIDER_DIR", self._browse_family_slider_dir)
+        _block("3. Caption for every photo",
+               "What both ends share, e.g. \"a portrait photo of a woman\" - leave the change itself out. Write "
+               "captions saves it as the caption of every photo in the +1 folder.")
+        _cr = _row()
+        self.entries["FAMILY_SLIDER_CAPTION"] = ttk.Entry(_cr, width=60)
+        self.entries["FAMILY_SLIDER_CAPTION"].insert(0, str(self.settings.get("FAMILY_SLIDER_CAPTION", "") or ""))
+        self.entries["FAMILY_SLIDER_CAPTION"].pack(side=tk.LEFT)
+        ttk.Button(_cr, text="Write captions",
+                   command=lambda: self._family_edit_write_captions(self.entries["FAMILY_SLIDER_CAPTION"])).pack(
+            side=tk.LEFT, padx=(6, 0))
+        _f = self._family_slider_prompts
+        _r[0] = 0
+        for _key, _head, _text, _default in (
+                ("FAMILY_SLIDER_BASE", "1. What the picture is",
+                 "The shared description, e.g. \"a close-up portrait photo of a man\".", ""),
+                ("FAMILY_SLIDER_POS", "2. The +1 end adds", "e.g. \"smiling broadly\".", ""),
+                ("FAMILY_SLIDER_NEG", "3. The -1 end adds", "e.g. \"frowning\".", ""),
+                ("FAMILY_SLIDER_GUIDANCE", "4. Push strength",
+                 "How hard the ends are pushed apart. Higher gives a stronger dial but changes more than the one "
+                 "thing you asked for (a frown can turn into a different, older man). 2 is a good start.", "2")):
+            _block(_head, _text)
+            _er = _row()
+            self.entries[_key] = ttk.Entry(_er, width=60 if _key != "FAMILY_SLIDER_GUIDANCE" else 8)
+            self.entries[_key].insert(0, str(self.settings.get(_key, _default) or _default))
+            self.entries[_key].pack(side=tk.LEFT)
         for _w in (self._family_adapter_cb, self._family_adapter_hint, self._family_ema_label,
                    self._family_ema_frame, self._family_ema_hint, self._family_edit_cb, self._family_edit_frame,
-                   self._family_edit_hint):
+                   self._family_edit_hint, self._family_slider_frame):
             _w._fizgig_described_family = "*"   # standard-layer widget: old-family goldens set it aside
             _w.grid_remove()
 
@@ -7493,7 +7554,9 @@ class LoRATrainerGUI:
     # Training-tab settings that belong to standard-layer (described) families only.
     _FAMILY_ENTRY_KEYS = frozenset({"FAMILY_TRAINING_ADAPTER", "FAMILY_EMA", "FAMILY_PRECISION",
                                     "FAMILY_TURBO_STRENGTH", "FAMILY_EDIT", "FAMILY_EDIT_DIR", "FAMILY_EDIT_REF",
-                                    "FAMILY_EDIT_CAPTION"})
+                                    "FAMILY_EDIT_CAPTION", "FAMILY_SLIDER", "FAMILY_SLIDER_SOURCE",
+                                    "FAMILY_SLIDER_DIR", "FAMILY_SLIDER_CAPTION", "FAMILY_SLIDER_BASE",
+                                    "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG", "FAMILY_SLIDER_GUIDANCE"})
     _FAMILY_PRECISION_LABELS = {"auto": "Auto (fits your free VRAM)", "bf16": "bf16 (full precision)",
                                 "int8": "INT8 (8-bit, fastest)", "nf4": "4-bit NF4 (smallest)"}
 
@@ -7501,23 +7564,74 @@ class LoRATrainerGUI:
         desc = desc if desc is not None else self._family_desc()
         return bool(desc is not None and desc.edit_training and self.entries["FAMILY_EDIT"].get())
 
+    def _family_slider_on(self, desc=None, source=None):
+        """Slider mode for a family that offers it; source "pairs" / "prompts" narrows it to one kind."""
+        desc = desc if desc is not None else self._family_desc()
+        on = bool(desc is not None and desc.slider_training and self.entries["FAMILY_SLIDER"].get())
+        if on and source:
+            on = self.entries["FAMILY_SLIDER_SOURCE"].get() == source
+        return on
+
+    def _family_kind_chosen(self):
+        """The Kind of LoRA radio sets the two flags (one at a time); the traces redraw the rows."""
+        k = self._family_kind_var.get()
+        self.entries["FAMILY_EDIT"].set(k == "edit")
+        self.entries["FAMILY_SLIDER"].set(k == "slider")
+
+    def _browse_family_slider_dir(self):
+        path = filedialog.askdirectory(title="Folder of -1 end photos (same names as the +1 photos)")
+        if path:
+            self.entries["FAMILY_SLIDER_DIR"].delete(0, tk.END)
+            self.entries["FAMILY_SLIDER_DIR"].insert(0, path)
+
+    _KIND_HINTS = {
+        "standard": "A normal LoRA: a person, a style or a concept, learned from your captioned photos.",
+        "edit": "Teach the model an edit (a grade, a look, a relight) from pairs of the same photo: the original, "
+                "and your edited version. The LoRA learns to make that edit to new photos.",
+        "slider": "A dial: at strength +1 the LoRA moves a picture toward one look, at -1 toward the other, and "
+                  "anything in between. Previews show -1, 0 and +1 side by side.",
+    }
+
     def _family_edit_rows(self):
-        """The before-images rows show only while Edit LoRA is ticked."""
+        """Kind of LoRA: the edit card while Edit is chosen, the slider card (and its pairs or prompts half)
+        while Slider is."""
         if getattr(self, "_family_edit_hint", None) is None:
             return                      # a preset set the var before the rows were built
         desc = self._family_desc()
-        can = bool(desc is not None and desc.edit_training)
-        if can:
+        can_edit = bool(desc is not None and desc.edit_training)
+        can_slider = bool(desc is not None and desc.slider_training)
+        if getattr(self, "_family_kind_buttons", None):
+            for k, b in self._family_kind_buttons.items():
+                if k == "edit" and not can_edit or k == "slider" and not can_slider:
+                    b.pack_forget()
+                elif not b.winfo_manager():
+                    b.pack(side=tk.LEFT, padx=(0, 14))
+            if self.entries["FAMILY_EDIT"].get() and can_edit:
+                kind = "edit"
+            elif self.entries["FAMILY_SLIDER"].get() and can_slider:
+                kind = "slider"
+            else:
+                kind = "standard"
+            if self._family_kind_var.get() != kind:
+                self._family_kind_var.set(kind)
+            self._family_edit_hint.configure(text=self._KIND_HINTS[kind])
+            slider_on = kind == "slider"
+            self._set_widget_visible(self._family_slider_frame, slider_on)
+            prompts = self.entries["FAMILY_SLIDER_SOURCE"].get() == "prompts"
+            self._set_widget_visible(self._family_slider_pairs, slider_on and not prompts)
+            self._set_widget_visible(self._family_slider_prompts, slider_on and prompts)
+        can = can_edit or can_slider
+        if can_edit:
             self._family_edit_need.configure(text=desc.edit_note or "An original and its edited version must have "
                                                                   "the same crop and shape.")
-        edit_on = can and bool(self.entries["FAMILY_EDIT"].get())
+        edit_on = can_edit and bool(self.entries["FAMILY_EDIT"].get())
         if getattr(self, "_sample_edit_note", None) is not None:
             for w in (self.sample_prompt_text, self._sample_edit_note._prompt_hint):
                 self._set_widget_visible(w, not edit_on)
             self._set_widget_visible(self._sample_edit_note, edit_on)
         for w in (self._family_edit_cb, self._family_edit_hint):
             self._set_widget_visible(w, can)
-        self._set_widget_visible(self._family_edit_frame, can and bool(self.entries["FAMILY_EDIT"].get()))
+        self._set_widget_visible(self._family_edit_frame, can_edit and bool(self.entries["FAMILY_EDIT"].get()))
 
     def _browse_family_edit_dir(self):
         path = filedialog.askdirectory(title="Folder of BEFORE images (same names as the Start folder's)")
@@ -7554,9 +7668,10 @@ class LoRATrainerGUI:
             pass
         return ""
 
-    def _family_edit_write_captions(self):
-        """Write the typed edit instruction as the caption (.txt) of every photo in the Edited (Start) folder."""
-        text = self.entries["FAMILY_EDIT_CAPTION"].get().strip()
+    def _family_edit_write_captions(self, entry=None):
+        """Write the typed text (the edit instruction, or a slider's shared description) as the caption (.txt)
+        of every photo in the Start folder."""
+        text = (entry or self.entries["FAMILY_EDIT_CAPTION"]).get().strip()
         folder = self.image_folder_var.get().strip()
         if not text:
             messagebox.showerror("Write captions", "Type the edit instruction first, e.g. \"Apply my concert grade.\"")
@@ -7580,11 +7695,11 @@ class LoRATrainerGUI:
         self.update_console(f"[edit] wrote the caption \"{text}\" for {len(photos)} photos in {folder}\n")
         messagebox.showinfo("Write captions", f"Captions written for {len(photos)} photos.")
 
-    def _family_edit_problems(self):
+    def _family_edit_problems(self, before_dir=None):
         """(edited photos without a caption, pairs whose shapes differ) for the Start check."""
         from PIL import Image
         after_dir = self.image_folder_var.get().strip()
-        before_dir = self.entries["FAMILY_EDIT_DIR"].get().strip()
+        before_dir = (before_dir or self.entries["FAMILY_EDIT_DIR"].get()).strip()
         ext = (getattr(self, "dataset_caption_ext_var", None) and self.dataset_caption_ext_var.get().strip()) or ".txt"
         befores = sorted(f for f in os.listdir(before_dir) if os.path.splitext(f)[1].lower() in self._EDIT_EXTS)
         uncaptioned, shapes = [], []
@@ -7605,12 +7720,12 @@ class LoRATrainerGUI:
                     pass
         return uncaptioned, shapes
 
-    def _family_edit_pairs(self):
+    def _family_edit_pairs(self, before_dir=None):
         """(after-images without a before-image, after-images with more than one, first before-image path) for the
         Start folder and the before-images folder, matched the way the dataset loader matches them: a before-image
         belongs to photo.png when it is photo.<ext> or photo_<anything>.<ext>."""
         after_dir = self.image_folder_var.get().strip()
-        before_dir = self.entries["FAMILY_EDIT_DIR"].get().strip()
+        before_dir = (before_dir or self.entries["FAMILY_EDIT_DIR"].get()).strip()
         befores = sorted(f for f in os.listdir(before_dir) if os.path.splitext(f)[1].lower() in self._EDIT_EXTS)
         missing, multiple, first = [], [], None
         for f in sorted(os.listdir(after_dir)):
@@ -7652,6 +7767,36 @@ class LoRATrainerGUI:
                                   f"original (e.g. {', '.join(shapes[:3])}) - export both at the same crop")
             if ref and not os.path.isfile(ref):
                 errors.append(f"Edit LoRA test photo for previews does not exist: {ref}")
+        if self._family_slider_on(desc, source="pairs"):
+            other = self.entries["FAMILY_SLIDER_DIR"].get().strip()
+            if not other or not os.path.isdir(other):
+                errors.append("Slider: set the -1 end folder (Training tab, Training Parameters)")
+            elif os.path.isdir(self.image_folder_var.get().strip()):
+                missing, multiple, _ = self._family_edit_pairs(other)
+                if missing:
+                    errors.append(f"Slider: {len(missing)} +1 photo(s) have no -1 photo with the same file name in "
+                                  f"{other} (e.g. {', '.join(missing[:3])})")
+                if multiple:
+                    errors.append(f"Slider: {len(multiple)} +1 photo(s) match more than one -1 photo (e.g. "
+                                  f"{', '.join(multiple[:3])}) - keep one per photo, with the same file name")
+                uncaptioned, shapes = self._family_edit_problems(other)
+                if uncaptioned:
+                    errors.append(f"Slider: {len(uncaptioned)} photo(s) have no caption (e.g. "
+                                  f"{', '.join(uncaptioned[:3])}) - type what both ends share and press Write "
+                                  f"captions")
+                if shapes:
+                    errors.append(f"Slider: {len(shapes)} photo(s) have a different crop or shape at the two ends "
+                                  f"(e.g. {', '.join(shapes[:3])}) - use the same framing for both")
+        if self._family_slider_on(desc, source="prompts"):
+            for k, what in (("FAMILY_SLIDER_BASE", "what the picture is"), ("FAMILY_SLIDER_POS", "what the +1 end "
+                            "adds"), ("FAMILY_SLIDER_NEG", "what the -1 end adds")):
+                if not self.entries[k].get().strip():
+                    errors.append(f"Slider from prompts: fill in {what}")
+            try:
+                if float(self.entries["FAMILY_SLIDER_GUIDANCE"].get()) <= 0:
+                    raise ValueError
+            except ValueError:
+                errors.append("Slider push strength must be a number above 0")
         need = [f for f in desc.model_files if f.required]
         if desc.training_adapter and self.entries["FAMILY_TRAINING_ADAPTER"].get():
             need += [f for f in desc.model_files if f.pref_key == desc.training_adapter]
@@ -32154,6 +32299,10 @@ class LoRATrainerGUI:
                             toml_lines.append('control_directory = "'
                                               + self.entries["FAMILY_EDIT_DIR"].get().strip().replace(chr(92), "/")
                                               + '"')
+                        elif _i == 0 and self._family_slider_on(source="pairs"):
+                            toml_lines.append('control_directory = "'
+                                              + self.entries["FAMILY_SLIDER_DIR"].get().strip().replace(chr(92), "/")
+                                              + '"')
                         _cd = self._cache_dir_for(_root, _folder) if _root else ""
                         if _cd:
                             toml_lines.append(
@@ -32800,7 +32949,9 @@ class LoRATrainerGUI:
             errors.append(f"Training image folder does not exist: {image_dir}")
         # A RefMod plain encode (Steps 0) trains nothing and reads no captions — the photos
         # alone are the references — so the caption check does not apply to it.
-        if image_dir and os.path.isdir(image_dir) and caption_ext and not self._refmod_plain_encode():
+        _prompt_slider = bool(self._family_desc() is not None and self._family_slider_on(source="prompts"))
+        if (image_dir and os.path.isdir(image_dir) and caption_ext and not self._refmod_plain_encode()
+                and not _prompt_slider):
             import glob as _glob
             # glob.escape is load-bearing here: a folder like "[subject] photos" made this
             # find zero captions and block training with "No caption files found", while the
@@ -33145,7 +33296,11 @@ class LoRATrainerGUI:
                 "FAMILY_EDIT": self._family_edit_on(),
                 "FAMILY_EDIT_DIR": self.entries["FAMILY_EDIT_DIR"].get().strip(),
                 "FAMILY_EDIT_REF": self.entries["FAMILY_EDIT_REF"].get().strip(),
-                "FAMILY_EDIT_CAPTION": self.entries["FAMILY_EDIT_CAPTION"].get().strip()}
+                "FAMILY_EDIT_CAPTION": self.entries["FAMILY_EDIT_CAPTION"].get().strip(),
+                "FAMILY_SLIDER": self._family_slider_on(),
+                **{k: self.entries[k].get().strip() for k in (
+                    "FAMILY_SLIDER_SOURCE", "FAMILY_SLIDER_DIR", "FAMILY_SLIDER_CAPTION", "FAMILY_SLIDER_BASE",
+                    "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG", "FAMILY_SLIDER_GUIDANCE")}}
                if self._family_desc() is not None else {}),
             # experiment/tread: both ticks must be copied here or the builder reads a stale value
             "MINIMAX_TREAD": bool(self.entries["MINIMAX_TREAD"].get()),
@@ -33293,7 +33448,8 @@ class LoRATrainerGUI:
         # original launch. An armed FT continuation counts: it is the same run continuing.
         is_resuming = bool(self.settings.get("RESUME_TRAINING", "").strip()
                            or self._ft_resume_active())
-        if self.enable_cache_var.get() and not is_resuming:
+        _prompt_slider = bool(self._family_desc() is not None and self._family_slider_on(source="prompts"))
+        if self.enable_cache_var.get() and not is_resuming and not _prompt_slider:
             self.update_console(f"Starting cache preparation for {arch}...\n")
 
             def on_text_encoder_caching_complete():
@@ -33952,6 +34108,8 @@ class LoRATrainerGUI:
                "--stage", stage, "--dataset_config", self.settings["DATASET_CONFIG"], "--model", model]
         if stage == "latents":
             cmd.append("--skip_existing")   # validated against the current bucket (see the H3 note)
+        if self._family_slider_on(desc, source="pairs"):
+            cmd.append("--slider")          # the control folder is the -1 end: its latents, captions encoded plainly
         return cmd
 
     def _generic_train_command(self, desc):
@@ -34114,6 +34272,17 @@ class LoRATrainerGUI:
                             ref = ""
                     if ref:
                         cmd += ["--sample_reference", ref]
+        if st.get("FAMILY_SLIDER"):
+            if st.get("FAMILY_SLIDER_SOURCE") == "prompts":
+                base = st.get("FAMILY_SLIDER_BASE", "").strip()
+                cmd += ["--slider_prompts", base, f"{base}, {st.get('FAMILY_SLIDER_POS', '').strip()}",
+                        f"{base}, {st.get('FAMILY_SLIDER_NEG', '').strip()}",
+                        "--slider_guidance", str(st.get("FAMILY_SLIDER_GUIDANCE") or "2")]
+                for flag, role in (("--text_encoder", "text_encoder"), ("--vae", "vae")):
+                    if flag not in cmd:          # the practice images and the three prompts need both
+                        cmd += [flag, self._krea2_pref(desc.pref_for(role))]
+            else:
+                cmd.append("--slider_pairs")
         return cmd
 
     def _build_krea2_train_command(self):
