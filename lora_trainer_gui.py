@@ -13668,6 +13668,18 @@ class LoRATrainerGUI:
                 _e.insert(0, f"{sp_strength:g}")
         if hasattr(self, "sample_steps_var") and self.sample_steps_var.get().strip() in ("", str(other)):
             self.sample_steps_var.set(str(want))       # only switch between the two defaults, never a user value
+        _tag = getattr(desc, "preview_reset", "")
+        _done = self.last_used.setdefault("preview_resets", {})
+        if _tag and _done.get(desc.key) != _tag and hasattr(self, "sample_steps_var"):
+            # the family's one-time reset: saved steps / turbo strength go to the current defaults, once
+            self.sample_steps_var.set(str(want))
+            if "FAMILY_TURBO_STRENGTH" in self.entries and sp_strength is not None:
+                self.entries["FAMILY_TURBO_STRENGTH"].delete(0, tk.END)
+                self.entries["FAMILY_TURBO_STRENGTH"].insert(0, f"{sp_strength:g}")
+            _done[desc.key] = _tag
+            self._save_last_used_paths()
+            self.update_console(f"[samples] {desc.display_name} previews reset to the new default: {want} steps"
+                                + (f", turbo strength {sp_strength:g}" if sp_strength is not None else "") + "\n")
         if hasattr(self, "_family_turbo_label"):
             for _w, _kw in ((self._family_turbo_label, {"padx": (14, 4)}), (self.entries["FAMILY_TURBO_STRENGTH"], {})):
                 if speed_on and not _w.winfo_manager():
@@ -13678,9 +13690,12 @@ class LoRATrainerGUI:
                 self.entries["FAMILY_TURBO_STRENGTH"].insert(0, f"{sp_strength:g}")
         if hasattr(self, "sample_steps_note"):
             self.sample_steps_note.configure(
-                text=(f"{desc.display_name}: the {sp.name} (set in Preferences), default {sp_steps} steps at strength "
-                      f"{sp_strength:g}. At {sp.settings.steps} steps it uses its own schedule, otherwise the model's "
-                      f"standard one" if speed_on else
+                text=((f"{desc.display_name}: {sp_steps} steps on the plain model by default. For fast previews set "
+                       f"Turbo strength to {sp.strength:g} and steps to {sp.settings.steps} (the {sp.name}, set in "
+                       f"Preferences)" if not sp_strength else
+                       f"{desc.display_name}: the {sp.name} (set in Preferences), default {sp_steps} steps at strength "
+                       f"{sp_strength:g}. At {sp.settings.steps} steps it uses its own schedule, otherwise the model's "
+                       f"standard one") if speed_on else
                       f"{desc.display_name}: {desc.preview_steps} steps at CFG {desc.preview_cfg:g}"
                       + (f" - set the {sp.name} in Preferences for {sp_steps}-step previews" if sp else "")))
         if hasattr(self, "krea2_engine_frame"):
@@ -33780,19 +33795,22 @@ class LoRATrainerGUI:
             # would otherwise be missed (swaps only between the two defaults, never a typed value).
             try:
                 self._generic_samples_ui(desc)
+                if "FAMILY_TURBO_STRENGTH" in self.entries:     # it may just have run the family's one-time reset
+                    st["FAMILY_TURBO_STRENGTH"] = self.entries["FAMILY_TURBO_STRENGTH"].get()
             except Exception:
                 pass
             sp = desc.preview_speed()
             speed_path = self._krea2_pref(sp.pref_key) if sp and sp.pref_key else ""
             if speed_path and os.path.exists(speed_path):
-                cmd += ["--speed_lora", speed_path]
                 _dflt = desc.preview_speed_defaults()[1]
                 try:
                     _ts = float(str(st.get("FAMILY_TURBO_STRENGTH", "") or _dflt))
                 except ValueError:
                     _ts = _dflt
-                if abs(_ts - _dflt) > 1e-9:
-                    cmd += ["--speed_lora_strength", f"{max(0.0, min(2.0, _ts)):g}"]
+                if _ts > 0:                              # strength 0 = previews without the turbo: don't load it
+                    cmd += ["--speed_lora", speed_path]
+                    if abs(_ts - _dflt) > 1e-9:
+                        cmd += ["--speed_lora_strength", f"{max(0.0, min(2.0, _ts)):g}"]
             prompts = self._write_krea2_sample_prompts(filename=f"{desc.key}_prompts.txt")
             every = self.sample_every_n_epochs_var.get().strip()
             if prompts and every.isdigit() and int(every) > 0:
