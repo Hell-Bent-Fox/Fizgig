@@ -64,12 +64,15 @@ Training previews render on the plain model at **25 steps** by default, with the
 
 Qwen Image 2.1 is one model for text-to-image and editing, so a LoRA can learn an edit: a grade, a look, a relight, a retouch. You train it on pairs of the same photo, the original and your edited version, and it learns to make that edit to new photos.
 
+**What you need:** about 40 pairs (20 at least; more if your photos vary a lot). Each photo 1 MP or larger, e.g. 1200×800; bigger is fine, Fizgig resizes them. An original and its edited version must have the same crop and shape.
+
 1. On the Training tab, pick the **Qwen 2.1 Edit** preset (it ticks **Edit LoRA** under Training Parameters).
 2. **Originals folder (before editing):** your original, unedited photos. They need no captions.
-3. **Edited folder (after editing):** the same photos after your edit, with the same file names as the originals (`IMG_0001.jpg` in both), one edited photo per original. This is the same folder as on the Start tab. Each edited photo needs a caption `.txt` saying what the edit is, e.g. "Apply my concert grade." The same caption on every photo is fine.
-4. **Test photo for previews (optional):** an original photo that is in neither folder. The previews during training show the edit applied to it; left empty, they use the first original.
+3. **Edited folder (after editing):** the same photos after your edit, with the same file names as the originals (`IMG_0001.jpg` in both), one edited photo per original. This is the same folder as on the Start tab.
+4. **Captions for the edited photos:** type what the edit is, e.g. "Apply my concert grade.", and press **Write captions**. It saves that text as the caption of every photo in the Edited folder.
+5. **Test photo for previews (optional):** an original photo that is in neither folder. The previews during training show the edit applied to it. Any size: it's fitted to the preview size automatically. Left empty, previews use the first original.
 
-Start refuses to run if an edited photo has no original with the same file name.
+Start refuses to run if an edited photo has no original with the same file name, has no caption, or has a different crop or shape from its original.
 
 In ComfyUI, load the LoRA as usual and use **Text Encode Qwen Image 2.1**: connect the VAE, plug the photo to edit into its first image input, write the instruction as the prompt, and sample from the node's **latent** output so the result keeps the photo's shape. The node's **resolution** works best near the size the LoRA trained at: in our tests an edit LoRA trained at 0.5 MP matched its Fizgig previews at resolution 768 and came out slightly less exact at the default 1024.
 

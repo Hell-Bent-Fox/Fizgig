@@ -5526,35 +5526,54 @@ class LoRATrainerGUI:
         self._family_edit_hint.grid(row=55, column=0, columnspan=2, sticky=tk.W, padx=(26, 5), pady=(0, 4))
         self._family_edit_frame = ttk.Frame(training_content)
         self._family_edit_frame.grid(row=56, column=0, columnspan=2, sticky=tk.W, padx=(26, 5), pady=(2, 4))
-        # (heading, explanation, entry key or the Start folder var, browse)
-        _blocks = (
-            ("1. Originals folder (before editing)",
-             "Your original, unedited photos. No captions needed.",
-             "FAMILY_EDIT_DIR", self._browse_family_edit_dir),
-            ("2. Edited folder (after editing)",
-             "The same photos after your edit, with the same file names as the originals. Each needs a caption .txt "
-             "saying what the edit is, e.g. \"Apply my concert grade.\" This is the same folder as on the Start tab.",
-             self.image_folder_var, self._browse_image_folder),
-            ("3. Test photo for previews (optional)",
-             "An original photo that is in neither folder. The previews during training show the edit applied to it. "
-             "Leave empty to use the first original.",
-             "FAMILY_EDIT_REF", self._browse_family_edit_ref))
-        _r = 0
-        for _head, _text, _key, _browse in _blocks:
-            ttk.Label(self._family_edit_frame, text=_head, font=(FONT_FAMILY, 10, "bold")).grid(
-                row=_r, column=0, sticky=tk.W, pady=(8 if _r else 0, 0))
-            ttk.Label(self._family_edit_frame, text=_text, foreground=COLORS["text_explain"], font=HINT_FONT,
-                      justify=tk.LEFT, wraplength=690).grid(row=_r + 1, column=0, sticky=tk.W, pady=(1, 2))
-            _row = ttk.Frame(self._family_edit_frame)
-            _row.grid(row=_r + 2, column=0, sticky=tk.W)
-            if isinstance(_key, str):
-                self.entries[_key] = ttk.Entry(_row, width=60)
-                self.entries[_key].insert(0, str(self.settings.get(_key, "") or ""))
-                self.entries[_key].pack(side=tk.LEFT)
+        _f = self._family_edit_frame
+        _r = [0]
+
+        def _block(head, text):
+            ttk.Label(_f, text=head, font=(FONT_FAMILY, 10, "bold")).grid(
+                row=_r[0], column=0, sticky=tk.W, pady=(8 if _r[0] else 0, 0))
+            lab = ttk.Label(_f, text=text, foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT,
+                            wraplength=690)
+            lab.grid(row=_r[0] + 1, column=0, sticky=tk.W, pady=(1, 2))
+            _r[0] += 2
+            return lab
+
+        def _row():
+            row = ttk.Frame(_f)
+            row.grid(row=_r[0], column=0, sticky=tk.W, pady=(0, 2))
+            _r[0] += 1
+            return row
+
+        def _path_row(key, browse):
+            row = _row()
+            if isinstance(key, str):
+                self.entries[key] = ttk.Entry(row, width=60)
+                self.entries[key].insert(0, str(self.settings.get(key, "") or ""))
+                self.entries[key].pack(side=tk.LEFT)
             else:
-                ttk.Entry(_row, textvariable=_key, width=60).pack(side=tk.LEFT)
-            ttk.Button(_row, text="Browse", command=_browse).pack(side=tk.LEFT, padx=(6, 0))
-            _r += 3
+                ttk.Entry(row, textvariable=key, width=60).pack(side=tk.LEFT)
+            ttk.Button(row, text="Browse", command=browse).pack(side=tk.LEFT, padx=(6, 0))
+
+        # the model's own guidance (description.edit_note), filled in by _family_edit_rows
+        self._family_edit_need = _block("What you need", "")
+        _block("1. Originals folder (before editing)", "Your original, unedited photos. No captions needed.")
+        _path_row("FAMILY_EDIT_DIR", self._browse_family_edit_dir)
+        _block("2. Edited folder (after editing)",
+               "The same photos after your edit, with the same file names as the originals. This is the same folder "
+               "as on the Start tab.")
+        _path_row(self.image_folder_var, self._browse_image_folder)
+        _block("3. Captions for the edited photos",
+               "Type what the edit is, e.g. \"Apply my concert grade.\", and press Write captions: it saves that text "
+               "as the caption of every photo in the Edited folder.")
+        _cr = _row()
+        self.entries["FAMILY_EDIT_CAPTION"] = ttk.Entry(_cr, width=60)
+        self.entries["FAMILY_EDIT_CAPTION"].insert(0, str(self.settings.get("FAMILY_EDIT_CAPTION", "") or ""))
+        self.entries["FAMILY_EDIT_CAPTION"].pack(side=tk.LEFT)
+        ttk.Button(_cr, text="Write captions", command=self._family_edit_write_captions).pack(side=tk.LEFT, padx=(6, 0))
+        _block("4. Test photo for previews (optional)",
+               "An original photo that is in neither folder. The previews during training show the edit applied to it. "
+               "Any size: it is fitted to the preview size automatically. Leave empty to use the first original.")
+        _path_row("FAMILY_EDIT_REF", self._browse_family_edit_ref)
         for _w in (self._family_adapter_cb, self._family_adapter_hint, self._family_ema_label,
                    self._family_ema_frame, self._family_ema_hint, self._family_edit_cb, self._family_edit_frame,
                    self._family_edit_hint):
@@ -7473,7 +7492,8 @@ class LoRATrainerGUI:
 
     # Training-tab settings that belong to standard-layer (described) families only.
     _FAMILY_ENTRY_KEYS = frozenset({"FAMILY_TRAINING_ADAPTER", "FAMILY_EMA", "FAMILY_PRECISION",
-                                    "FAMILY_TURBO_STRENGTH", "FAMILY_EDIT", "FAMILY_EDIT_DIR", "FAMILY_EDIT_REF"})
+                                    "FAMILY_TURBO_STRENGTH", "FAMILY_EDIT", "FAMILY_EDIT_DIR", "FAMILY_EDIT_REF",
+                                    "FAMILY_EDIT_CAPTION"})
     _FAMILY_PRECISION_LABELS = {"auto": "Auto (fits your free VRAM)", "bf16": "bf16 (full precision)",
                                 "int8": "INT8 (8-bit, fastest)", "nf4": "4-bit NF4 (smallest)"}
 
@@ -7487,6 +7507,9 @@ class LoRATrainerGUI:
             return                      # a preset set the var before the rows were built
         desc = self._family_desc()
         can = bool(desc is not None and desc.edit_training)
+        if can:
+            self._family_edit_need.configure(text=desc.edit_note or "An original and its edited version must have "
+                                                                  "the same crop and shape.")
         for w in (self._family_edit_cb, self._family_edit_hint):
             self._set_widget_visible(w, can)
         self._set_widget_visible(self._family_edit_frame, can and bool(self.entries["FAMILY_EDIT"].get()))
@@ -7505,6 +7528,57 @@ class LoRATrainerGUI:
             self.entries["FAMILY_EDIT_REF"].insert(0, path)
 
     _EDIT_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+
+    def _family_edit_write_captions(self):
+        """Write the typed edit instruction as the caption (.txt) of every photo in the Edited (Start) folder."""
+        text = self.entries["FAMILY_EDIT_CAPTION"].get().strip()
+        folder = self.image_folder_var.get().strip()
+        if not text:
+            messagebox.showerror("Write captions", "Type the edit instruction first, e.g. \"Apply my concert grade.\"")
+            return
+        if not os.path.isdir(folder):
+            messagebox.showerror("Write captions", "Set the Edited folder first.")
+            return
+        photos = sorted(f for f in os.listdir(folder) if os.path.splitext(f)[1].lower() in self._EDIT_EXTS)
+        if not photos:
+            messagebox.showerror("Write captions", f"No photos in {folder}.")
+            return
+        ext = (getattr(self, "dataset_caption_ext_var", None) and self.dataset_caption_ext_var.get().strip()) or ".txt"
+        existing = [f for f in photos if os.path.exists(os.path.join(folder, os.path.splitext(f)[0] + ext))]
+        if existing and not messagebox.askyesno(
+                "Write captions", f"{len(existing)} of the {len(photos)} photos already have a caption. Replace them "
+                                  f"with \"{text}\"?"):
+            return
+        for f in photos:
+            with open(os.path.join(folder, os.path.splitext(f)[0] + ext), "w", encoding="utf-8") as fh:
+                fh.write(text)
+        self.update_console(f"[edit] wrote the caption \"{text}\" for {len(photos)} photos in {folder}\n")
+        messagebox.showinfo("Write captions", f"Captions written for {len(photos)} photos.")
+
+    def _family_edit_problems(self):
+        """(edited photos without a caption, pairs whose shapes differ) for the Start check."""
+        from PIL import Image
+        after_dir = self.image_folder_var.get().strip()
+        before_dir = self.entries["FAMILY_EDIT_DIR"].get().strip()
+        ext = (getattr(self, "dataset_caption_ext_var", None) and self.dataset_caption_ext_var.get().strip()) or ".txt"
+        befores = sorted(f for f in os.listdir(before_dir) if os.path.splitext(f)[1].lower() in self._EDIT_EXTS)
+        uncaptioned, shapes = [], []
+        for f in sorted(os.listdir(after_dir)):
+            b, e = os.path.splitext(f)
+            if e.lower() not in self._EDIT_EXTS:
+                continue
+            if not os.path.exists(os.path.join(after_dir, b + ext)):
+                uncaptioned.append(f)
+            m = [x for x in befores if x.startswith(b + ".") or x.startswith(b + "_")]
+            if len(m) == 1:
+                try:
+                    with Image.open(os.path.join(after_dir, f)) as ia, Image.open(os.path.join(before_dir, m[0])) as ib:
+                        ra, rb = ia.width / ia.height, ib.width / ib.height
+                    if abs(ra - rb) / ra > 0.02:
+                        shapes.append(f)
+                except OSError:
+                    pass
+        return uncaptioned, shapes
 
     def _family_edit_pairs(self):
         """(after-images without a before-image, after-images with more than one, first before-image path) for the
@@ -7544,6 +7618,13 @@ class LoRATrainerGUI:
                     errors.append(f"Edit LoRA: {len(multiple)} edited photo(s) match more than one original (e.g. "
                                   f"{', '.join(multiple[:3])}) - keep one original per edited photo, with the "
                                   f"same file name")
+                uncaptioned, shapes = self._family_edit_problems()
+                if uncaptioned:
+                    errors.append(f"Edit LoRA: {len(uncaptioned)} edited photo(s) have no caption (e.g. "
+                                  f"{', '.join(uncaptioned[:3])}) - type the edit and press Write captions")
+                if shapes:
+                    errors.append(f"Edit LoRA: {len(shapes)} edited photo(s) have a different crop or shape from their "
+                                  f"original (e.g. {', '.join(shapes[:3])}) - export both at the same crop")
             if ref and not os.path.isfile(ref):
                 errors.append(f"Edit LoRA test photo for previews does not exist: {ref}")
         need = [f for f in desc.model_files if f.required]
@@ -32903,7 +32984,8 @@ class LoRATrainerGUI:
                 "FAMILY_TURBO_STRENGTH": self.entries["FAMILY_TURBO_STRENGTH"].get(),
                 "FAMILY_EDIT": self._family_edit_on(),
                 "FAMILY_EDIT_DIR": self.entries["FAMILY_EDIT_DIR"].get().strip(),
-                "FAMILY_EDIT_REF": self.entries["FAMILY_EDIT_REF"].get().strip()}
+                "FAMILY_EDIT_REF": self.entries["FAMILY_EDIT_REF"].get().strip(),
+                "FAMILY_EDIT_CAPTION": self.entries["FAMILY_EDIT_CAPTION"].get().strip()}
                if self._family_desc() is not None else {}),
             # experiment/tread: both ticks must be copied here or the builder reads a stale value
             "MINIMAX_TREAD": bool(self.entries["MINIMAX_TREAD"].get()),

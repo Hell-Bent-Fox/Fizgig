@@ -133,6 +133,7 @@ class FamilyDescription:
     optimizers: tuple = ("adamw8bit", "adamw")
     network_types: tuple = ("lora",)
     edit_training: bool = False       # Edit LoRA from before/after pairs (the driver's supports_references)
+    edit_note: str = ""               # the Edit LoRA section's "What you need" line: pair count and photo size
 
     # sampling
     sampling: tuple = ()              # SamplingSettings without any speed LoRA (first = default)
