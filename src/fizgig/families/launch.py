@@ -21,6 +21,20 @@ FAMILY_EDIT, ...) plus the values the app reads from its other tabs, all lower c
                                  "at_first": ..., "prompts": [lines as typed on the Samples tab]}
     samples_dir                 where preview prompt files go (the output folder's sample/)
     edit_caption                the edit instruction typed in the Edit card
+
+Switches (FAMILY_EDIT, FAMILY_SLIDER, ADAPTIVE_LR, SAVE_STATE, enable_cache, samples["enabled"], loss_watch[...],
+...) must be real booleans: the string "false" counts as on. Numbers may be strings or numbers. The run's
+settings the commands need are LORA_NAME, LORA_OUTPUT_DIR, DATASET_CONFIG (the path the plan's TOML is written
+to), NETWORK_DIM, NETWORK_ALPHA, LEARNING_RATE, MAX_TRAIN_EPOCHS, SAVE_EVERY_N_EPOCHS, SEED; the number checks
+also read LORA_LR_RATIO, GRADIENT_ACCUMULATION, MAX_GRAD_NORM, NETWORK_DROPOUT (and ADAPTIVE_LR_MIN / _MAX with
+Adaptive LR on, LOKR_FACTOR with LoKR). A missing one is a problem, never a crash.
+
+plan() returns problems only when there are any: then it has no stages and no files, and nothing may be written or
+started. Otherwise the caller creates plan.dirs, writes plan.files (the dataset TOML first), then runs the stages in
+order. What the desktop app also does at Start, which a caller has to do itself: refuse to start while a run is
+active; delete a stale <LORA_OUTPUT_DIR>/.pause_requested (the trainer would stop after one epoch) and a stale
+.sample_override.json (it changes the previews); warn when the output drive is nearly full, or when a resume is
+already at Max Train Epochs.
 """
 import os
 import re
@@ -47,6 +61,11 @@ class LaunchPlan:
     problems: list = field(default_factory=list)    # anything here and the run must not start
 
 
+def _s(x):
+    """A value from the inputs as trimmed text ("" for None) - they may arrive as numbers."""
+    return "" if x is None else str(x).strip()
+
+
 def _model(inputs, desc, role):
     return (inputs.get("models") or {}).get(desc.pref_for(role), "")
 
@@ -59,15 +78,15 @@ def slider_on(desc, inputs, source=None):
     """Slider mode for a family that offers it; source "pairs" / "prompts" narrows it to one kind."""
     on = bool(desc.slider_training and inputs.get("FAMILY_SLIDER"))
     if on and source:
-        on = inputs.get("FAMILY_SLIDER_SOURCE") == source
+        on = (inputs.get("FAMILY_SLIDER_SOURCE") or "pairs") == source
     return on
 
 
 def caches(desc, inputs):
     """Whether the cache stages run: not on a resume (the cache is already built), not for a prompt slider (no
     photos), not with Enable Cache off."""
-    return bool(inputs.get("enable_cache", True) and not inputs.get("resuming")
-                and not slider_on(desc, inputs, "prompts"))
+    resuming = inputs.get("resuming") or bool(_s(inputs.get("RESUME_TRAINING")))
+    return bool(inputs.get("enable_cache", True) and not resuming and not slider_on(desc, inputs, "prompts"))
 
 
 # ---------------------------------------------------------------------------------------------------- pairs
@@ -117,10 +136,10 @@ def pair_problems(after_dir, before_dir, caption_ext=".txt"):
 
 def edit_instruction(inputs):
     """The edit instruction for previews: the typed instruction, else the first edited photo's caption file."""
-    text = (inputs.get("edit_caption") or "").strip()
+    text = _s(inputs.get("edit_caption"))
     if text:
         return text
-    folder = (inputs.get("image_folder") or "").strip()
+    folder = _s(inputs.get("image_folder"))
     ext = inputs.get("caption_ext") or ".txt"
     try:
         for f in sorted(os.listdir(folder)):
@@ -141,11 +160,13 @@ def problems(desc, inputs):
     """What the family's own checks refuse: an edit's or a slider's pairs, a prompt slider's prompts, and every
     required model file (plus the training adapter while it is on) set and on disk."""
     errors = []
-    folder = (inputs.get("image_folder") or "").strip()
+    folder = _s(inputs.get("image_folder"))
     ext = inputs.get("caption_ext") or ".txt"
+    if edit_on(desc, inputs) and slider_on(desc, inputs):
+        errors.append("Edit LoRA and Slider are both on - a run is one kind of LoRA: pick Edit or Slider")
     if edit_on(desc, inputs):
-        before = (inputs.get("FAMILY_EDIT_DIR") or "").strip()
-        ref = (inputs.get("FAMILY_EDIT_REF") or "").strip()
+        before = _s(inputs.get("FAMILY_EDIT_DIR"))
+        ref = _s(inputs.get("FAMILY_EDIT_REF"))
         if not before or not os.path.isdir(before):
             errors.append("Edit LoRA is on: set the Originals folder (Training tab, Training Parameters)")
         elif os.path.isdir(folder):
@@ -167,7 +188,7 @@ def problems(desc, inputs):
         if ref and not os.path.isfile(ref):
             errors.append(f"Edit LoRA test photo for previews does not exist: {ref}")
     if slider_on(desc, inputs, "pairs"):
-        other = (inputs.get("FAMILY_SLIDER_DIR") or "").strip()
+        other = _s(inputs.get("FAMILY_SLIDER_DIR"))
         if not other or not os.path.isdir(other):
             errors.append("Slider: set the -1 end folder (Training tab, Training Parameters)")
         elif os.path.isdir(folder):
@@ -189,7 +210,7 @@ def problems(desc, inputs):
     if slider_on(desc, inputs, "prompts"):
         for k, what in (("FAMILY_SLIDER_BASE", "what the picture is"), ("FAMILY_SLIDER_POS", "what the +1 end "
                         "adds"), ("FAMILY_SLIDER_NEG", "what the -1 end adds")):
-            if not str(inputs.get(k) or "").strip():
+            if not _s(inputs.get(k)):
                 errors.append(f"Slider from prompts: fill in {what}")
         try:
             if float(inputs.get("FAMILY_SLIDER_GUIDANCE")) <= 0:
@@ -197,7 +218,7 @@ def problems(desc, inputs):
         except (TypeError, ValueError):
             errors.append("Slider push strength must be a number above 0")
     need = [f for f in desc.model_files if f.required]
-    if desc.training_adapter and inputs.get("FAMILY_TRAINING_ADAPTER"):
+    if desc.training_adapter and inputs.get("FAMILY_TRAINING_ADAPTER", True):
         need += [f for f in desc.model_files if f.pref_key == desc.training_adapter]
     for f in need:
         path = (inputs.get("models") or {}).get(f.pref_key, "")
@@ -250,20 +271,20 @@ def train_command(desc, inputs, plan):
            "--learning_rate", str(st["LEARNING_RATE"]), "--max_train_epochs", str(st["MAX_TRAIN_EPOCHS"]),
            "--save_every_n_epochs", str(st["SAVE_EVERY_N_EPOCHS"]), "--seed", str(st["SEED"])]
     cmd += _state_flags(st)
-    if (st.get("RESUME_TRAINING") or "").strip():
-        cmd += ["--resume", st["RESUME_TRAINING"].strip()]
+    if _s(st.get("RESUME_TRAINING")):
+        cmd += ["--resume", _s(st["RESUME_TRAINING"])]
     if desc.training_adapter and st.get("FAMILY_TRAINING_ADAPTER", True):
         cmd += ["--training_adapter", (st.get("models") or {}).get(desc.training_adapter, "")]
-    ctx = (st.get("CONTEXT_LORA_PATH") or "").strip()
+    ctx = _s(st.get("CONTEXT_LORA_PATH"))
     if ctx:
         cmd += ["--context_lora_path", ctx,
-                "--context_lora_strength", (st.get("CONTEXT_LORA_STRENGTH") or "1.0").strip() or "1.0"]
+                "--context_lora_strength", _s(st.get("CONTEXT_LORA_STRENGTH") or "1.0") or "1.0"]
     if st.get("ADAPTIVE_LR"):
         cmd += ["--adaptive_lr",
                 "--adaptive_lr_min", str(st.get("ADAPTIVE_LR_MIN", "1e-4")).split(" ")[0],
                 "--adaptive_lr_max", str(st.get("ADAPTIVE_LR_MAX", "2e-4")).split(" ")[0]]
     else:
-        sched = (st.get("LR_SCHEDULER") or "constant").strip() or "constant"
+        sched = _s(st.get("LR_SCHEDULER") or "constant") or "constant"
         if sched != "constant":
             cmd += ["--lr_scheduler", sched]
         try:
@@ -294,7 +315,7 @@ def train_command(desc, inputs, plan):
         cmd += [flag for key, flag in watch if lw.get(key)]
         if can_recaption and lw.get("recaption"):
             cmd += ["--captioner", st.get("captioner", "")]
-            trig = (st.get("caption_trigger") or "").strip()
+            trig = _s(st.get("caption_trigger"))
             if trig and trig.lower() != "trigger_word":
                 cmd += ["--trigger_word", trig]      # leads each AI caption, as the Captions tab writes it
             ovr = st.get("caption_overrides") or {}
@@ -307,7 +328,7 @@ def train_command(desc, inputs, plan):
     if any(lw.get(key) for key, _ in watch) and "--text_encoder" not in cmd:
         cmd += ["--text_encoder", _model(st, desc, "text_encoder")]   # caption repair re-encodes
     if ("lokr" in desc.network_types and str(st.get("NETWORK_TYPE", "")).startswith("LoKR")
-            and not st.get("FAMILY_SLIDER")):        # a slider is always a plain LoRA
+            and not slider_on(desc, st)):        # a slider is always a plain LoRA
         cmd += ["--network_type", "lokr", "--lokr_factor", str(st.get("LOKR_FACTOR", 8))]
     raw_swap = str(st.get("blocks_swap") or "").strip()
     if raw_swap.lower().startswith("auto"):
@@ -331,15 +352,15 @@ def train_command(desc, inputs, plan):
         val = str(st.get(key, "") or "").strip()
         if val:
             cmd += [flag, val]
-    trig = str(st.get("METADATA_TRIGGER_PHRASE", "") or "").strip() or (st.get("caption_trigger") or "").strip()
+    trig = _s(st.get("METADATA_TRIGGER_PHRASE")) or _s(st.get("caption_trigger"))
     if trig and trig.lower() != "trigger_word":
         cmd += ["--metadata_trigger_phrase", trig]
     cmd += _preview_flags(desc, st, plan, cmd)
-    if st.get("FAMILY_SLIDER"):
-        if st.get("FAMILY_SLIDER_SOURCE") == "prompts":
-            base = st.get("FAMILY_SLIDER_BASE", "").strip()
-            cmd += ["--slider_prompts", base, f"{base} {st.get('FAMILY_SLIDER_POS', '').strip()}",
-                    f"{base} {st.get('FAMILY_SLIDER_NEG', '').strip()}",       # the user's own comma, if any
+    if slider_on(desc, st):
+        if slider_on(desc, st, "prompts"):
+            base = _s(st.get("FAMILY_SLIDER_BASE"))
+            cmd += ["--slider_prompts", base, f"{base} {_s(st.get('FAMILY_SLIDER_POS'))}",
+                    f"{base} {_s(st.get('FAMILY_SLIDER_NEG'))}",       # the user's own comma, if any
                     "--slider_guidance", str(st.get("FAMILY_SLIDER_GUIDANCE") or "2")]
             for flag, role in (("--text_encoder", "text_encoder"), ("--vae", "vae")):
                 if flag not in cmd:          # the practice images and the three prompts need both
@@ -367,16 +388,16 @@ def _preview_flags(desc, st, plan, cmd):
             out += ["--speed_lora", speed_path]
             if abs(ts - dflt) > 1e-9:
                 out += ["--speed_lora_strength", f"{max(0.0, min(2.0, ts)):g}"]
-    samples_dir = st.get("samples_dir") or ""
+    samples_dir = st.get("samples_dir") or os.path.join(_s(st.get("LORA_OUTPUT_DIR")), "sample")
     prompts = None
-    if st.get("FAMILY_EDIT"):          # edit previews: the edit instruction, not the Samples-tab prompts
+    if edit_on(desc, st):              # edit previews: the edit instruction, not the Samples-tab prompts
         instr = edit_instruction(st)
         if instr:
             prompts = os.path.join(samples_dir, f"{desc.key}_edit_prompt.txt")
             plan.dirs.append(samples_dir)
             plan.files.append((prompts, instr + "\n"))
-    elif st.get("FAMILY_SLIDER"):      # slider previews: the dial on its own picture, not the Samples tab
-        own = (st.get("FAMILY_SLIDER_BASE") if st.get("FAMILY_SLIDER_SOURCE") == "prompts"
+    elif slider_on(desc, st):          # slider previews: the dial on its own picture, not the Samples tab
+        own = (st.get("FAMILY_SLIDER_BASE") if slider_on(desc, st, "prompts")
                else st.get("FAMILY_SLIDER_CAPTION"))
         prompts = os.path.join(samples_dir, f"{desc.key}_slider_prompt.txt")
         plan.dirs.append(samples_dir)
@@ -417,11 +438,11 @@ def _preview_flags(desc, st, plan, cmd):
             pass
         if sm.get("at_first"):
             out.append("--sample_at_first")
-        if st.get("FAMILY_EDIT"):
-            ref = (st.get("FAMILY_EDIT_REF") or "").strip()
+        if edit_on(desc, st):
+            ref = _s(st.get("FAMILY_EDIT_REF"))
             if not ref:
                 try:
-                    ref = pairs((st.get("image_folder") or "").strip(), (st.get("FAMILY_EDIT_DIR") or "").strip())[2] or ""
+                    ref = pairs(_s(st.get("image_folder")), _s(st.get("FAMILY_EDIT_DIR")))[2] or ""
                 except OSError:
                     ref = ""
             if ref:
@@ -451,18 +472,18 @@ def dataset_toml(desc, inputs):
         raise ValueError(f"Target Megapixels {mp}")
     side = int((mp * 1_000_000) ** 0.5) // 16 * 16
     batch = int(inputs.get("batch_size"))
-    folder = (inputs.get("image_folder") or "").strip()
+    folder = _s(inputs.get("image_folder"))
     lines = ["[general]", f"resolution = [{side}, {side}]",
-             f'caption_extension = "{inputs.get("caption_ext") or ".txt"}"',
+             f'caption_extension = "{_s(inputs.get("caption_ext", ".txt"))}"',
              f"batch_size = {batch}", "num_repeats = 1",
              f"enable_bucket = {'true' if inputs.get('enable_bucket', True) else 'false'}",
              f"bucket_no_upscale = {'true' if inputs.get('no_upscale', True) else 'false'}",
              "", "[[datasets]]", f'image_directory = "{folder.replace(chr(92), "/")}"']
     if edit_on(desc, inputs):
-        lines.append(f'control_directory = "{(inputs.get("FAMILY_EDIT_DIR") or "").strip().replace(chr(92), "/")}"')
+        lines.append(f'control_directory = "{_s(inputs.get("FAMILY_EDIT_DIR")).replace(chr(92), "/")}"')
     elif slider_on(desc, inputs, "pairs"):
-        lines.append(f'control_directory = "{(inputs.get("FAMILY_SLIDER_DIR") or "").strip().replace(chr(92), "/")}"')
-    root = (inputs.get("cache_root") or "").strip()
+        lines.append(f'control_directory = "{_s(inputs.get("FAMILY_SLIDER_DIR")).replace(chr(92), "/")}"')
+    root = _s(inputs.get("cache_root"))
     if root and folder:
         lines.append(f'cache_directory = "{cache_dir_for(root, folder).replace(chr(92), "/")}"')
     return "\n".join(lines) + "\n"
@@ -488,7 +509,7 @@ def start_problems(desc, inputs):
     out += checks.run(v, blocks_swap=swap, swap_max=max(0, desc.n_blocks - 2), arch_label=desc.gui_label,
                       name_error=checks.tidy_name(v.get("LORA_NAME"))[1])
     from fizgig.dataset.image_dataset import IMAGE_EXTENSIONS
-    out += checks.training_folder((v.get("image_folder") or "").strip(), (v.get("caption_ext") or "").strip(),
+    out += checks.training_folder(_s(v.get("image_folder")), _s(v.get("caption_ext", ".txt")),
                                   check_captions=not slider_on(desc, inputs, "prompts"),
                                   media_exts={e.lower() for e in IMAGE_EXTENSIONS})
     return out
@@ -496,13 +517,25 @@ def start_problems(desc, inputs):
 
 def plan(desc, inputs):
     """The whole launch: problems first (a plan with problems must not start), then the stages in order."""
+    from fizgig.families.checks import tidy_name
+    inputs = dict(inputs)
+    folder = _s(inputs.get("image_folder"))
+    if folder and not os.path.isabs(folder):
+        inputs["image_folder"] = os.path.abspath(folder)     # the subprocesses run from the Fizgig folder
+    inputs["LORA_NAME"] = tidy_name(_s(inputs.get("LORA_NAME")))[0]
     p = LaunchPlan(problems=start_problems(desc, inputs))
-    try:
-        p.dataset_toml = dataset_toml(desc, inputs)
-        if inputs.get("DATASET_CONFIG"):
-            p.files.append((inputs["DATASET_CONFIG"], p.dataset_toml))
-    except (TypeError, ValueError):
-        pass                            # a Target Megapixels or Batch Size that is not a number: in problems
+    if not p.problems:
+        try:
+            p.dataset_toml = dataset_toml(desc, inputs)
+        except (TypeError, ValueError):
+            p.problems.append("Target Megapixels (Dataset) must be a number above 0")
+    missing = [k for k in ("python", "repo_dir", "DATASET_CONFIG", "LORA_OUTPUT_DIR", "NETWORK_DIM", "NETWORK_ALPHA",
+                           "LEARNING_RATE", "MAX_TRAIN_EPOCHS", "SAVE_EVERY_N_EPOCHS", "SEED") if not _s(inputs.get(k))]
+    if missing and not p.problems:
+        p.problems.append(f"Missing settings: {', '.join(missing)}")
+    if p.problems:
+        return p                        # nothing to write or run
+    p.files.append((inputs["DATASET_CONFIG"], p.dataset_toml))
     train = train_command(desc, inputs, p)
     if caches(desc, inputs):
         p.stages += [Stage("Cache Preparation", cache_command(desc, inputs, "latents")),

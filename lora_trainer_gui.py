@@ -7729,11 +7729,13 @@ class LoRATrainerGUI:
         """The plain inputs of a described family's launch plan (fizgig.families.launch): the run's settings, the
         family's own card values as the widgets hold them now, and what the other tabs contribute."""
         d = dict(self.settings)
-        for k in ("FAMILY_EDIT", "FAMILY_EDIT_DIR", "FAMILY_EDIT_REF", "FAMILY_SLIDER", "FAMILY_SLIDER_SOURCE",
-                  "FAMILY_SLIDER_DIR", "FAMILY_SLIDER_BASE", "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG",
-                  "FAMILY_SLIDER_GUIDANCE", "FAMILY_TRAINING_ADAPTER"):
-            if k in self.entries:
-                d[k] = self.entries[k].get()
+        # the family card as Start stores it (start_training): the switches only where the family offers them
+        d.update(FAMILY_EDIT=self._family_edit_on(desc), FAMILY_SLIDER=self._family_slider_on(desc),
+                 FAMILY_TRAINING_ADAPTER=bool(self.entries["FAMILY_TRAINING_ADAPTER"].get()),
+                 **{k: str(self.entries[k].get()).strip() for k in (
+                     "FAMILY_EDIT_DIR", "FAMILY_EDIT_REF", "FAMILY_SLIDER_SOURCE", "FAMILY_SLIDER_DIR",
+                     "FAMILY_SLIDER_CAPTION", "FAMILY_SLIDER_BASE", "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG",
+                     "FAMILY_SLIDER_GUIDANCE")})
         keys = {f.pref_key for f in desc.model_files}
         sp = desc.preview_speed()
         if sp and sp.pref_key:
@@ -7744,8 +7746,8 @@ class LoRATrainerGUI:
             python=self._venv_python(), repo_dir=FIZGIG_DIR,
             models={k: self._krea2_pref(k) for k in keys},
             image_folder=self.image_folder_var.get().strip(),
-            caption_ext=(getattr(self, "dataset_caption_ext_var", None)
-                         and self.dataset_caption_ext_var.get().strip()) or ".txt",
+            caption_ext=(self.dataset_caption_ext_var.get().strip()
+                         if getattr(self, "dataset_caption_ext_var", None) else ".txt"),
             batch_size=(self.dataset_batch_size_var.get() if hasattr(self, "dataset_batch_size_var") else 1),
             megapixels=self.dataset_megapixels_var.get(),
             enable_bucket=bool(self.dataset_enable_bucket_var.get()),
