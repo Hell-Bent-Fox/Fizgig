@@ -34243,6 +34243,13 @@ class LoRATrainerGUI:
                     os.makedirs(os.path.dirname(prompts), exist_ok=True)
                     with open(prompts, "w", encoding="utf-8") as _fh:
                         _fh.write(_instr + "\n")
+            elif st.get("FAMILY_SLIDER"):      # slider previews: the dial on its own picture, not the Samples tab
+                _own = (st.get("FAMILY_SLIDER_BASE") if st.get("FAMILY_SLIDER_SOURCE") == "prompts"
+                        else st.get("FAMILY_SLIDER_CAPTION"))
+                prompts = os.path.join(self.get_samples_dir(), f"{desc.key}_slider_prompt.txt")
+                os.makedirs(os.path.dirname(prompts), exist_ok=True)
+                with open(prompts, "w", encoding="utf-8") as _fh:
+                    _fh.write((str(_own or "").strip() or "a photo") + "\n")   # the trainer reads the real captions
             else:
                 prompts = self._write_krea2_sample_prompts(filename=f"{desc.key}_prompts.txt")
             every = self.sample_every_n_epochs_var.get().strip()

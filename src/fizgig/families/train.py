@@ -259,6 +259,25 @@ def _slider_strip(frames, multipliers):
     return strip
 
 
+def _pair_slider_caption(user_config):
+    """The caption an image-pair slider's photos share (the most common one if they were edited apart)."""
+    from collections import Counter
+    general = user_config.get("general", {})
+    counts = Counter()
+    for d in user_config.get("datasets", []):
+        folder = d.get("image_directory")
+        ext = d.get("caption_extension") or general.get("caption_extension") or ".txt"
+        if not folder or not os.path.isdir(folder):
+            continue
+        for f in os.listdir(folder):
+            if f.endswith(ext):
+                with open(os.path.join(folder, f), encoding="utf-8", errors="replace") as fh:
+                    text = fh.read().strip()
+                if text:
+                    counts[text] += 1
+    return counts.most_common(1)[0][0] if counts else None
+
+
 def _prompt_slider_step(driver, dit, net, latents, enc, gen, *, guidance, min_t, max_t):
     """Concept Sliders, textual form, on flow matching. With the adapter at 0 the frozen model predicts the
     neutral, positive and negative prompts at one noised practice latent; the adapter then trains at +1 toward
@@ -446,6 +465,11 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                                                     num_timestep_buckets=None, shared_epoch=shared_epoch)
     if group.num_train_items == 0:
         raise RuntimeError("No training items - run the cache stages (families/cache.py) first.")
+    if slider_pairs:
+        shared = _pair_slider_caption(user_config)
+        if shared:                           # the dial is shown on what both ends of a pair have in common
+            sample_prompts = [shared]
+            logger.info("[slider] previews use the pairs' caption: '%s'", shared)
     for ds in group.datasets:
         if getattr(ds, "batch_size", 1) != 1:
             raise RuntimeError(f"{desc.display_name} trains at batch size 1 here (conditioning lengths differ per "
