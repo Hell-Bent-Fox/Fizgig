@@ -32593,19 +32593,30 @@ class LoRATrainerGUI:
         the field, the preset that gets persisted, the queue entry and --output_name cannot
         disagree about what this run is called. Everything else is refused by name.
         """
+        from fizgig.families.checks import tidy_name
         entry = self.entries.get("LORA_NAME")
         raw = entry.get() if entry is not None else ""
-        name = "".join(c for c in raw if c >= " ").strip().rstrip(".").strip()
+        name, error = tidy_name(raw)
         if entry is not None and name != raw:
             entry.delete(0, tk.END)
             entry.insert(0, name)
-        if not name:
-            return name, "LoRA name cannot be empty"
-        bad = next((c for c in name if c in '<>:"|?*/\\'), None)
-        if bad is not None:
-            return name, (f"LoRA name cannot contain '{bad}' — file names can't include that "
-                          f"character. Use letters, numbers, spaces, - _ or .")
-        return name, None
+        return name, error
+
+    def _check_inputs(self):
+        """The plain values Start's shared checks read (fizgig.families.checks): every Training-tab field as
+        typed, Adaptive LR, and the dataset's Batch Size and Target Megapixels."""
+        v = {}
+        for k, w in self.entries.items():
+            if isinstance(w, tk.Text):
+                continue
+            try:
+                v[k] = w.get()
+            except (tk.TclError, TypeError):
+                pass
+        v["ADAPTIVE_LR"] = bool(hasattr(self, "adaptive_lr_var") and self.adaptive_lr_var.get())
+        v["batch_size"] = self.dataset_batch_size_var.get()
+        v["megapixels"] = self.dataset_megapixels_var.get()
+        return v
 
     def validate_inputs(self):
         """Validate all inputs before starting training"""
@@ -32620,20 +32631,16 @@ class LoRATrainerGUI:
         # launcher, and the Start button just "did nothing forever". Validate them HERE with
         # a message naming the field. Batch Size 0/blank was the sharpest: it reached
         # math.ceil(len(bucket)/batch_size) deep in the dataloader minutes after launch.
+        from fizgig.families import checks
+        v = self._check_inputs()
+
         def _check_num(label, raw, cast, minimum=None):
-            raw = str(raw).strip()
-            try:
-                v = cast(raw)
-            except (TypeError, ValueError):
-                errors.append(f"{label} must be a number (got {raw!r})")
-                return
-            if minimum is not None and v < minimum:
-                errors.append(f"{label} must be at least {minimum} (got {raw})")
+            errors.extend(checks.number(label, raw, cast, minimum))
 
         # Learning Rate box is ignored (and greyed) while Adaptive LR is on — don't let a
         # stale value in a disabled box block Start.
-        if not (hasattr(self, 'adaptive_lr_var') and self.adaptive_lr_var.get()):
-            _check_num("Learning Rate", self.entries["LEARNING_RATE"].get(), float, 0)
+        errors.extend(checks.learning_rate(v))
+        if not v["ADAPTIVE_LR"]:
             if (((config.get("is_minimax") and not config.get("is_refmod")
                   and not (getattr(self, "minimax_finetune_var", None) and self.minimax_finetune_var.get()))
                  or config.get("is_krea2"))
@@ -32645,10 +32652,7 @@ class LoRATrainerGUI:
                 if _lr_v > 1e-3:
                     errors.append(f"Automagic v3 starts at the Learning Rate you give and finds its own rate: "
                                   f"{_lr_v:g} is an AdamW number. Use 1e-6 (its default) or at most 0.001.")
-        _check_num("Network Dim (Rank)", self.entries["NETWORK_DIM"].get(), int, 1)
-        _check_num("Network Alpha", self.entries["NETWORK_ALPHA"].get(), float, 0)
-        if self._network_type_is_lokr():
-            _check_num("LoKR Factor", self.entries["LOKR_FACTOR"].get(), int, 2)
+        errors.extend(checks.network(v, lokr=self._network_type_is_lokr()))
         # Blocks to Train is free text, so a typo is caught HERE rather than after the 21 GB base
         # has streamed in — and a queued run must never fail an hour later on a bad spec.
         if self._is_minimax_arch():
@@ -32679,27 +32683,10 @@ class LoRATrainerGUI:
                     pass
                 _check_num("Slower LR multiplier",
                            self.entries["MINIMAX_SLOW_LR_SCALE"].get(), float, 0)
-        _check_num("Max Train Epochs", self.entries["MAX_TRAIN_EPOCHS"].get(), int, 1)
-        _check_num("Save Every N Epochs", self.entries["SAVE_EVERY_N_EPOCHS"].get(), int, 1)
-        _check_num("Seed", self.entries["SEED"].get(), int)
-        _check_num("LoRA+ LR Ratio", self.entries["LORA_LR_RATIO"].get(), int, 1)
-        _check_num("Gradient Accumulation", self.entries["GRADIENT_ACCUMULATION"].get(), int, 1)
-        _check_num("Max Grad Norm", self.entries["MAX_GRAD_NORM"].get(), float, 0)
-        _check_num("Network Dropout", self.entries["NETWORK_DROPOUT"].get(), float, 0)
-        _check_num("Batch Size (Dataset)", self.dataset_batch_size_var.get(), int, 1)
-        # An unparseable megapixels value makes the TOML auto-saver skip its rewrite
-        # SILENTLY (#98 follow-up) — catch it here with a named error instead of the
-        # launch-time stale-config refusal.
-        _check_num("Target Megapixels (Dataset)", self.dataset_megapixels_var.get(), float, 0)
-        if "KEEP_LAST_N_STATES" in self.entries:
-            _check_num("Keep Last (states)", self.entries["KEEP_LAST_N_STATES"].get(), int, 1)
+        errors.extend(checks.numbers(v))
 
         # Check required paths exist (sources: prefs_vars for model paths, hidden var for dataset)
-        dataset_config = self._get_path("DATASET_CONFIG")
-        if not dataset_config:
-            errors.append("Dataset config file path is empty — set the training image folder on the Start tab")
-        elif not os.path.exists(dataset_config):
-            errors.append(f"Dataset config file does not exist: {dataset_config}")
+        errors.extend(checks.dataset_config(self._get_path("DATASET_CONFIG")))
 
         _desc = self._family_desc()
         if _desc is not None:
@@ -32844,22 +32831,7 @@ class LoRATrainerGUI:
         # Validate numeric fields. With Adaptive LR on, the Learning Rate box is IGNORED
         # (the run starts at the geometric midpoint of Min/Max), so only Min < Max matters
         # — the old "starting LR exceeds Max" check no longer applies.
-        _adaptive_on = hasattr(self, 'adaptive_lr_var') and self.adaptive_lr_var.get()
-        if _adaptive_on:
-            try:
-                max_lr_str = self.entries["ADAPTIVE_LR_MAX"].get().split(" ")[0]
-                min_lr_str = self.entries["ADAPTIVE_LR_MIN"].get().split(" ")[0]
-                if float(min_lr_str) >= float(max_lr_str):
-                    errors.append(f"Adaptive Min LR ({min_lr_str}) must be lower than Max LR ({max_lr_str}).")
-            except (ValueError, KeyError):
-                errors.append("Adaptive Min/Max LR must be valid numbers.")
-        else:
-            try:
-                lr = float(self.entries["LEARNING_RATE"].get())
-                if lr <= 0:
-                    errors.append("Learning rate must be positive")
-            except ValueError:
-                errors.append("Learning rate must be a valid number")
+        errors.extend(checks.learning_rate_range(v))
 
         # Training adapter (MiniMax): the chosen adapter's file must be set and exist (LoRA and FT).
         _mm_ft_on = bool(getattr(self, "minimax_finetune_var", None) and self.minimax_finetune_var.get())
@@ -32885,116 +32857,26 @@ class LoRATrainerGUI:
                                                  and self.minimax_finetune_var.get())):
                 errors.append("Context LoRA is not available with MiniMax H3 fine-tuning — "
                               "untick Fine-tune (train a LoRA) or clear the Context LoRA")
-            if not os.path.exists(ctx_path):
-                errors.append(f"Context LoRA file does not exist: {ctx_path}")
-            elif not ctx_path.lower().endswith(".safetensors"):
-                errors.append(f"Context LoRA must be a .safetensors file: {ctx_path}")
-            try:
-                ctx_strength = float(self.entries["CONTEXT_LORA_STRENGTH"].get())
-                if not (0.0 <= ctx_strength <= 2.0):
-                    errors.append(f"Context LoRA Strength ({ctx_strength}) must be between 0.0 and 2.0")
-            except (ValueError, KeyError):
-                errors.append("Context LoRA Strength must be a valid number")
-
-        try:
-            network_dim = int(self.entries["NETWORK_DIM"].get())
-            if network_dim <= 0:
-                errors.append("Network dim must be a positive integer")
-        except ValueError:
-            errors.append("Network dim must be a valid integer")
-
-        try:
-            network_alpha = float(self.entries["NETWORK_ALPHA"].get())
-            if network_alpha < 0:
-                errors.append("Network alpha must be non-negative")
-        except ValueError:
-            errors.append("Network alpha must be a valid number")
-
-        try:
-            epochs = int(self.entries["MAX_TRAIN_EPOCHS"].get())
-            if epochs <= 0:
-                errors.append("Max train epochs must be a positive integer")
-        except ValueError:
-            errors.append("Max train epochs must be a valid integer")
-
-        try:
-            save_epochs = int(self.entries["SAVE_EVERY_N_EPOCHS"].get())
-            if save_epochs <= 0:
-                errors.append("Save every N epochs must be a positive integer")
-            # Per-category retirement epoch: blank = never, else a positive whole number.
-            _rk = self.entries.get("MIXED_STOP_EPOCH")
-            _rv = str(_rk.get() if _rk else "").strip()
-            if _rv and (not _rv.isdigit() or int(_rv) <= 0):
-                errors.append(f"'Finish one category early: after epoch' must be blank or "
-                              f"a positive whole number, not {_rv!r}")
-        except ValueError:
-            errors.append("Save every N epochs must be a valid integer")
+        errors.extend(checks.context_lora(v))
 
         try:
             blocks_swap = self._parse_blocks_swap()
-            if blocks_swap < 0:
-                errors.append("Blocks swap must be non-negative")
-            elif blocks_swap > config["blocks_swap_max"]:
-                errors.append(f"Blocks swap ({blocks_swap}) exceeds maximum for {arch} ({config['blocks_swap_max']})")
         except ValueError:
-            errors.append("Blocks swap must be a valid integer")
-
+            blocks_swap = None
         _name, _name_error = self._tidy_lora_name()
-        if _name_error:
-            errors.append(_name_error)
+        errors.extend(checks.run(v, blocks_swap=blocks_swap, swap_max=config["blocks_swap_max"], arch_label=arch,
+                                 name_error=_name_error))
 
-        # Check output directory
-        output_dir = self.entries["LORA_OUTPUT_DIR"].get()
-        if not output_dir:
-            errors.append("LoRA output directory is empty")
-
-        # Check resume path if specified
-        resume_path = self.entries["RESUME_TRAINING"].get()
-        if resume_path and resume_path.strip() and not os.path.exists(resume_path):
-            errors.append(f"Resume training path does not exist: {resume_path}")
-
-        # Check caption files exist in the dataset folder
-        image_dir = self.image_folder_var.get().strip()
-        caption_ext = self.dataset_caption_ext_var.get().strip()
-        # A SET folder that no longer exists is an error, not a skip: the TOML regenerator
-        # early-returns on a missing folder, so proceeding trains whatever dataset the TOML
-        # last pointed at — silently, under this run's name.
-        if image_dir and not os.path.isdir(image_dir):
-            errors.append(f"Training image folder does not exist: {image_dir}")
-        # A RefMod plain encode (Steps 0) trains nothing and reads no captions — the photos
-        # alone are the references — so the caption check does not apply to it.
+        # The training folder must exist and its photos (and clips) be captioned. A RefMod plain encode (Steps 0)
+        # and a prompt slider read no captions.
+        from fizgig.dataset.image_dataset import IMAGE_EXTENSIONS as _IMG_EXT
+        _media_ext = set(e.lower() for e in _IMG_EXT)
+        if config.get("is_minimax"):
+            _media_ext |= set(self.TRAINING_VIDEO_EXTENSIONS)
         _prompt_slider = bool(self._family_desc() is not None and self._family_slider_on(source="prompts"))
-        if (image_dir and os.path.isdir(image_dir) and caption_ext and not self._refmod_plain_encode()
-                and not _prompt_slider):
-            import glob as _glob
-            # glob.escape is load-bearing here: a folder like "[subject] photos" made this
-            # find zero captions and block training with "No caption files found", while the
-            # Captions tab (os.listdir) read and wrote that same folder perfectly happily.
-            caption_files = _glob.glob(os.path.join(_glob.escape(image_dir), "*" + caption_ext))
-            if not caption_files:
-                errors.append(
-                    f"No caption files (*{caption_ext}) found in {image_dir}. "
-                    f"Use the Captions tab to generate them first."
-                )
-            else:
-                # Some captions but not all: every photo or clip without one is silently left
-                # out of the run, and a whole folder of clips can vanish that way (files renamed
-                # after captioning — Gizmo's numbered segments, say). Name them and refuse.
-                from fizgig.dataset.image_dataset import IMAGE_EXTENSIONS as _IMG_EXT
-                _media_ext = set(e.lower() for e in _IMG_EXT)
-                if config.get("is_minimax"):
-                    _media_ext |= set(self.TRAINING_VIDEO_EXTENSIONS)
-                _cap_stems = {os.path.splitext(os.path.basename(p))[0] for p in caption_files}
-                _uncaptioned = sorted(f for f in os.listdir(image_dir)
-                                      if os.path.splitext(f)[1].lower() in _media_ext
-                                      and os.path.splitext(f)[0] not in _cap_stems)
-                if _uncaptioned:
-                    _shown = ", ".join(_uncaptioned[:6]) + (f" … and {len(_uncaptioned) - 6} more" if len(_uncaptioned) > 6 else "")
-                    errors.append(
-                        f"{len(_uncaptioned)} file(s) in the training folder have no {caption_ext} caption and "
-                        f"would be left out of the run: {_shown}. Caption them on the Captions tab (clips are "
-                        f"captioned from their middle frame), or move them out of the folder."
-                    )
+        errors.extend(checks.training_folder(
+            self.image_folder_var.get().strip(), self.dataset_caption_ext_var.get().strip(),
+            check_captions=not self._refmod_plain_encode() and not _prompt_slider, media_exts=_media_ext))
 
         if errors:
             error_message = "Please fix the following issues:\n\n" + "\n".join(f"• {e}" for e in errors)

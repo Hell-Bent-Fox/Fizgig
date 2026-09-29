@@ -469,15 +469,40 @@ def dataset_toml(desc, inputs):
 
 
 # ---------------------------------------------------------------------------------------------------- the plan
+def start_problems(desc, inputs):
+    """Everything Start refuses, in the order the desktop app lists it: the shared checks (fizgig.families.checks)
+    with the family's own (problems) in their place. The dataset TOML is written by the plan itself, so only its
+    path is required here."""
+    from fizgig.families import checks
+    v = inputs
+    out = checks.learning_rate(v)
+    out += checks.network(v, lokr=str(v.get("NETWORK_TYPE", "")).startswith("LoKR"))
+    out += checks.numbers(v)
+    out += checks.dataset_config(v.get("DATASET_CONFIG"), must_exist=False)
+    out += problems(desc, inputs)
+    out += checks.learning_rate_range(v)
+    out += checks.context_lora(v)
+    raw_swap = str(v.get("blocks_swap") or "").strip()
+    m = re.match(r"\d+", raw_swap)
+    swap = 0 if raw_swap.lower().startswith("auto") or not m else int(m.group())   # Auto always fits
+    out += checks.run(v, blocks_swap=swap, swap_max=max(0, desc.n_blocks - 2), arch_label=desc.gui_label,
+                      name_error=checks.tidy_name(v.get("LORA_NAME"))[1])
+    from fizgig.dataset.image_dataset import IMAGE_EXTENSIONS
+    out += checks.training_folder((v.get("image_folder") or "").strip(), (v.get("caption_ext") or "").strip(),
+                                  check_captions=not slider_on(desc, inputs, "prompts"),
+                                  media_exts={e.lower() for e in IMAGE_EXTENSIONS})
+    return out
+
+
 def plan(desc, inputs):
     """The whole launch: problems first (a plan with problems must not start), then the stages in order."""
-    p = LaunchPlan(problems=problems(desc, inputs))
+    p = LaunchPlan(problems=start_problems(desc, inputs))
     try:
         p.dataset_toml = dataset_toml(desc, inputs)
         if inputs.get("DATASET_CONFIG"):
             p.files.append((inputs["DATASET_CONFIG"], p.dataset_toml))
     except (TypeError, ValueError):
-        p.problems.append("Target Megapixels and Batch Size must be numbers")
+        pass                            # a Target Megapixels or Batch Size that is not a number: in problems
     train = train_command(desc, inputs, p)
     if caches(desc, inputs):
         p.stages += [Stage("Cache Preparation", cache_command(desc, inputs, "latents")),
