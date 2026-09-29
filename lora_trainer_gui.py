@@ -7608,8 +7608,7 @@ class LoRATrainerGUI:
                                     "FAMILY_EDIT_CAPTION", "FAMILY_SLIDER", "FAMILY_SLIDER_SOURCE",
                                     "FAMILY_SLIDER_DIR", "FAMILY_SLIDER_CAPTION", "FAMILY_SLIDER_BASE",
                                     "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG", "FAMILY_SLIDER_GUIDANCE"})
-    _FAMILY_PRECISION_LABELS = {"auto": "Auto (fits your free VRAM)", "bf16": "bf16 (full precision)",
-                                "int8": "INT8 (8-bit, fastest)", "nf4": "4-bit NF4 (smallest)"}
+    from fizgig.families.launch import PRECISION_LABELS as _FAMILY_PRECISION_LABELS
 
     def _family_edit_on(self, desc=None):
         desc = desc if desc is not None else self._family_desc()
@@ -7699,26 +7698,6 @@ class LoRATrainerGUI:
 
     _EDIT_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
 
-    def _family_edit_instruction(self):
-        """The edit instruction for previews: the captions box, else the first edited photo's caption file."""
-        text = self.entries["FAMILY_EDIT_CAPTION"].get().strip()
-        if text:
-            return text
-        folder = self.image_folder_var.get().strip()
-        ext = (getattr(self, "dataset_caption_ext_var", None) and self.dataset_caption_ext_var.get().strip()) or ".txt"
-        try:
-            for f in sorted(os.listdir(folder)):
-                b, e = os.path.splitext(f)
-                cap = os.path.join(folder, b + ext)
-                if e.lower() in self._EDIT_EXTS and os.path.exists(cap):
-                    with open(cap, encoding="utf-8") as fh:
-                        line = fh.read().strip().splitlines()
-                    if line and line[0].strip():
-                        return line[0].strip()
-        except OSError:
-            pass
-        return ""
-
     def _family_edit_write_captions(self, entry=None):
         """Write the typed text (the edit instruction, or a slider's shared description) as the caption (.txt)
         of every photo in the Start folder."""
@@ -7746,120 +7725,58 @@ class LoRATrainerGUI:
         self.update_console(f"[edit] wrote the caption \"{text}\" for {len(photos)} photos in {folder}\n")
         messagebox.showinfo("Write captions", f"Captions written for {len(photos)} photos.")
 
-    def _family_edit_problems(self, before_dir=None):
-        """(edited photos without a caption, pairs whose shapes differ) for the Start check."""
-        from PIL import Image
-        after_dir = self.image_folder_var.get().strip()
-        before_dir = (before_dir or self.entries["FAMILY_EDIT_DIR"].get()).strip()
-        ext = (getattr(self, "dataset_caption_ext_var", None) and self.dataset_caption_ext_var.get().strip()) or ".txt"
-        befores = sorted(f for f in os.listdir(before_dir) if os.path.splitext(f)[1].lower() in self._EDIT_EXTS)
-        uncaptioned, shapes = [], []
-        for f in sorted(os.listdir(after_dir)):
-            b, e = os.path.splitext(f)
-            if e.lower() not in self._EDIT_EXTS:
-                continue
-            if not os.path.exists(os.path.join(after_dir, b + ext)):
-                uncaptioned.append(f)
-            m = [x for x in befores if x.casefold().startswith(b.casefold() + ".")    # IMG_1 pairs with img_1
-                 or x.casefold().startswith(b.casefold() + "_")]
-            if len(m) == 1:
-                try:
-                    with Image.open(os.path.join(after_dir, f)) as ia, Image.open(os.path.join(before_dir, m[0])) as ib:
-                        ra, rb = ia.width / ia.height, ib.width / ib.height
-                    if abs(ra - rb) / ra > 0.02:
-                        shapes.append(f)
-                except OSError:
-                    pass
-        return uncaptioned, shapes
-
-    def _family_edit_pairs(self, before_dir=None):
-        """(after-images without a before-image, after-images with more than one, first before-image path) for the
-        Start folder and the before-images folder, matched the way the dataset loader matches them: a before-image
-        belongs to photo.png when it is photo.<ext> or photo_<anything>.<ext>."""
-        after_dir = self.image_folder_var.get().strip()
-        before_dir = (before_dir or self.entries["FAMILY_EDIT_DIR"].get()).strip()
-        befores = sorted(f for f in os.listdir(before_dir) if os.path.splitext(f)[1].lower() in self._EDIT_EXTS)
-        missing, multiple, first = [], [], None
-        for f in sorted(os.listdir(after_dir)):
-            b, e = os.path.splitext(f)
-            if e.lower() not in self._EDIT_EXTS:
-                continue
-            m = [x for x in befores if x.casefold().startswith(b.casefold() + ".")    # IMG_1 pairs with img_1
-                 or x.casefold().startswith(b.casefold() + "_")]
-            if not m:
-                missing.append(f)
-            elif len(m) > 1:
-                multiple.append(f)
-            first = first or (os.path.join(before_dir, m[0]) if m else None)
-        return missing, multiple, first
+    def _family_launch_inputs(self, desc):
+        """The plain inputs of a described family's launch plan (fizgig.families.launch): the run's settings, the
+        family's own card values as the widgets hold them now, and what the other tabs contribute."""
+        d = dict(self.settings)
+        for k in ("FAMILY_EDIT", "FAMILY_EDIT_DIR", "FAMILY_EDIT_REF", "FAMILY_SLIDER", "FAMILY_SLIDER_SOURCE",
+                  "FAMILY_SLIDER_DIR", "FAMILY_SLIDER_BASE", "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG",
+                  "FAMILY_SLIDER_GUIDANCE", "FAMILY_TRAINING_ADAPTER"):
+            if k in self.entries:
+                d[k] = self.entries[k].get()
+        keys = {f.pref_key for f in desc.model_files}
+        sp = desc.preview_speed()
+        if sp and sp.pref_key:
+            keys.add(sp.pref_key)
+        if desc.training_adapter:
+            keys.add(desc.training_adapter)
+        d.update(
+            python=self._venv_python(), repo_dir=FIZGIG_DIR,
+            models={k: self._krea2_pref(k) for k in keys},
+            image_folder=self.image_folder_var.get().strip(),
+            caption_ext=(getattr(self, "dataset_caption_ext_var", None)
+                         and self.dataset_caption_ext_var.get().strip()) or ".txt",
+            batch_size=(self.dataset_batch_size_var.get() if hasattr(self, "dataset_batch_size_var") else 1),
+            megapixels=self.dataset_megapixels_var.get(),
+            enable_bucket=bool(self.dataset_enable_bucket_var.get()),
+            no_upscale=bool(self.dataset_no_upscale_var.get()),
+            cache_root=(self.prefs_vars["cache_dir"].get().strip() if "cache_dir" in self.prefs_vars else ""),
+            blocks_swap=self.entries["BLOCKS_SWAP"].get(),
+            enable_cache=bool(self.enable_cache_var.get()),
+            resuming=bool(self.settings.get("RESUME_TRAINING", "").strip() or self._ft_resume_active()),
+            loss_watch={"detect": self.krea2_loss_watch_var.get(), "per_image_lr": self.krea2_per_image_lr_var.get(),
+                        "warmup": self.krea2_warmup_look_var.get(), "recaption": self.krea2_auto_recaption_var.get()},
+            captioner=self._qwen_captioner_path(),
+            caption_trigger=(self.caption_trigger_var.get().strip() if hasattr(self, "caption_trigger_var") else ""),
+            caption_overrides=self._caption_overrides(),
+            samples={"enabled": bool(self.sample_enabled_var.get()),
+                     "every": self.sample_every_n_epochs_var.get().strip(),
+                     "width": self.sample_width_var.get().strip(), "height": self.sample_height_var.get().strip(),
+                     "steps": self.sample_steps_var.get().strip(), "cfg": self.sample_cfg_scale_var.get().strip(),
+                     "negative": (self.sample_negative_var.get().strip()
+                                  if getattr(self, "sample_negative_var", None) else ""),
+                     "seed": self.sample_seed_var.get().strip(),
+                     "at_first": bool(getattr(self, "sample_at_first_var", None) and self.sample_at_first_var.get()),
+                     "prompts": self.sample_prompt_text.get("1.0", tk.END).splitlines()},
+            samples_dir=self.get_samples_dir(),
+            edit_caption=self.entries["FAMILY_EDIT_CAPTION"].get() if "FAMILY_EDIT_CAPTION" in self.entries else "",
+        )
+        return d
 
     def _generic_validate_paths(self, desc):
-        """Standard layer: every required model file of a described family (plus its training adapter when the
-        toggle is on) must be set on Preferences and exist."""
-        errors = []
-        if self._family_edit_on(desc):
-            before = self.entries["FAMILY_EDIT_DIR"].get().strip()
-            ref = self.entries["FAMILY_EDIT_REF"].get().strip()
-            if not before or not os.path.isdir(before):
-                errors.append("Edit LoRA is on: set the Originals folder (Training tab, Training Parameters)")
-            elif os.path.isdir(self.image_folder_var.get().strip()):
-                missing, multiple, _ = self._family_edit_pairs()
-                if missing:
-                    errors.append(f"Edit LoRA: {len(missing)} edited photo(s) have no original with the same file "
-                                  f"name in {before} (e.g. {', '.join(missing[:3])})")
-                if multiple:
-                    errors.append(f"Edit LoRA: {len(multiple)} edited photo(s) match more than one original (e.g. "
-                                  f"{', '.join(multiple[:3])}) - keep one original per edited photo, with the "
-                                  f"same file name")
-                uncaptioned, shapes = self._family_edit_problems()
-                if uncaptioned:
-                    errors.append(f"Edit LoRA: {len(uncaptioned)} edited photo(s) have no caption (e.g. "
-                                  f"{', '.join(uncaptioned[:3])}) - type the edit and press Write captions")
-                if shapes:
-                    errors.append(f"Edit LoRA: {len(shapes)} edited photo(s) have a different crop or shape from their "
-                                  f"original (e.g. {', '.join(shapes[:3])}) - export both at the same crop")
-            if ref and not os.path.isfile(ref):
-                errors.append(f"Edit LoRA test photo for previews does not exist: {ref}")
-        if self._family_slider_on(desc, source="pairs"):
-            other = self.entries["FAMILY_SLIDER_DIR"].get().strip()
-            if not other or not os.path.isdir(other):
-                errors.append("Slider: set the -1 end folder (Training tab, Training Parameters)")
-            elif os.path.isdir(self.image_folder_var.get().strip()):
-                missing, multiple, _ = self._family_edit_pairs(other)
-                if missing:
-                    errors.append(f"Slider: {len(missing)} +1 photo(s) have no -1 photo with the same file name in "
-                                  f"{other} (e.g. {', '.join(missing[:3])})")
-                if multiple:
-                    errors.append(f"Slider: {len(multiple)} +1 photo(s) match more than one -1 photo (e.g. "
-                                  f"{', '.join(multiple[:3])}) - keep one per photo, with the same file name")
-                uncaptioned, shapes = self._family_edit_problems(other)
-                if uncaptioned:
-                    errors.append(f"Slider: {len(uncaptioned)} photo(s) have no caption (e.g. "
-                                  f"{', '.join(uncaptioned[:3])}) - type what both ends share and press Write "
-                                  f"captions")
-                if shapes:
-                    errors.append(f"Slider: {len(shapes)} photo(s) have a different crop or shape at the two ends "
-                                  f"(e.g. {', '.join(shapes[:3])}) - use the same framing for both")
-        if self._family_slider_on(desc, source="prompts"):
-            for k, what in (("FAMILY_SLIDER_BASE", "what the picture is"), ("FAMILY_SLIDER_POS", "what the +1 end "
-                            "adds"), ("FAMILY_SLIDER_NEG", "what the -1 end adds")):
-                if not self.entries[k].get().strip():
-                    errors.append(f"Slider from prompts: fill in {what}")
-            try:
-                if float(self.entries["FAMILY_SLIDER_GUIDANCE"].get()) <= 0:
-                    raise ValueError
-            except ValueError:
-                errors.append("Slider push strength must be a number above 0")
-        need = [f for f in desc.model_files if f.required]
-        if desc.training_adapter and self.entries["FAMILY_TRAINING_ADAPTER"].get():
-            need += [f for f in desc.model_files if f.pref_key == desc.training_adapter]
-        for f in need:
-            path = self._krea2_pref(f.pref_key)
-            if not path:
-                errors.append(f"{f.label} path is empty (set it on the Preferences tab)")
-            elif not os.path.exists(path):
-                errors.append(f"{f.label} file does not exist: {path}")
-        return errors
+        """Standard layer: what the family's launch plan refuses (pairs, prompts, model files)."""
+        from fizgig.families import launch
+        return launch.problems(desc, self._family_launch_inputs(desc))
 
     def _collect_preset_values(self):
         """Snapshot every user-editable value on the Training tab into a preset dict.
@@ -32143,12 +32060,8 @@ class LoRATrainerGUI:
         stable per folder and unique across same-named folders, and normalises case and trailing
         slash — which is also why the GUI must treat `C:\\A` and `c:/a/` as the SAME folder when
         validating Multi Concept."""
-        import hashlib
-        norm = image_dir.lower().replace("\\", "/").rstrip("/")
-        h = hashlib.sha1(norm.encode("utf-8")).hexdigest()[:8]
-        nm = "".join(c if (c.isalnum() or c in "-_") else "_"
-                     for c in os.path.basename(image_dir.rstrip("/\\"))) or "dataset"
-        return os.path.join(cache_root, f"{nm}-{h}")
+        from fizgig.families.launch import cache_dir_for
+        return cache_dir_for(cache_root, image_dir)
 
     def _dataset_folders(self) -> list:
         """Every image folder that should become a `[[datasets]]` block, in order.
@@ -32327,6 +32240,14 @@ class LoRATrainerGUI:
                 num_repeats = 1  # hardcoded — UI removed (Klein workflow always uses 1)
             except ValueError:
                 return
+
+            _fdesc = self._family_desc()
+            if _fdesc is not None and not is_jsonl and not is_video:
+                from fizgig.families import launch       # driver-system families: the launch plan's TOML
+                try:
+                    return dataset_name, launch.dataset_toml(_fdesc, self._family_launch_inputs(_fdesc))
+                except (TypeError, ValueError):
+                    return
 
             # Build TOML string
             toml_lines = ["[general]"]
@@ -33541,8 +33462,13 @@ class LoRATrainerGUI:
         # original launch. An armed FT continuation counts: it is the same run continuing.
         is_resuming = bool(self.settings.get("RESUME_TRAINING", "").strip()
                            or self._ft_resume_active())
-        _prompt_slider = bool(self._family_desc() is not None and self._family_slider_on(source="prompts"))
-        if self.enable_cache_var.get() and not is_resuming and not _prompt_slider:
+        _fdesc = self._family_desc()
+        if _fdesc is not None:
+            from fizgig.families import launch as _launch
+            _runs_cache = _launch.caches(_fdesc, self._family_launch_inputs(_fdesc))
+        else:
+            _runs_cache = bool(self.enable_cache_var.get() and not is_resuming)
+        if _runs_cache:
             self.update_console(f"Starting cache preparation for {arch}...\n")
 
             def on_text_encoder_caching_complete():
@@ -34194,196 +34120,32 @@ class LoRATrainerGUI:
         return path
 
     def _generic_cache_command(self, desc, stage):
-        """Standard layer: families/cache.py for any described family (latents with its VAE, text with its
-        text encoder)."""
-        model = self._krea2_pref(desc.pref_for("vae" if stage == "latents" else "text_encoder"))
-        cmd = [self._venv_python(), os.path.join(FIZGIG_DIR, desc.cache_script), "--family", desc.key,
-               "--stage", stage, "--dataset_config", self.settings["DATASET_CONFIG"], "--model", model]
-        if stage == "latents":
-            cmd.append("--skip_existing")   # validated against the current bucket (see the H3 note)
-        if self._family_slider_on(desc, source="pairs"):
-            cmd.append("--slider")          # the control folder is the -1 end: its latents, captions encoded plainly
-        return cmd
+        """Standard layer: the launch plan's cache command (families/cache.py)."""
+        from fizgig.families import launch
+        return launch.cache_command(desc, self._family_launch_inputs(desc), stage)
 
     def _generic_train_command(self, desc):
-        """Standard layer: families/train.py for any described family. Model paths come from the description's
-        roles, training settings from the shared Training-tab knobs, previews from the Samples tab."""
-        st = self.settings
-        cmd = [self._venv_python(), os.path.join(FIZGIG_DIR, desc.train_script), "--family", desc.key,
-               "--dit", self._krea2_pref(desc.pref_for("dit")),
-               "--dataset_config", st["DATASET_CONFIG"],
-               "--output_dir", st["LORA_OUTPUT_DIR"], "--output_name", st["LORA_NAME"],
-               "--network_dim", str(st["NETWORK_DIM"]), "--network_alpha", str(st["NETWORK_ALPHA"]),
-               "--learning_rate", str(st["LEARNING_RATE"]), "--max_train_epochs", str(st["MAX_TRAIN_EPOCHS"]),
-               "--save_every_n_epochs", str(st["SAVE_EVERY_N_EPOCHS"]), "--seed", str(st["SEED"])]
-        cmd += self._state_flags()
-        if (st.get("RESUME_TRAINING") or "").strip():
-            cmd += ["--resume", st["RESUME_TRAINING"].strip()]
-        if desc.training_adapter and st.get("FAMILY_TRAINING_ADAPTER", True):
-            cmd += ["--training_adapter", self._krea2_pref(desc.training_adapter)]
-        ctx = (st.get("CONTEXT_LORA_PATH") or "").strip()
-        if ctx:
-            cmd += ["--context_lora_path", ctx,
-                    "--context_lora_strength", (st.get("CONTEXT_LORA_STRENGTH") or "1.0").strip() or "1.0"]
-        if st.get("ADAPTIVE_LR"):
-            cmd += ["--adaptive_lr",
-                    "--adaptive_lr_min", str(st.get("ADAPTIVE_LR_MIN", "1e-4")).split(" ")[0],
-                    "--adaptive_lr_max", str(st.get("ADAPTIVE_LR_MAX", "2e-4")).split(" ")[0]]
-        else:
-            sched = (st.get("LR_SCHEDULER") or "constant").strip() or "constant"
-            if sched != "constant":
-                cmd += ["--lr_scheduler", sched]
-            try:
-                if int(float(str(st.get("LR_WARMUP_STEPS", "") or 0))) > 0:
-                    cmd += ["--lr_warmup_steps", str(int(float(st["LR_WARMUP_STEPS"])))]
-            except ValueError:
-                pass
-        try:
-            if abs(float(str(st.get("MAX_GRAD_NORM", "") or 1.0)) - 1.0) > 1e-9:
-                cmd += ["--max_grad_norm", str(float(st["MAX_GRAD_NORM"]))]
-        except ValueError:
-            pass
-        if len(desc.precisions) > 1:
-            lab = str(st.get("FAMILY_PRECISION", "") or "")
-            prec = next((k for k, v in self._FAMILY_PRECISION_LABELS.items() if v == lab), "auto")
-            cmd += ["--precision", prec if prec == "auto" or prec in desc.precisions else "auto"]
-        # per-image loss watch (families/loss_watch.py): the same Training-tab toggles as Krea 2, batch size 1 only
-        try:
-            _bs1 = int(str(self.dataset_batch_size_var.get()).strip() or 1) <= 1
-        except (ValueError, AttributeError):
-            _bs1 = True
-        _watch = [(self.krea2_loss_watch_var, "--log_per_image_loss"), (self.krea2_per_image_lr_var, "--per_image_lr"),
-                  (self.krea2_warmup_look_var, "--warmup_look_outliers")]
-        if self._family_can_caption(desc):
-            _watch.append((self.krea2_auto_recaption_var, "--auto_recaption"))
-        if _bs1:
-            cmd += [flag for var, flag in _watch if var.get()]
-            if self._family_can_caption(desc) and self.krea2_auto_recaption_var.get():
-                cmd += ["--captioner", self._qwen_captioner_path()]
-                _trig = (self.caption_trigger_var.get().strip() if hasattr(self, "caption_trigger_var") else "")
-                if _trig and _trig.lower() != "trigger_word":
-                    cmd += ["--trigger_word", _trig]      # leads each AI caption, as the Captions tab writes it
-                _ovr = self._caption_overrides()
-                for _key, _flag in (("training", "--recaption_instruction"),
-                                    ("exhaustive", "--recaption_instruction_detailed")):
-                    _instr = str(_ovr.get(_key, "") or "").strip()
-                    if _instr:
-                        cmd += [_flag, _instr]
-        elif any(var.get() for var, _ in _watch):
-            self.update_console("[loss-watch] per-image features skipped - they need Batch Size 1.\n")
-        if any(var.get() for var, _ in _watch) and "--text_encoder" not in cmd:
-            cmd += ["--text_encoder", self._krea2_pref(desc.pref_for("text_encoder"))]   # caption repair re-encodes
-        if ("lokr" in desc.network_types and str(st.get("NETWORK_TYPE", "")).startswith("LoKR")
-                and not st.get("FAMILY_SLIDER")):        # a slider is always a plain LoRA
-            cmd += ["--network_type", "lokr", "--lokr_factor", str(st.get("LOKR_FACTOR", 8))]
-        raw_swap = self.entries["BLOCKS_SWAP"].get().strip()
-        if raw_swap.lower().startswith("auto"):
-            cmd += ["--blocks_to_swap", "-1"]            # the trainer sizes it for the precision that runs
-        else:
-            import re as _re
-            _m = _re.match(r"\d+", raw_swap)
-            if _m and int(_m.group()) > 0:
-                cmd += ["--blocks_to_swap", _m.group()]
-        if desc.ema_default:
-            ema = str(st.get("FAMILY_EMA", "") or desc.ema_default).split(" ")[0]
-            if ema != "Off":
-                cmd += ["--ema_decay", ema]
-        if str(st.get("OPTIMIZER_TYPE", "") or "").strip():
-            cmd += ["--optimizer_type", str(st["OPTIMIZER_TYPE"]).strip()]
-        if str(st.get("OPTIMIZER_ARGS", "") or "").strip():
-            cmd += ["--optimizer_args", str(st["OPTIMIZER_ARGS"]).strip()]
-        for key, flag in (("METADATA_TITLE", "--metadata_title"), ("METADATA_AUTHOR", "--metadata_author"),
-                          ("METADATA_DESCRIPTION", "--metadata_description"),
-                          ("METADATA_LICENSE", "--metadata_license"), ("METADATA_TAGS", "--metadata_tags"),
-                          ("METADATA_THUMBNAIL", "--metadata_thumbnail")):
-            val = str(st.get(key, "") or "").strip()
-            if val:
-                cmd += [flag, val]
-        trig = str(st.get("METADATA_TRIGGER_PHRASE", "") or "").strip() or (
-            self.caption_trigger_var.get().strip() if hasattr(self, "caption_trigger_var") else "")
-        if trig and trig.lower() != "trigger_word":
-            cmd += ["--metadata_trigger_phrase", trig]
+        """Standard layer: the launch plan's training command (families/train.py). Its preview prompt files are
+        written here and its console lines shown."""
+        from fizgig.families import launch
         if self.sample_enabled_var.get():
             # Re-check the turbo file now: set or downloaded since the Samples tab last refreshed, its default steps
             # would otherwise be missed (swaps only between the two defaults, never a typed value).
             try:
                 self._generic_samples_ui(desc)
                 if "FAMILY_TURBO_STRENGTH" in self.entries:     # it may just have run the family's one-time reset
-                    st["FAMILY_TURBO_STRENGTH"] = self.entries["FAMILY_TURBO_STRENGTH"].get()
+                    self.settings["FAMILY_TURBO_STRENGTH"] = self.entries["FAMILY_TURBO_STRENGTH"].get()
             except Exception:
                 pass
-            sp = desc.preview_speed()
-            speed_path = self._krea2_pref(sp.pref_key) if sp and sp.pref_key else ""
-            if speed_path and os.path.exists(speed_path):
-                _dflt = desc.preview_speed_defaults()[1]
-                try:
-                    _ts = float(str(st.get("FAMILY_TURBO_STRENGTH", "") or _dflt))
-                except ValueError:
-                    _ts = _dflt
-                if _ts > 0:                              # strength 0 = previews without the turbo: don't load it
-                    cmd += ["--speed_lora", speed_path]
-                    if abs(_ts - _dflt) > 1e-9:
-                        cmd += ["--speed_lora_strength", f"{max(0.0, min(2.0, _ts)):g}"]
-            if st.get("FAMILY_EDIT"):          # edit previews: the edit instruction, not the Samples-tab prompts
-                _instr = self._family_edit_instruction()
-                prompts = None
-                if _instr:
-                    prompts = os.path.join(self.get_samples_dir(), f"{desc.key}_edit_prompt.txt")
-                    os.makedirs(os.path.dirname(prompts), exist_ok=True)
-                    with open(prompts, "w", encoding="utf-8") as _fh:
-                        _fh.write(_instr + "\n")
-            elif st.get("FAMILY_SLIDER"):      # slider previews: the dial on its own picture, not the Samples tab
-                _own = (st.get("FAMILY_SLIDER_BASE") if st.get("FAMILY_SLIDER_SOURCE") == "prompts"
-                        else st.get("FAMILY_SLIDER_CAPTION"))
-                prompts = os.path.join(self.get_samples_dir(), f"{desc.key}_slider_prompt.txt")
-                os.makedirs(os.path.dirname(prompts), exist_ok=True)
-                with open(prompts, "w", encoding="utf-8") as _fh:
-                    _fh.write((str(_own or "").strip() or "a photo") + "\n")   # the trainer reads the real captions
-            else:
-                prompts = self._write_krea2_sample_prompts(filename=f"{desc.key}_prompts.txt")
-            every = self.sample_every_n_epochs_var.get().strip()
-            if prompts and every.isdigit() and int(every) > 0:
-                cmd += ["--sample_prompts", prompts, "--sample_every_n_epochs", every,
-                        "--vae", self._krea2_pref(desc.pref_for("vae")),
-                        "--text_encoder", self._krea2_pref(desc.pref_for("text_encoder")),
-                        "--sample_width", self.sample_width_var.get().strip() or str(desc.preview_width),
-                        "--sample_height", self.sample_height_var.get().strip() or str(desc.preview_height)]
-                if self.sample_steps_var.get().strip():
-                    cmd += ["--sample_steps", self.sample_steps_var.get().strip()]
-                try:
-                    cfg = float(self.sample_cfg_scale_var.get().strip() or desc.preview_cfg)
-                except ValueError:
-                    cfg = desc.preview_cfg
-                cmd += ["--sample_cfg_scale", str(cfg)]
-                neg = self.sample_negative_var.get().strip() if getattr(self, "sample_negative_var", None) else ""
-                if neg and cfg > 1.0:
-                    cmd += ["--sample_negative", neg]
-                try:
-                    cmd += ["--sample_seed", str(int(self.sample_seed_var.get().strip()))]
-                except ValueError:
-                    pass
-                if getattr(self, "sample_at_first_var", None) and self.sample_at_first_var.get():
-                    cmd.append("--sample_at_first")
-                if st.get("FAMILY_EDIT"):
-                    ref = (st.get("FAMILY_EDIT_REF") or "").strip()
-                    if not ref:
-                        try:
-                            ref = self._family_edit_pairs()[2] or ""
-                        except OSError:
-                            ref = ""
-                    if ref:
-                        cmd += ["--sample_reference", ref]
-        if st.get("FAMILY_SLIDER"):
-            if st.get("FAMILY_SLIDER_SOURCE") == "prompts":
-                base = st.get("FAMILY_SLIDER_BASE", "").strip()
-                cmd += ["--slider_prompts", base, f"{base} {st.get('FAMILY_SLIDER_POS', '').strip()}",
-                        f"{base} {st.get('FAMILY_SLIDER_NEG', '').strip()}",       # the user's own comma, if any
-                        "--slider_guidance", str(st.get("FAMILY_SLIDER_GUIDANCE") or "2")]
-                for flag, role in (("--text_encoder", "text_encoder"), ("--vae", "vae")):
-                    if flag not in cmd:          # the practice images and the three prompts need both
-                        cmd += [flag, self._krea2_pref(desc.pref_for(role))]
-            else:
-                cmd.append("--slider_pairs")
+        plan = launch.LaunchPlan()
+        cmd = launch.train_command(desc, self._family_launch_inputs(desc), plan)
+        for line in plan.console:
+            self.update_console(line)
+        for folder in plan.dirs:
+            os.makedirs(folder, exist_ok=True)
+        for path, text in plan.files:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
         return cmd
 
     def _build_krea2_train_command(self):
