@@ -70,7 +70,7 @@ Qwen Image 2.1 is one model for text-to-image and editing, so a LoRA can learn a
 2. **Originals folder (before editing):** your original, unedited photos. They need no captions.
 3. **Edited folder (after editing):** the same photos after your edit, with the same file names as the originals (`IMG_0001.jpg` in both), one edited photo per original. This is the same folder as on the Start tab.
 4. **Captions for the edited photos:** type what the edit is, e.g. "Apply my concert grade.", and press **Write captions**. It saves that text as the caption of every photo in the Edited folder.
-5. **Test photo for previews (optional):** an original photo that is in neither folder. The previews during training show the edit applied to it. Any size: it's fitted to the preview size automatically. Left empty, previews use the first original.
+5. **Test photo for previews (optional):** an original photo that is in neither folder. The previews during training show the edit applied to it. Any size: it's fitted to the preview size automatically. Left empty, previews use the first original. Edit previews use your edit instruction as their prompt; the Samples tab's prompts aren't used while Edit LoRA is on.
 
 Start refuses to run if an edited photo has no original with the same file name, has no caption, or has a different crop or shape from its original.
 

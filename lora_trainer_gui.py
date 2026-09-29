@@ -7510,6 +7510,11 @@ class LoRATrainerGUI:
         if can:
             self._family_edit_need.configure(text=desc.edit_note or "An original and its edited version must have "
                                                                   "the same crop and shape.")
+        edit_on = can and bool(self.entries["FAMILY_EDIT"].get())
+        if getattr(self, "_sample_edit_note", None) is not None:
+            for w in (self.sample_prompt_text, self._sample_prompt_hint):
+                self._set_widget_visible(w, not edit_on)
+            self._set_widget_visible(self._sample_edit_note, edit_on)
         for w in (self._family_edit_cb, self._family_edit_hint):
             self._set_widget_visible(w, can)
         self._set_widget_visible(self._family_edit_frame, can and bool(self.entries["FAMILY_EDIT"].get()))
@@ -7528,6 +7533,26 @@ class LoRATrainerGUI:
             self.entries["FAMILY_EDIT_REF"].insert(0, path)
 
     _EDIT_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+
+    def _family_edit_instruction(self):
+        """The edit instruction for previews: the captions box, else the first edited photo's caption file."""
+        text = self.entries["FAMILY_EDIT_CAPTION"].get().strip()
+        if text:
+            return text
+        folder = self.image_folder_var.get().strip()
+        ext = (getattr(self, "dataset_caption_ext_var", None) and self.dataset_caption_ext_var.get().strip()) or ".txt"
+        try:
+            for f in sorted(os.listdir(folder)):
+                b, e = os.path.splitext(f)
+                cap = os.path.join(folder, b + ext)
+                if e.lower() in self._EDIT_EXTS and os.path.exists(cap):
+                    with open(cap, encoding="utf-8") as fh:
+                        line = fh.read().strip().splitlines()
+                    if line and line[0].strip():
+                        return line[0].strip()
+        except OSError:
+            pass
+        return ""
 
     def _family_edit_write_captions(self):
         """Write the typed edit instruction as the caption (.txt) of every photo in the Edited (Start) folder."""
@@ -12941,12 +12966,22 @@ class LoRATrainerGUI:
         self.sample_prompt_text.bind("<KeyRelease>", lambda e: self._save_last_used_paths())
         # Issue #49: "Multi-line prompt" read as ONE prompt that may contain line breaks — two
         # users only discovered multiple prompts by accident. Say what a line actually does.
-        tk.Label(prompt_card,
-                 text="Each line is a SEPARATE prompt — press Enter to add another sample per "
-                      "epoch. Keep a single prompt on one line (long ones wrap by themselves).",
-                 font=(FONT_FAMILY, 9, "italic"), fg=COLORS["text_explain"],
-                 bg=COLORS["bg_surface"], wraplength=520, justify=tk.LEFT).grid(
-            row=1, column=1, columnspan=2, sticky=tk.W, pady=(0, 6))
+        self._sample_prompt_hint = tk.Label(
+            prompt_card,
+            text="Each line is a SEPARATE prompt — press Enter to add another sample per "
+                 "epoch. Keep a single prompt on one line (long ones wrap by themselves).",
+            font=(FONT_FAMILY, 9, "italic"), fg=COLORS["text_explain"],
+            bg=COLORS["bg_surface"], wraplength=520, justify=tk.LEFT)
+        self._sample_prompt_hint.grid(row=1, column=1, columnspan=2, sticky=tk.W, pady=(0, 6))
+        # Edit LoRA (Training tab): previews apply the edit instruction to the test photo, so no prompts here
+        self._sample_edit_note = tk.Label(
+            prompt_card,
+            text="Edit LoRA is on: each preview applies your edit instruction (Training tab, Captions for the edited "
+                 "photos) to the test photo. The prompts here are not used.",
+            font=(FONT_FAMILY, 10), fg=COLORS["text_primary"], bg=COLORS["bg_surface"], wraplength=520,
+            justify=tk.LEFT)
+        self._sample_edit_note.grid(row=0, column=1, columnspan=2, sticky=tk.W, pady=4)
+        self._sample_edit_note.grid_remove()
 
         ttk.Label(prompt_card, text="Width:").grid(row=2, column=0, sticky=tk.W, padx=(0, 10), pady=4)
         self.sample_width_var = tk.StringVar(value=str(self.settings["SAMPLE_WIDTH"]))
@@ -33912,7 +33947,16 @@ class LoRATrainerGUI:
                     cmd += ["--speed_lora", speed_path]
                     if abs(_ts - _dflt) > 1e-9:
                         cmd += ["--speed_lora_strength", f"{max(0.0, min(2.0, _ts)):g}"]
-            prompts = self._write_krea2_sample_prompts(filename=f"{desc.key}_prompts.txt")
+            if st.get("FAMILY_EDIT"):          # edit previews: the edit instruction, not the Samples-tab prompts
+                _instr = self._family_edit_instruction()
+                prompts = None
+                if _instr:
+                    prompts = os.path.join(self.get_samples_dir(), f"{desc.key}_edit_prompt.txt")
+                    os.makedirs(os.path.dirname(prompts), exist_ok=True)
+                    with open(prompts, "w", encoding="utf-8") as _fh:
+                        _fh.write(_instr + "\n")
+            else:
+                prompts = self._write_krea2_sample_prompts(filename=f"{desc.key}_prompts.txt")
             every = self.sample_every_n_epochs_var.get().strip()
             if prompts and every.isdigit() and int(every) > 0:
                 cmd += ["--sample_prompts", prompts, "--sample_every_n_epochs", every,
