@@ -5629,9 +5629,19 @@ class LoRATrainerGUI:
         _r[0] = 0
         for _key, _head, _text, _default in (
                 ("FAMILY_SLIDER_BASE", "1. What the picture is",
-                 "The shared description, e.g. \"a close-up portrait photo of a man\".", ""),
-                ("FAMILY_SLIDER_POS", "2. The +1 end adds", "e.g. \"smiling broadly\".", ""),
-                ("FAMILY_SLIDER_NEG", "3. The -1 end adds", "e.g. \"frowning\".", ""),
+                 "The start of the prompt. Each end's words are added after it with a space, so end this line "
+                 "with a comma if you want one. Two ways to use it:\n"
+                 "One person: describe them, e.g. \"a close-up photo of a young woman with short dark hair,\" - "
+                 "the dial changes the expression and keeps her the same.\n"
+                 "Anyone: keep it general, e.g. \"a close-up photo of a person who is\" - the practice pictures "
+                 "show a different person each time, so the dial learns only the change and works on anyone.",
+                 ""),
+                ("FAMILY_SLIDER_POS", "2. The +1 end adds",
+                 "e.g. \"happy\" - with the general line above the prompt reads \"a close-up photo of a person "
+                 "who is happy\".", ""),
+                ("FAMILY_SLIDER_NEG", "3. The -1 end adds",
+                 "e.g. \"sad\". Words like this can bring more than a face (grey light, rain); if the whole scene "
+                 "changes, try a narrower word such as \"unsmiling\".", ""),
                 ("FAMILY_SLIDER_GUIDANCE", "4. Push strength",
                  "How hard the ends are pushed apart. Higher gives a stronger dial but changes more than the one "
                  "thing you asked for (a frown can turn into a different, older man). 2 is a good start.", "2")):
@@ -34288,8 +34298,8 @@ class LoRATrainerGUI:
         if st.get("FAMILY_SLIDER"):
             if st.get("FAMILY_SLIDER_SOURCE") == "prompts":
                 base = st.get("FAMILY_SLIDER_BASE", "").strip()
-                cmd += ["--slider_prompts", base, f"{base}, {st.get('FAMILY_SLIDER_POS', '').strip()}",
-                        f"{base}, {st.get('FAMILY_SLIDER_NEG', '').strip()}",
+                cmd += ["--slider_prompts", base, f"{base} {st.get('FAMILY_SLIDER_POS', '').strip()}",
+                        f"{base} {st.get('FAMILY_SLIDER_NEG', '').strip()}",       # the user's own comma, if any
                         "--slider_guidance", str(st.get("FAMILY_SLIDER_GUIDANCE") or "2")]
                 for flag, role in (("--text_encoder", "text_encoder"), ("--vae", "vae")):
                     if flag not in cmd:          # the practice images and the three prompts need both
