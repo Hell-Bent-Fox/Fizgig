@@ -37,10 +37,6 @@ Pick your epoch in LoRA Royale; my grade was best at epoch 9.
 
 **Speed and memory:** edit training is slower per step than normal training, because the model reads the original photo as well as the edited one on every step: about 2 s per step on an RTX 5090 at 0.5 MP. A 40-pair, 10-epoch run takes around 15 minutes there, previews included. It trains on 16 GB cards too; Auto picks INT8 with no block swap.
 
-## Using an edit LoRA in ComfyUI
-
-Load the LoRA as usual and use the **Text Encode Qwen Image 2.1** node: connect the VAE, plug the photo to edit into its first image input, write the instruction as the prompt (the same words as your captions), and sample from the node's **latent** output so the result keeps the photo's shape. Set the node's **resolution** near the size you trained at: an edit LoRA trained at 0.5 MP matched its Fizgig previews at 768 and came out slightly less exact at the default 1024.
-
 ## Licence
 
 Qwen Image 2.1 is released under the Qwen Research License: non-commercial use only unless you get a commercial licence from the Qwen team, and a LoRA or fine-tune you share must say "Built with Qwen" or "Improved using Qwen". Read the [licence](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE) before publishing or selling anything made with it.
