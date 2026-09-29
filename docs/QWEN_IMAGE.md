@@ -64,6 +64,12 @@ Training previews render on the plain model at **25 steps** by default, with the
 
 Qwen Image 2.1 is one model for text-to-image and editing, so a LoRA can learn an edit: a grade, a look, a relight, a retouch. You train it on pairs of the same photo, the original and your edited version, and it learns to make that edit to new photos.
 
+A film grade trained on 40 pairs: the original, the edit, and Fizgig's epoch 9 training preview.
+
+![Before edit](../assets/qwen_edit/1_before_edit.jpg)
+![After edit](../assets/qwen_edit/2_after_edit.jpg)
+![Fizgig's epoch 9 preview](../assets/qwen_edit/3_fizgig_epoch9_preview.png)
+
 **What you need:** about 40 pairs (20 at least; more if your photos vary a lot). Each photo 1 MP or larger, e.g. 1200×800; bigger is fine, Fizgig resizes them. An original and its edited version must have the same crop and shape.
 
 1. On the Training tab, pick the **Qwen 2.1 Edit** preset (it ticks **Edit LoRA** under Training Parameters).
