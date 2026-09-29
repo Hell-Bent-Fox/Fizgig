@@ -669,16 +669,16 @@ class ImageDirectoryDatasource:
             all_ctrl = set(glob_images(self.control_directory))
 
             for img_path in sorted_by_len:
-                base_no_ext = os.path.splitext(os.path.basename(img_path))[0]
+                base_no_ext = os.path.splitext(os.path.basename(img_path))[0].casefold()   # IMG_1 pairs with img_1
                 matches = [
                     p for p in all_ctrl
-                    if os.path.basename(p).startswith(base_no_ext + ".")
-                    or os.path.basename(p).startswith(base_no_ext + "_")
+                    if os.path.basename(p).casefold().startswith(base_no_ext + ".")
+                    or os.path.basename(p).casefold().startswith(base_no_ext + "_")
                 ]
                 all_ctrl.difference_update(matches)
                 if matches:
                     def _sort_key(path, _base=base_no_ext):
-                        bn = os.path.splitext(os.path.basename(path))[0]
+                        bn = os.path.splitext(os.path.basename(path))[0].casefold()
                         if bn == _base:
                             return 0
                         suffix = bn.rsplit("_", 1)[-1]

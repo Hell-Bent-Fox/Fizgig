@@ -7724,7 +7724,8 @@ class LoRATrainerGUI:
                 continue
             if not os.path.exists(os.path.join(after_dir, b + ext)):
                 uncaptioned.append(f)
-            m = [x for x in befores if x.startswith(b + ".") or x.startswith(b + "_")]
+            m = [x for x in befores if x.casefold().startswith(b.casefold() + ".")    # IMG_1 pairs with img_1
+                 or x.casefold().startswith(b.casefold() + "_")]
             if len(m) == 1:
                 try:
                     with Image.open(os.path.join(after_dir, f)) as ia, Image.open(os.path.join(before_dir, m[0])) as ib:
@@ -7747,7 +7748,8 @@ class LoRATrainerGUI:
             b, e = os.path.splitext(f)
             if e.lower() not in self._EDIT_EXTS:
                 continue
-            m = [x for x in befores if x.startswith(b + ".") or x.startswith(b + "_")]
+            m = [x for x in befores if x.casefold().startswith(b.casefold() + ".")    # IMG_1 pairs with img_1
+                 or x.casefold().startswith(b.casefold() + "_")]
             if not m:
                 missing.append(f)
             elif len(m) > 1:
