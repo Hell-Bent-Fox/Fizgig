@@ -182,14 +182,21 @@ class MiniMaxH3VideoVAEEncoder(nn.Module):
         (124 frames costs 0.3 GiB more than 22). So the cap is a straight solve, with the same
         1.5 GiB left for the allocator and the display that the training planner reserves.
         """
-        budget = max(0.0, float(free_gb) - float(reserve_gb) - 0.9)
+        free_gib = float(free_gb) * 1e9 / 2 ** 30      # free is read in GB; the fit above is GiB
+        budget = max(0.0, free_gib - float(reserve_gb) - 0.9)
         max_pixels = budget / 52.0 * 1e6
         if width * height <= max_pixels or max_pixels < 32 * 32:
             return int(width), int(height)
-        scale = (max_pixels / (width * height)) ** 0.5
-        w = max(32, int(width * scale) // 32 * 32)
-        h = max(32, int(height * scale) // 32 * 32)
-        return w, h
+        # The largest /32 size that fits, rounding the width to the clip's shape at each height:
+        # flooring both sides on their own drifts the aspect by 6% on small cards.
+        aspect = width / height
+        h = int((max_pixels / aspect) ** 0.5) // 32 * 32
+        while h > 32:
+            w = max(32, int(round(h * aspect / 32)) * 32)
+            if w * h <= max_pixels:
+                return w, h
+            h -= 32
+        return max(32, int(round(32 * aspect / 32)) * 32), 32
 
     def encode_clip(self, x):
         """A whole clip -> [B,24,T',H/16,W/16], encoded in the groups the model expects.
