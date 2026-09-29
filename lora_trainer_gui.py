@@ -33289,8 +33289,10 @@ class LoRATrainerGUI:
         # snapshot; the live TOML belongs to the editor alone.
         # RefMod: the TOML's resolution follows Steps (0.25 MP whenever the optimiser runs),
         # a rule the edit-time writer applies; rewrite once here so the snapshot below
-        # carries it whatever order the last preset/queue item set things in.
-        if self._is_refmod_arch() and not _is_resuming_clear:
+        # carries it whatever order the last preset/queue item set things in. A described family's TOML carries
+        # its Edit / Slider pairs folder, which nothing rewrites the TOML for: without this, pick the training
+        # folder, then Edit and its Originals, and the run launched without its originals.
+        if (self._is_refmod_arch() or self._family_desc() is not None) and not _is_resuming_clear:
             try:
                 self.auto_save_dataset_config_silent()
             except Exception:
