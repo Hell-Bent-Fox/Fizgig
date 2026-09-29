@@ -72,7 +72,7 @@ A film grade trained on 40 pairs: the original, the edit, and Fizgig's epoch 9 t
 
 **What you need:** about 40 pairs (20 at least; more if your photos vary a lot). Each photo 1 MP or larger, e.g. 1200×800; bigger is fine, Fizgig resizes them. An original and its edited version must have the same crop and shape.
 
-1. On the Training tab, pick the **Qwen 2.1 Edit** preset (it ticks **Edit LoRA** under Training Parameters).
+1. On the Training tab, pick an Edit preset (each ticks **Edit LoRA** under Training Parameters): **Qwen 2.1 Edit** (rank 8, Adaptive LR 2e-4 to 4e-4, 12 epochs) for most edits, or **Qwen 2.1 Edit Strong** (rank 16, Adaptive LR 1e-4 to 2e-4) for trickier ones.
 2. **Originals folder (before editing):** your original, unedited photos. They need no captions.
 3. **Edited folder (after editing):** the same photos after your edit, with the same file names as the originals (`IMG_0001.jpg` in both), one edited photo per original. This is the same folder as on the Start tab.
 4. **Captions for the edited photos:** type what the edit is, e.g. "Apply my concert grade.", and press **Write captions**. It saves that text as the caption of every photo in the Edited folder.

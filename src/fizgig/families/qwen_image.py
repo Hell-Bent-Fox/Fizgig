@@ -188,10 +188,12 @@ QWEN_IMAGE_21 = FamilyDescription(
         # descent, where style overbakes. 1.5e-4 sits between flat 1e-4 (slow at rank 16) and the range that
         # overcooked rank 16. 30 epochs, every one saved: stop early or pick an epoch in LoRA Royale.
         ("✨ Qwen 2.1 Style (rank 16, 1.5e-4)", _preset(16, lr=1.5e-4)),
-        # Edit (28 Sep): 40 duotone pairs, held-out PSNR vs the exact answer peaked by epoch 4-6 (160-240 steps) and
-        # wobbled after (a 12-epoch run: 28.2 dB at e6, 24.6 at e10). 8 epochs covers the plateau with headroom;
-        # EMA smooths the wobble; pick the epoch in LoRA Royale.
-        ("✨ Qwen 2.1 Edit (rank 16, 2e-4, before/after pairs)", _preset(16, lr=2e-4, epochs=8, edit=True)),
+        # Edit: Peter's proven recipe (29 Sep, 40-pair Sedona film grade, v6.6.0 demo) - Fast's rank 8 + Adaptive
+        # 2e-4..4e-4, best at epoch 9. 12 epochs covers that with headroom; pick the epoch in LoRA Royale.
+        ("✨ Qwen 2.1 Edit (rank 8, adaptive LR)", _preset(8, adaptive=("2e-4", "4e-4"), epochs=12, edit=True)),
+        # Edit Strong: rank 16 for trickier edits, at Standard's halved range (rank 16 at Fast's overcooked).
+        ("✨ Qwen 2.1 Edit Strong (rank 16, adaptive LR) - trickier edits",
+         _preset(16, adaptive=("1e-4", "2e-4"), epochs=12, edit=True)),
     ),
     workbench=("repair", "explorer", "profiler", "extract", "royale"),
 
