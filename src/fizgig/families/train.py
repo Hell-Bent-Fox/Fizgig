@@ -807,7 +807,9 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             prune_state_dirs(output_dir, output_name, keep_last_n_states)
             state_saved = True
         if sample_every_n_epochs and done % sample_every_n_epochs == 0:
+            _tp = time.time()
             previews(done)
+            progress.start_t += time.time() - _tp       # the bar's s/it is training speed, not previews
         if os.path.exists(pause_flag) and done < max_train_epochs:
             if state_saved:
                 logger.info(f"[pause] requested - state for epoch {done} already saved; exiting cleanly")

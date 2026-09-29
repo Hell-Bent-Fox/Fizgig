@@ -3429,6 +3429,7 @@ def train_krea2(
                                      "already saved.", type(_se).__name__, _se)
                     prune_state_dirs(output_dir, output_name, keep_last_n_states)
 
+        _preview_t0 = time.time()       # the bar's s/it is training speed: preview time is taken back out below
         if (rotator is not None and do_previews
                 and (ft_ckpt_saved_this_epoch or (epoch + 1) == max_train_epochs)):
             # Fine-tune: previews ride the checkpoint saves (plus the final epoch) — each
@@ -3584,6 +3585,7 @@ def train_krea2(
             dit.train()
             network.train()
 
+        progress_bar.start_t += time.time() - _preview_t0
         # Graceful pause (GUI wrote <output_dir>/.pause_requested): save a full resumable
         # state at this epoch boundary and exit cleanly so the GPU frees. The GUI detects the
         # clean exit, records the paused state, and offers Resume. Same contract as Klein.

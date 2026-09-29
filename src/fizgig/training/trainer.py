@@ -2641,9 +2641,12 @@ class KleinTrainer:
                     if should_sampling or should_saving:
                         optimizer_eval_fn()
                         if should_sampling:
+                            _preview_t0 = time.time()
                             self.sample_images(
                                 accelerator, args, None, global_step, vae, transformer, sample_parameters, dit_dtype
                             )
+                            if not progress_bar.disable:
+                                progress_bar.start_t += time.time() - _preview_t0   # s/it is training speed
                         if should_saving:
                             accelerator.wait_for_everyone()
                             if accelerator.is_main_process:
@@ -2902,6 +2905,7 @@ class KleinTrainer:
 
             # A preview failure must never end a run that might be hours in (Krea 2 already
             # degrades gracefully here) — the checkpoint for this epoch is already saved.
+            _preview_t0 = time.time()       # the bar's s/it is training speed: preview time is taken back out below
             try:
                 self.sample_images(accelerator, args, epoch + 1, global_step, vae, transformer, sample_parameters, dit_dtype)
                 # The checkpoint above was saved BEFORE this preview existed, so its auto
@@ -2915,6 +2919,8 @@ class KleinTrainer:
             except Exception:
                 logger.warning("sample generation failed at epoch %d — training continues, "
                                "previews skipped this round", epoch + 1, exc_info=True)
+            if not progress_bar.disable:
+                progress_bar.start_t += time.time() - _preview_t0
             optimizer_train_fn()
 
             # Graceful pause — after save_state + sample_images for this epoch are complete, exit cleanly

@@ -5699,6 +5699,7 @@ def train_minimax(
                      if rotator is not None
                      else bool(sample_every_n_epochs
                                and (epoch + 1) % sample_every_n_epochs == 0))
+        _preview_t0 = time.time()       # the bar's s/it is training speed: preview time is taken back out below
         if do_previews and _prev_due:
             try:
                 # Previews render on the EMA weights when EMA is on — a preview must show what
@@ -5737,6 +5738,7 @@ def train_minimax(
                     do_previews = False
             if network is not None:
                 network.train()
+        progress_bar.start_t += time.time() - _preview_t0
         if os.path.exists(pause_flag):
             # Pause = graceful epoch-end exit with FULL state (regardless of the save-state
             # toggles), so Resume continues exactly here — matching Klein/Krea 2. The final
