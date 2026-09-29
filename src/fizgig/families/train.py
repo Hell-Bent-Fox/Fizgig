@@ -428,7 +428,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                         *slider_prompts, float(slider_guidance))
             if not (te_path and vae_path):
                 raise RuntimeError("[slider] prompt pairs need the text encoder and VAE paths")
-            if not sample_prompts and str(slider_prompts[0]).strip():
+            if str(slider_prompts[0]).strip():     # the dial is shown on the picture it was trained on
                 sample_prompts = [str(slider_prompts[0]).strip()]
 
     # ---- data ------------------------------------------------------------------------------------
