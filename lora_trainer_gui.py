@@ -11063,6 +11063,7 @@ class LoRATrainerGUI:
                 self._caption_search_after = None
                 self.current_caption_page = 0
                 self.refresh_caption_images()
+                self._caption_show_grid_top()
             self._caption_search_after = self.master.after(300, _apply)
         self.caption_search_var.trace_add("write", _on_find)
 
@@ -11462,11 +11463,40 @@ class LoRATrainerGUI:
             return
         self.refresh_caption_images()
 
+    def _caption_show_grid_top(self):
+        """After a page change, bring the grid's top into view. The tab's scroll area otherwise
+        keeps the old height and position until the next scroll event, so shrinking from 200
+        cards to 12 left an empty stretch where the old page ended."""
+        c = self.caption_grid_frame
+        while c is not None and not hasattr(c, "yview_moveto"):
+            c = c.master
+        if c is None:
+            return
+        try:
+            # the resize of the inner frame arrives as pending events; the scroll area's own
+            # <Configure> handler must run first or the height measured below is the old page's
+            c.update()
+            box = c.bbox("all")
+            if not box:
+                return
+            c.configure(scrollregion=box)
+            height = max(1, box[3] - box[1])
+            # the grid's y inside the scrolled content (layout offsets, not screen position,
+            # which still reflects the old scroll until the view moves)
+            grid_y, w = 0, self.caption_grid_frame
+            while w is not None and w.master is not c:
+                grid_y += w.winfo_y()
+                w = w.master
+            c.yview_moveto(max(0.0, (grid_y - 90) / height))
+        except tk.TclError:
+            pass
+
     def caption_prev_page(self):
         """Go to previous page of images"""
         if self.current_caption_page > 0:
             self.current_caption_page -= 1
             self.refresh_caption_images()
+            self._caption_show_grid_top()
 
     def caption_next_page(self):
         """Go to next page of images"""
@@ -11478,6 +11508,7 @@ class LoRATrainerGUI:
         if self.current_caption_page < total_pages - 1:
             self.current_caption_page += 1
             self.refresh_caption_images()
+            self._caption_show_grid_top()
 
     # Cards per Captions page. 200 is the ceiling: 50 rows of ~300 px cards stay well inside Tk's
     # 32,767 px scroll limit alongside the rest of the tab (#140, #151).
@@ -11503,6 +11534,7 @@ class LoRATrainerGUI:
         self.current_caption_page = max(0, n - 1)
         self.caption_goto_var.set("")
         self.refresh_caption_images()
+        self._caption_show_grid_top()
 
     def caption_set_per_page(self):
         """New page size: keep the first card on screen in view, remember the choice."""
@@ -11516,6 +11548,7 @@ class LoRATrainerGUI:
         self.last_used["caption_per_page"] = per
         self._save_last_used_paths()
         self.refresh_caption_images()
+        self._caption_show_grid_top()
 
     def show_edit_caption_dialog(self, img_path):
         """Live caption editor: no Save button, no confirmation popups. Edits save themselves
