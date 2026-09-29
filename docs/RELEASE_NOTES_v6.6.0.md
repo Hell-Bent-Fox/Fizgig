@@ -6,7 +6,7 @@ Edit LoRA training for Qwen Image 2.1: teach Qwen your own edit, a grade, a look
 
 Qwen Image 2.1 is one model for both generating and editing images, so a LoRA can learn an edit as well as a subject or a style. You train it on pairs of the same photo: your original, and your edited version. The LoRA learns to make that edit to new photos, changing the colour and tone and leaving the content of the photo alone.
 
-My first real test was one of my own film grades. Settings: 40 before/after pairs, the **Qwen 2.1 Fast** preset (rank 8, alpha 8, Adaptive LR 2e-4 to 4e-4, 0.5 MP) with Edit LoRA ticked. By epoch 9 it matched my edit, and it carried the grade over to photos it had never seen. Below: the original, my edit, and Fizgig's epoch 9 training preview.
+My first real test was one of my own film grades, from a recent photo trip to Sedona. Settings: 40 before/after pairs, the **Qwen 2.1 Fast** preset (rank 8, alpha 8, Adaptive LR 2e-4 to 4e-4, 0.5 MP) with Edit LoRA ticked. By epoch 9 it matched my edit, and it carried the grade over to photos it had never seen. Below: the original, my edit, and Fizgig's epoch 9 training preview.
 
 ![Before edit](https://raw.githubusercontent.com/shootthesound/Fizgig/v6.6.0/assets/qwen_edit/1_before_edit.jpg)
 
