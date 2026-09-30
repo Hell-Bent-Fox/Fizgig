@@ -7775,7 +7775,9 @@ class LoRATrainerGUI:
                                   if getattr(self, "sample_negative_var", None) else ""),
                      "seed": self.sample_seed_var.get().strip(),
                      "at_first": bool(getattr(self, "sample_at_first_var", None) and self.sample_at_first_var.get()),
-                     "prompts": self.sample_prompt_text.get("1.0", tk.END).splitlines()},
+                     "prompts": self.sample_prompt_text.get("1.0", tk.END).splitlines(),
+                     "reference": (self.sample_ref_image_var.get().strip()
+                                   if getattr(self, "sample_ref_image_var", None) else "")},
             samples_dir=self.get_samples_dir(),
             edit_caption=self.entries["FAMILY_EDIT_CAPTION"].get() if "FAMILY_EDIT_CAPTION" in self.entries else "",
         )
@@ -14122,16 +14124,20 @@ class LoRATrainerGUI:
         if hasattr(self, "krea2_engine_frame"):
             self.krea2_engine_frame.grid_remove()
             self.krea2_engine_note.grid_remove()
+        # the reference row: live where the family's previews see a picture (Krea 2's vision path)
         if hasattr(self, "sample_ref_entry"):
-            self.sample_ref_entry.configure(state=tk.DISABLED)
+            self.sample_ref_entry.configure(state=("readonly" if desc.preview_image else tk.DISABLED))
         for attr in ("sample_ref_browse_btn", "sample_ref_clear_btn"):
             w = getattr(self, attr, None)
             if w is not None:
-                w.configure(state=tk.DISABLED)
+                w.configure(state=(tk.NORMAL if desc.preview_image else tk.DISABLED))
         if hasattr(self, "sample_ref_label"):
-            self.sample_ref_label.configure(foreground=muted)
+            self.sample_ref_label.configure(foreground=(COLORS["text_secondary"] if desc.preview_image else muted))
         if hasattr(self, "sample_ref_note"):
-            self.sample_ref_note.configure(text=f"Not used for {desc.display_name} previews.")
+            self.sample_ref_note.configure(text=(
+                f"Optional - fed through {desc.display_name}'s text encoder vision path so samples become visually "
+                f"aware of it ('prompt from a picture', not a pixel edit). Leave empty for normal samples."
+                if desc.preview_image else f"Not used for {desc.display_name} previews."))
         if hasattr(self, "cache_sample_model_combo"):
             self.cache_sample_model_combo.configure(state=tk.DISABLED)
         if hasattr(self, "cache_sample_model_label"):

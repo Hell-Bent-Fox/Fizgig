@@ -82,6 +82,7 @@ KREA2 = FamilyDescription(
     precisions=("int8", "nf4", "bf16"),
     auto_precisions=("int8", "nf4"),
     compiles=True,
+    preview_image=True,
     # The original's measured peaks (utils/capabilities.py: 5090, 0.25 MP, batch 1, rank 32; +0.25 GB per extra
     # megapixel; 0.42 GB saved per swapped INT8 block). bf16: measured on the driver, rank 8, 0.25 MP, 26.0 GB.
     train_memory={"int8": (((0.25, 16.2), (2.0, 16.64)), 0.42), "nf4": (((0.25, 11.4), (2.0, 11.84)), 0.0),

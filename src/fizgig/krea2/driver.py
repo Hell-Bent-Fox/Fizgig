@@ -107,6 +107,15 @@ class Krea2Driver(FamilyDriver):
             out.append({"hidden_states": hiddens[0].cpu(), "attention_mask": mask[0].cpu().to(torch.bool)})
         return out
 
+    def encode_text_with_image(self, te, captions, image):
+        """The original's preview reference: the image through Qwen3-VL's vision path at 1 MP, one caption per
+        forward."""
+        out = []
+        for cap in captions:
+            hiddens, mask = te([cap], images=[[image]], vision_megapixels=1.0)
+            out.append({"hidden_states": hiddens[0].cpu(), "attention_mask": mask[0].cpu().to(torch.bool)})
+        return out
+
     # ---- training -------------------------------------------------------------------------------
     @staticmethod
     def _sample_t(num_img_tokens, generator, min_t=0.0, max_t=1.0):

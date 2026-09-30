@@ -134,6 +134,9 @@ class FamilyDescription:
     # the driver can torch.compile its blocks (FamilyDriver.compile_blocks); the Training tab's Compile Blocks
     # control shows and the launch sends --compile_blocks
     compiles: bool = False
+    # previews can take the Samples tab's reference image through the text encoder's vision path ('prompt from a
+    # picture', Krea 2) - conditioning only, not an edit reference (edit_training)
+    preview_image: bool = False
     # measured training memory for the Auto plan: {precision: (peak GB with no block swap, GB saved per swapped
     # block)}; the peak may instead be ((megapixels, GB), ...) points, interpolated for the run's resolution.
     # {} = Auto just takes the first precision

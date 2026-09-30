@@ -158,6 +158,11 @@ class FamilyDriver:
         """Dotted module names (relative to dit) of the Linears a LoRA wraps: every module in the block map."""
         return [m for g in self.block_map(dit) for b in g.blocks for m in b.modules]
 
+    def encode_text_with_image(self, te, captions: list, image) -> list:
+        """Captions conditioned on one PIL image through the text encoder's vision path (descriptions with
+        preview_image=True) -> conditioning dicts, as encode_text."""
+        raise NotImplementedError
+
     def compile_blocks(self, dit, boundary: str = "inside", blocks_to_swap: int = 0) -> None:
         """torch.compile the transformer blocks, in place, after every adapter has patched the forwards. `boundary`
         places the gradient checkpoint inside or outside the compiled region. Only for descriptions with

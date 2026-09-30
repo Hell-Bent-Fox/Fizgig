@@ -378,7 +378,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  speed_lora=None, speed_lora_strength=None,
                  vae_path=None, te_path=None, sample_prompts=None, sample_every_n_epochs=0, sample_width=None,
                  sample_height=None, sample_steps=None, sample_cfg_scale=None, sample_negative=None,
-                 sample_at_first=False, sample_seed=42, sample_reference=None,
+                 sample_at_first=False, sample_seed=42, sample_reference=None, sample_image=None,
                  slider_pairs=False, slider_diff_weight=1.0, slider_prompts=None, slider_guidance=3.0,
                  slider_bank=16, slider_bank_res=768,
                  metadata_title=None, metadata_author=None, metadata_description=None, metadata_license=None,
@@ -539,6 +539,14 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             encoded = driver.encode_text_with_references(te, sample_prompts, [ref_imgs] * len(sample_prompts))
             if sample_cfg_scale > 1.0:
                 neg = driver.encode_text_with_references(te, [sample_negative or ""], [ref_imgs])[0]
+        elif sample_image and desc.preview_image:
+            from PIL import Image
+            logger.info(f"[sample] previews see {os.path.basename(sample_image)} through the text encoder's vision "
+                        f"path")
+            te = driver.load_text_encoder(te_path, device)
+            encoded = driver.encode_text_with_image(te, sample_prompts, Image.open(sample_image))
+            if sample_cfg_scale > 1.0:
+                neg = driver.encode_text(te, [sample_negative or ""])[0]     # negatives stay text-only
         else:
             te = driver.load_text_encoder(te_path, device)
             encoded = driver.encode_text(te, sample_prompts)
@@ -938,6 +946,8 @@ def setup_parser():
     p.add_argument("--sample_at_first", action="store_true")
     p.add_argument("--sample_seed", type=int, default=42)
     p.add_argument("--sample_reference", default=None, help="Edit previews: the photo every preview prompt edits")
+    p.add_argument("--sample_image", default=None,
+                   help="A picture previews see through the text encoder's vision path (families with preview_image)")
     p.add_argument("--slider_pairs", action="store_true",
                    help="Slider from image pairs: each training image is the +1 pole, its control_directory pair "
                         "(same file name) the -1 pole")
@@ -984,6 +994,8 @@ def main():
     if a.sample_prompts and os.path.exists(a.sample_prompts):
         with open(a.sample_prompts, encoding="utf-8") as f:
             prompts = [ln.strip() for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
+    if not prompts and a.sample_image and a.sample_prompts:
+        prompts = [""]          # a reference alone: 'generate from this picture'
     train_family(
         a.family, a.dit, a.dataset_config, a.output_dir, a.output_name, precision=a.precision,
         blocks_to_swap=a.blocks_to_swap, speed_lora_strength=a.speed_lora_strength, network_type=a.network_type, lokr_factor=a.lokr_factor,
@@ -1001,7 +1013,7 @@ def main():
         sample_prompts=prompts, sample_every_n_epochs=a.sample_every_n_epochs, sample_width=a.sample_width,
         sample_height=a.sample_height, sample_steps=a.sample_steps, sample_cfg_scale=a.sample_cfg_scale,
         sample_negative=a.sample_negative, sample_at_first=a.sample_at_first, sample_seed=a.sample_seed,
-        sample_reference=[a.sample_reference] if a.sample_reference else None,
+        sample_reference=[a.sample_reference] if a.sample_reference else None, sample_image=a.sample_image,
         slider_pairs=a.slider_pairs, slider_diff_weight=a.slider_diff_weight, slider_prompts=a.slider_prompts,
         slider_guidance=a.slider_guidance, slider_bank=a.slider_bank, slider_bank_res=a.slider_bank_res,
         metadata_title=a.metadata_title, metadata_author=a.metadata_author,

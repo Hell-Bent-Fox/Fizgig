@@ -427,7 +427,7 @@ def _preview_flags(desc, st, plan, cmd):
             if ln:
                 lines.append(ln)
         plan.dirs.append(samples_dir)            # the sample folder exists either way
-        if lines:
+        if lines or _sample_image(desc, sm):     # a reference alone previews too ('generate from this picture')
             prompts = os.path.join(samples_dir, f"{desc.key}_prompts.txt")
             plan.files.append((prompts, "\n".join(lines) + "\n"))
     every = str(sm.get("every") or "").strip()
@@ -453,6 +453,8 @@ def _preview_flags(desc, st, plan, cmd):
             pass
         if sm.get("at_first"):
             out.append("--sample_at_first")
+        if not edit_on(desc, st) and not slider_on(desc, st) and _sample_image(desc, sm):
+            out += ["--sample_image", _sample_image(desc, sm)]
         if edit_on(desc, st):
             ref = _s(st.get("FAMILY_EDIT_REF"))
             if not ref:
@@ -463,6 +465,12 @@ def _preview_flags(desc, st, plan, cmd):
             if ref:
                 out += ["--sample_reference", ref]
     return out
+
+
+def _sample_image(desc, sm):
+    """The Samples tab's reference image, for families whose previews see one (preview_image), when it exists."""
+    ref = _s(sm.get("reference")) if desc.preview_image else ""
+    return ref if ref and os.path.isfile(ref) else ""
 
 
 # ---------------------------------------------------------------------------------------------------- dataset
