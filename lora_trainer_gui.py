@@ -5722,6 +5722,23 @@ class LoRATrainerGUI:
         self.entries["FAMILY_FT_FUSED"] = tk.BooleanVar(value=bool(self.settings.get("FAMILY_FT_FUSED", True)))
         ttk.Checkbutton(_row(), text="Free each gradient as soon as it's used (less memory - recommended)",
                         variable=self.entries["FAMILY_FT_FUSED"]).pack(side=tk.LEFT)
+        _block("Regularisation images (optional)",
+               "A folder of ordinary photos of the broader class (men, women, people) with normal detailed captions. "
+               "They train at a reduced LR (the multiplier beside the folder) so they hold the model's sense of that "
+               "class in place while your images train - a full fine-tune moves every weight, so nothing else bounds "
+               "that drift. Use real photos, not model output: generated images anchor the model to its own "
+               "artifacts. 0.1-0.3 keeps them a light anchor; at 1.0 they are a second subject set. Leave empty to "
+               "train without one.")
+        _regr = _row()
+        self.entries["FAMILY_FT_REG_DIR"] = ttk.Entry(_regr, width=52)
+        self.entries["FAMILY_FT_REG_DIR"].insert(0, str(self.settings.get("FAMILY_FT_REG_DIR", "") or ""))
+        self.entries["FAMILY_FT_REG_DIR"].pack(side=tk.LEFT)
+        ttk.Button(_regr, text="Browse", command=self._browse_family_ft_reg_dir).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(_regr, text="LR ×").pack(side=tk.LEFT, padx=(14, 2))
+        self.entries["FAMILY_FT_REG_MULT"] = ttk.Combobox(
+            _regr, values=["0.05", "0.1", "0.2", "0.3", "0.5", "0.75", "1.0"], state="normal", width=5)
+        self.entries["FAMILY_FT_REG_MULT"].set(str(self.settings.get("FAMILY_FT_REG_MULT", "0.2") or "0.2"))
+        self.entries["FAMILY_FT_REG_MULT"].pack(side=tk.LEFT)
         self._family_ft_plan = ttk.Label(_f, text="", foreground=COLORS["text_secondary"], font=HINT_FONT,
                                          justify=tk.LEFT, wraplength=690)
         self._family_ft_plan.grid(row=_r[0], column=0, sticky=tk.W, pady=(6, 2))
@@ -7651,7 +7668,8 @@ class LoRATrainerGUI:
                                     "FAMILY_SLIDER_DIR", "FAMILY_SLIDER_CAPTION", "FAMILY_SLIDER_BASE",
                                     "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG", "FAMILY_SLIDER_GUIDANCE",
                                     "FAMILY_FT", "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY",
-                                    "FAMILY_FT_ROTATE_EVERY", "FAMILY_FT_FUSED"})
+                                    "FAMILY_FT_ROTATE_EVERY", "FAMILY_FT_FUSED", "FAMILY_FT_REG_DIR",
+                                    "FAMILY_FT_REG_MULT"})
     from fizgig.families.launch import PRECISION_LABELS as _FAMILY_PRECISION_LABELS
 
     def _family_edit_on(self, desc=None):
@@ -7819,6 +7837,13 @@ class LoRATrainerGUI:
             self.entries["FAMILY_EDIT_DIR"].delete(0, tk.END)
             self.entries["FAMILY_EDIT_DIR"].insert(0, path)
 
+    def _browse_family_ft_reg_dir(self):
+        path = filedialog.askdirectory(title="Folder of regularisation photos (fine-tune)",
+                                       initialdir=self.entries["FAMILY_FT_REG_DIR"].get().strip() or None)
+        if path:
+            self.entries["FAMILY_FT_REG_DIR"].delete(0, tk.END)
+            self.entries["FAMILY_FT_REG_DIR"].insert(0, path)
+
     def _browse_family_edit_ref(self):
         path = filedialog.askopenfilename(title="Photo the previews edit",
                                           filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp"), ("All", "*.*")])
@@ -7864,7 +7889,8 @@ class LoRATrainerGUI:
         d.update(FAMILY_EDIT=self._family_edit_on(desc), FAMILY_SLIDER=self._family_slider_on(desc),
                  FAMILY_FT=self._family_ft_on(desc), FAMILY_FT_FUSED=bool(self.entries["FAMILY_FT_FUSED"].get()),
                  **{k: str(self.entries[k].get()).strip() for k in (
-                     "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY", "FAMILY_FT_ROTATE_EVERY")},
+                     "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY", "FAMILY_FT_ROTATE_EVERY", "FAMILY_FT_REG_DIR",
+                     "FAMILY_FT_REG_MULT")},
 
                  FAMILY_TRAINING_ADAPTER=bool(self.entries["FAMILY_TRAINING_ADAPTER"].get()),
                  **{k: str(self.entries[k].get()).strip() for k in (
@@ -32459,6 +32485,14 @@ class LoRATrainerGUI:
                         if _cd:
                             toml_lines.append(
                                 f'cache_directory = "{_cd.replace(chr(92), "/")}"')
+                    _reg = (self.entries["FAMILY_FT_REG_DIR"].get().strip().replace(chr(92), "/")
+                            if self._family_ft_on() else "")
+                    if _reg and os.path.isdir(_reg):     # a fine-tune's regularisation set (as the launch plan writes)
+                        toml_lines += ["", "[[datasets]]", f'image_directory = "{_reg}"']
+                        if _root:
+                            toml_lines.append(
+                                f'cache_directory = "{self._cache_dir_for(_root, _reg).replace(chr(92), "/")}"')
+                        toml_lines.append("is_reg = true")
                     cache_dir = ""                   # emitted per block above
 
             if cache_dir:
@@ -33329,7 +33363,8 @@ class LoRATrainerGUI:
                 **{k: self.entries[k].get().strip() for k in (
                     "FAMILY_SLIDER_SOURCE", "FAMILY_SLIDER_DIR", "FAMILY_SLIDER_CAPTION", "FAMILY_SLIDER_BASE",
                     "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG", "FAMILY_SLIDER_GUIDANCE",
-                    "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY", "FAMILY_FT_ROTATE_EVERY")}}
+                    "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY", "FAMILY_FT_ROTATE_EVERY", "FAMILY_FT_REG_DIR",
+                    "FAMILY_FT_REG_MULT")}}
                if self._family_desc() is not None else {}),
             # experiment/tread: both ticks must be copied here or the builder reads a stale value
             "MINIMAX_TREAD": bool(self.entries["MINIMAX_TREAD"].get()),

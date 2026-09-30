@@ -521,7 +521,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  trigger_word=None, trigger_position="start", recaption_instruction=None,
                  recaption_instruction_detailed=None, captioner=None,
                  finetune=False, ft_rotations=10, ft_save_every_rotations=1, ft_rotate_every=1, ft_start_window=0,
-                 ft_epochs_done=0, ft_fused_backward=False):
+                 ft_epochs_done=0, ft_fused_backward=False, reg_lr_multiplier=0.2):
     desc = get_family(family)
     if desc is None or not desc.training_ready:
         raise RuntimeError(f"unknown or untrainable family {family!r}")
@@ -645,6 +645,24 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     steps_per_epoch = len(loader)
     logger.info(f"{desc.display_name} training: {group.num_train_items} items, {max_train_epochs} epochs, "
                 f"{steps_per_epoch} steps/epoch")
+    # A fine-tune's regularisation set: a dataset block marked is_reg, trained at a fixed reduced LR so it tethers
+    # the model's prior rather than teaching a subject (a full fine-tune has no rank bound on its drift). A LoRA's
+    # update is rank-bounded, so there the block is trained as ordinary images, with a warning.
+    reg_keys = set()
+    reg_ds = [ds for ds in getattr(group, "datasets", []) if getattr(ds, "is_reg", False)]
+    if reg_ds and finetune:
+        for ds in reg_ds:
+            for bucket in ds.batch_manager.buckets.values():
+                reg_keys.update(str(it.item_key) for it in bucket)
+        logger.info(f"[reg] {len(reg_keys)} regularisation image(s) at x{reg_lr_multiplier:g} LR "
+                    f"({group.num_train_items - len(reg_keys)} subject items)")
+        if len(reg_keys) >= group.num_train_items - len(reg_keys):
+            logger.warning("[reg] regularisation images are at least half the training set - the multiplier only "
+                           "reads as an LR cut while they are the minority (Adafactor normalises by a second moment "
+                           "the majority dominates)")
+    elif reg_ds:
+        logger.warning("[reg] the dataset config has a regularisation block, but this is a LoRA run - those images "
+                       "train as ordinary images at full LR; remove the is_reg block if that is not what you want")
 
     # ---- Auto precision / swap: planned on an empty card (the description's figures include the preview VAE)
     if precision == "auto" or blocks_to_swap < 0:
@@ -1027,7 +1045,10 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                                                    **({"refs": refs} if refs else {}))
                 if pending == 0 and optimizer is not None:
                     optimizer.zero_grad(set_to_none=True)
-                mult = watch.multiplier(batch)     # per-image LR (batch size 1): the raw loss is still what's recorded
+                if reg_keys and all(str(k) in reg_keys for k in batch.get("item_keys") or [None]):
+                    mult = reg_lr_multiplier       # a regularisation image: a fixed nudge, never the watch's
+                else:
+                    mult = watch.multiplier(batch)  # per-image LR (batch size 1): the raw loss is still what's recorded
                 _scaled = loss * mult if mult != 1.0 else loss
                 (_scaled / accum if accum > 1 else _scaled).backward()
             pending += 1
@@ -1205,6 +1226,8 @@ def setup_parser():
     p.add_argument("--ft_epochs_done", type=int, default=0, help="continuing: epochs already trained (numbering)")
     p.add_argument("--ft_fused_backward", action="store_true",
                    help="step each weight as its gradient lands and free it (less VRAM; no clipping or accumulation)")
+    p.add_argument("--reg_lr_multiplier", type=float, default=0.2,
+                   help="fine-tune: LR multiplier for images in a dataset block marked is_reg = true")
     p.add_argument("--compile_blocks", default="auto", choices=("auto", "on", "outside", "off"),
                    help="torch.compile the DiT blocks (families with compiles=True); auto weighs warm-up vs run length")
     p.add_argument("--ema_decay", type=float, default=0.0)
@@ -1264,7 +1287,7 @@ def main():
         gradient_accumulation_steps=a.gradient_accumulation_steps, compile_blocks=a.compile_blocks,
         finetune=a.finetune, ft_rotations=a.ft_rotations, ft_save_every_rotations=a.ft_save_every_rotations,
         ft_rotate_every=a.ft_rotate_every, ft_start_window=a.ft_start_window, ft_epochs_done=a.ft_epochs_done,
-        ft_fused_backward=a.ft_fused_backward)
+        ft_fused_backward=a.ft_fused_backward, reg_lr_multiplier=a.reg_lr_multiplier)
 
 
 if __name__ == "__main__":
