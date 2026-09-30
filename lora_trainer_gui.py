@@ -5626,7 +5626,8 @@ class LoRATrainerGUI:
         _block("Where the two ends come from",
                "Photo pairs: two folders of the same shots, one folder for each end of the dial (e.g. the same "
                "person smiling, and not smiling). 4 to 10 pairs, each pair framed the same.\n"
-               "Prompts: no photos - you describe the picture and what each end adds.")
+               "Prompts: no photos - you describe the picture and what each end adds. The practice pictures it "
+               "makes are the size Target Megapixels sets (0.5 = 704 x 704).")
         self.entries["FAMILY_SLIDER_SOURCE"] = tk.StringVar(value=str(self.settings.get("FAMILY_SLIDER_SOURCE",
                                                                                         "pairs") or "pairs"))
         self.entries["FAMILY_SLIDER_SOURCE"].trace_add("write", lambda *_: self._family_edit_rows())  # loaded settings
