@@ -14264,20 +14264,24 @@ class LoRATrainerGUI:
                        f"standard one") if speed_on else
                       f"{desc.display_name}: {desc.preview_steps} steps at CFG {desc.preview_cfg:g}"
                       + (f" - set the {sp.name} in Preferences for {sp_steps}-step previews" if sp else "")))
-        # the reference row: live where the family's previews see a picture (Krea 2's vision path)
+        # the reference row: live where the family's previews take a picture (Krea 2's vision path, Qwen's edits)
+        _kind = desc.reference_kind
         if hasattr(self, "sample_ref_entry"):
-            self.sample_ref_entry.configure(state=("readonly" if desc.preview_image else tk.DISABLED))
+            self.sample_ref_entry.configure(state=("readonly" if _kind else tk.DISABLED))
         for attr in ("sample_ref_browse_btn", "sample_ref_clear_btn"):
             w = getattr(self, attr, None)
             if w is not None:
-                w.configure(state=(tk.NORMAL if desc.preview_image else tk.DISABLED))
+                w.configure(state=(tk.NORMAL if _kind else tk.DISABLED))
         if hasattr(self, "sample_ref_label"):
-            self.sample_ref_label.configure(foreground=(COLORS["text_secondary"] if desc.preview_image else muted))
+            self.sample_ref_label.configure(foreground=(COLORS["text_secondary"] if _kind else muted))
         if hasattr(self, "sample_ref_note"):
             self.sample_ref_note.configure(text=(
                 f"Optional - fed through {desc.display_name}'s text encoder vision path so samples become visually "
                 f"aware of it ('prompt from a picture', not a pixel edit). Leave empty for normal samples."
-                if desc.preview_image else f"Not used for {desc.display_name} previews."))
+                if _kind == "vision" else
+                f"Optional - every sample edits this photo with its prompt, at the photo's shape. Leave empty for "
+                f"normal samples. An Edit LoRA run previews on the photo set on its own card instead."
+                if _kind == "edit" else f"Not used for {desc.display_name} previews."))
         if hasattr(self, "cache_sample_model_combo"):
             self.cache_sample_model_combo.configure(state=tk.DISABLED)
         if hasattr(self, "cache_sample_model_label"):
@@ -17618,7 +17622,7 @@ class LoRATrainerGUI:
         ttk.Radiobutton(_xf, text="MiniMax H3", variable=self.explorer_family_var, value="minimax",
                         command=self._on_explorer_family_changed).pack(side=tk.LEFT)
         for _d in self._workbench_families("explorer"):
-            _rb = ttk.Radiobutton(_xf, text=_d.display_name, variable=self.explorer_family_var, value=_d.key,
+            _rb = ttk.Radiobutton(_xf, text=_d.workbench_label, variable=self.explorer_family_var, value=_d.key,
                                   command=self._on_explorer_family_changed)
             _rb._fizgig_described_family = _d.key
             _rb.pack(side=tk.LEFT, padx=(20, 0))
@@ -17684,8 +17688,10 @@ class LoRATrainerGUI:
         ttk.Button(ref_frame, text="Clear", command=self._clear_explorer_ref).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Label(ref_frame, text="MP:").pack(side=tk.LEFT, padx=(0, 2))
         self.explorer_ref_mp_var = tk.StringVar(value="1.0")
-        ttk.Combobox(ref_frame, textvariable=self.explorer_ref_mp_var,
-                     values=["0.25", "0.5", "1.0", "2.0"], state="readonly", width=5).pack(side=tk.LEFT, padx=(0, 10))
+        self._explorer_ref_mp_combo = ttk.Combobox(ref_frame, textvariable=self.explorer_ref_mp_var,
+                                                   values=["0.25", "0.5", "1.0", "2.0"], state="readonly", width=5)
+        self._explorer_ref_mp_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self._explorer_ref_frame = ref_frame
         self._explorer_ref_strength_label = ttk.Label(ref_frame, text="Strength:")
         self._explorer_ref_strength_label.pack(side=tk.LEFT, padx=(0, 2))
         self.explorer_ref_strength_var = tk.StringVar(value="1.0")
@@ -18017,6 +18023,19 @@ class LoRATrainerGUI:
             for w in (strength_lbl, strength_entry):
                 if w is not None:
                     w.pack(side=tk.LEFT, padx=(0, 2) if w is strength_lbl else 0)
+        # a described family: the reference row only where the family takes one; an edit reference is fitted to
+        # the preview size, so the MP cap has nothing to set
+        desc = self._explorer_desc()
+        frame = getattr(self, "_explorer_ref_frame", None)
+        if frame is not None:
+            if desc is not None and not desc.reference_kind:
+                frame.grid_remove()
+                self.explorer_ref_path_var.set("")
+            else:
+                frame.grid()
+        mp = getattr(self, "_explorer_ref_mp_combo", None)
+        if mp is not None:
+            mp.configure(state=tk.DISABLED if desc is not None and desc.reference_kind == "edit" else "readonly")
 
     def _explorer_ensure_engine(self):
         """Lazy-load engine + pipeline for the Explorer. Returns True on success."""
@@ -18960,7 +18979,7 @@ class LoRATrainerGUI:
         ttk.Radiobutton(_ef, text="MiniMax H3", variable=self.extract_family_var, value="minimax",
                         command=self._on_extract_family_changed).pack(side=tk.LEFT)
         for _d in self._workbench_families("extract"):
-            _rb = ttk.Radiobutton(_ef, text=_d.display_name, variable=self.extract_family_var, value=_d.key,
+            _rb = ttk.Radiobutton(_ef, text=_d.workbench_label, variable=self.extract_family_var, value=_d.key,
                                   command=self._on_extract_family_changed)
             _rb._fizgig_described_family = _d.key
             _rb.pack(side=tk.LEFT, padx=(20, 0))
@@ -21308,7 +21327,7 @@ class LoRATrainerGUI:
         ttk.Radiobutton(_pf, text="MiniMax H3", variable=self.profiler_family_var, value="minimax",
                         command=self._on_profiler_family_changed).pack(side=tk.LEFT)
         for _d in self._workbench_families("profiler"):
-            _rb = ttk.Radiobutton(_pf, text=_d.display_name, variable=self.profiler_family_var, value=_d.key,
+            _rb = ttk.Radiobutton(_pf, text=_d.workbench_label, variable=self.profiler_family_var, value=_d.key,
                                   command=self._on_profiler_family_changed)
             _rb._fizgig_described_family = _d.key
             _rb.pack(side=tk.LEFT, padx=(20, 0))
@@ -22077,7 +22096,7 @@ class LoRATrainerGUI:
             try:
                 if _w is None:
                     continue
-                if krea2:
+                if krea2 or desc is not None:
                     _w.pack_forget()
                 elif _w.winfo_manager() == "":
                     _w.pack(side=tk.LEFT, **({"padx": (0, 2)} if _w is self._repair_ref_strength_label else {}))
@@ -22085,20 +22104,26 @@ class LoRATrainerGUI:
                 pass
         # H3's engine has no reference path at all (r2v conditioning is out of the workbench's
         # scope) — a visible row the engine ignores is a lie, and editing it forced a re-render
-        # that changed nothing. The WHOLE row hides under MiniMax; Klein and Krea 2 keep it.
+        # that changed nothing. The WHOLE row hides under MiniMax and under a described family that
+        # takes no reference; Klein, Krea 2 and the families with a reference_kind keep it.
+        _no_ref = fam == "minimax" or (desc is not None and not desc.reference_kind)
         for _w in (getattr(self, "_repair_ref_label", None),
                    getattr(self, "_repair_ref_entry", None),
                    getattr(self, "_repair_ref_params", None)):
             try:
                 if _w is None:
                     continue
-                if fam == "minimax" or desc is not None:
+                if _no_ref:
                     _w.grid_remove()
                 else:
                     _w.grid()
             except Exception:
                 pass
-        if (fam == "minimax" or desc is not None) and self.repair_ref_path_var.get().strip():
+        # an edit reference is fitted to the preview size: the MP cap has nothing to set
+        if getattr(self, "_repair_ref_mp_combo", None) is not None:
+            self._repair_ref_mp_combo.configure(
+                state=tk.DISABLED if desc is not None and desc.reference_kind == "edit" else "readonly")
+        if _no_ref and self.repair_ref_path_var.get().strip():
             # A path carried over from a Klein session must not sit invisibly in the state.
             self.repair_ref_path_var.set("")
             self.repair_state.ref_image_path = ""
@@ -22505,7 +22530,7 @@ class LoRATrainerGUI:
         ttk.Radiobutton(fam_frame, text="MiniMax H3", variable=self.repair_family_var, value="minimax",
                         style="Surface.TRadiobutton", command=self._on_repair_family_changed).pack(side=tk.LEFT)
         for _d in self._workbench_families("repair"):
-            _rb = ttk.Radiobutton(fam_frame, text=_d.display_name, variable=self.repair_family_var, value=_d.key,
+            _rb = ttk.Radiobutton(fam_frame, text=_d.workbench_label, variable=self.repair_family_var, value=_d.key,
                                   style="Surface.TRadiobutton", command=self._on_repair_family_changed)
             _rb._fizgig_described_family = _d.key
             _rb.pack(side=tk.LEFT, padx=(12, 0))
@@ -22782,6 +22807,7 @@ class LoRATrainerGUI:
         mp_combo = ttk.Combobox(ref_params, textvariable=self.repair_ref_mp_var,
                                 values=["0.25", "0.5", "1.0", "2.0"], state="readonly", width=5)
         mp_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self._repair_ref_mp_combo = mp_combo
         mp_combo.bind("<<ComboboxSelected>>", lambda e: self._on_repair_ref_changed())
         self._repair_ref_strength_label = ttk.Label(ref_params, text="Strength:")
         self._repair_ref_strength_label.pack(side=tk.LEFT, padx=(0, 2))
@@ -23886,7 +23912,7 @@ class LoRATrainerGUI:
         ttk.Radiobutton(_rf, text="MiniMax H3", variable=self.royale_family_var, value="minimax",
                         command=self._on_royale_family_changed).pack(side=tk.LEFT)
         for _d in self._workbench_families("royale"):
-            _rb = ttk.Radiobutton(_rf, text=_d.display_name, variable=self.royale_family_var, value=_d.key,
+            _rb = ttk.Radiobutton(_rf, text=_d.workbench_label, variable=self.royale_family_var, value=_d.key,
                                   command=self._on_royale_family_changed)
             _rb._fizgig_described_family = _d.key
             _rb.pack(side=tk.LEFT, padx=(20, 0))
@@ -24167,6 +24193,7 @@ class LoRATrainerGUI:
         self._royale_travel_maxmp_lbl.pack(side=tk.LEFT, padx=(16, 3))
         self.royale_travel_ref_mp_var = tk.StringVar(value=self.last_used.get("royale_travel_ref_mp", "0.2"))
         _trmp = ttk.Entry(_tru, textvariable=self.royale_travel_ref_mp_var, width=5)
+        self._royale_travel_mp_entry = _trmp
         _trmp.pack(side=tk.LEFT)
         ToolTip(_trmp, "Reference encode resolution cap (megapixels), 0.05–1.0.\n"
                        "Higher carries more detail (useful for sequential reference) at a little more VRAM.")
@@ -24377,6 +24404,7 @@ class LoRATrainerGUI:
         self._royale_pt_maxmp_lbl.pack(side=tk.LEFT, padx=(16, 3))
         self.royale_pt_ref_mp_var = tk.StringVar(value=self.last_used.get("royale_pt_ref_mp", "0.2"))
         _ptmp = ttk.Entry(_ptu, textvariable=self.royale_pt_ref_mp_var, width=5)
+        self._royale_pt_mp_entry = _ptmp
         _ptmp.pack(side=tk.LEFT)
         ToolTip(_ptmp, "Reference encode resolution cap (megapixels), 0.05–1.0.\n"
                        "Higher carries more detail (useful for sequential reference) at a little more VRAM.")
@@ -25083,7 +25111,7 @@ class LoRATrainerGUI:
         self._apply_royale_family_ui(fam != "klein")
         _names = {"krea2": "Krea 2 (Turbo previews)",
                   "minimax": "MiniMax H3 (22-frame clip previews)",
-                  **{d.key: d.display_name for d in self._workbench_families("royale")}}
+                  **{d.key: d.workbench_label for d in self._workbench_families("royale")}}
         self.royale_status_var.set(
             f"Switched to {_names.get(fam, 'Klein 9B (Distilled previews)')}. "
             f"Pick a source and render.")
@@ -25123,7 +25151,12 @@ class LoRATrainerGUI:
                 w.pack(**kw)
         _rows = getattr(self, "_royale_ref_rows", None)
         if _rows is not None:
-            no_ref = self._royale_desc() is not None
+            _rd = self._royale_desc()
+            no_ref = _rd is not None and not _rd.reference_kind
+            for _mp in (getattr(self, "_royale_travel_mp_entry", None), getattr(self, "_royale_pt_mp_entry", None)):
+                if _mp is not None:     # an edit reference is fitted to the frame size: no MP cap to set
+                    _mp.configure(state=tk.DISABLED if _rd is not None and _rd.reference_kind == "edit"
+                                  else tk.NORMAL)
             for w in _rows["grid"]:
                 if no_ref:
                     w.grid_remove()

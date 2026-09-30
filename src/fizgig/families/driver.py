@@ -158,9 +158,9 @@ class FamilyDriver:
         """Dotted module names (relative to dit) of the Linears a LoRA wraps: every module in the block map."""
         return [m for g in self.block_map(dit) for b in g.blocks for m in b.modules]
 
-    def encode_text_with_image(self, te, captions: list, image) -> list:
+    def encode_text_with_image(self, te, captions: list, image, megapixels: float = 1.0) -> list:
         """Captions conditioned on one PIL image through the text encoder's vision path (descriptions with
-        preview_image=True) -> conditioning dicts, as encode_text."""
+        preview_image=True) at about `megapixels` -> conditioning dicts, as encode_text."""
         raise NotImplementedError
 
     # ---- full fine-tune (optional: families/ft.py) ------------------------------------------------------------------

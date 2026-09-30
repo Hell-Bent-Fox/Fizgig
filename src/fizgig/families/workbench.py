@@ -263,20 +263,75 @@ class WorkbenchEngine:
                 gc.collect()
                 torch.cuda.empty_cache()
 
-    def encode(self, prompts):
+    @property
+    def reference_kind(self):
+        """How a reference picture reaches this family's previews: "vision", "edit" or "" (the description's)."""
+        return self.desc.reference_kind
+
+    @staticmethod
+    def _state_reference(state):
+        """(path, megapixels) of the state's reference picture, or ("", 1.0) when it has none on disk."""
+        path = (getattr(state, "ref_image_path", "") or "").strip()
+        try:
+            mp = float(getattr(state, "ref_megapixels", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            mp = 1.0
+        return (path, mp) if path and os.path.isfile(path) else ("", 1.0)
+
+    @staticmethod
+    def _fit_reference(path, width, height):
+        """An edit reference as uint8 (H, W, 3), cropped and scaled to the preview's size."""
+        import numpy as np
+        from PIL import Image, ImageOps
+        with Image.open(path) as im:
+            return np.array(ImageOps.fit(im.convert("RGB"), (int(width), int(height)), Image.LANCZOS))
+
+    def _reference_latents(self, path, width, height):
+        """The edit reference's latents (CPU, batch dim), cached per picture and size."""
+        key = ("__ref_latents__", path, int(width), int(height))
+        if key not in self._prompt_cache:
+            if self.lowmem:
+                self._park_dit("cpu")
+                self.vae.to(self.device)
+            try:
+                z = self.driver.encode_images(self.vae, [self._fit_reference(path, width, height)])[0]
+            finally:
+                if self.lowmem:
+                    self.vae.to("cpu")
+                    self._park_dit(self.device)
+            self._prompt_cache[key] = z[None].cpu()
+        return self._prompt_cache[key]
+
+    def encode(self, prompts, ref="", ref_mp=1.0, size=(768, 768)):
         """Conditioning for each prompt (CPU), through the family's text encoder, loaded for the call and freed.
-        The DiT parks on CPU while the encoder runs when both would not fit."""
-        need = [p for p in prompts if (p,) not in self._prompt_cache]
+        With a reference picture (`ref`), the prompt sees it the family's way (reference_kind): through the
+        encoder's vision path at `ref_mp`, or as an edit of the picture at the preview `size`. The DiT parks on CPU
+        while the encoder runs when both would not fit."""
+        kind = self.reference_kind if ref else ""
+        tag = ((ref, round(float(ref_mp), 4)) if kind == "vision" else
+               (ref, int(size[0]), int(size[1])) if kind == "edit" else ())
+        need = [p for p in prompts if (p,) + tag not in self._prompt_cache]
         if need:
             te_gb = os.path.getsize(self.te_path) / 1024 ** 3 if os.path.exists(self.te_path) else 0.0
             park = self.lowmem or _free_vram_gb() < te_gb + 2.0
             if park:
                 self._park_dit("cpu")
             try:
-                te = self.driver.load_text_encoder(self.te_path, self.device)
+                te = (self.driver.load_reference_text_encoder(self.te_path, self.device) if kind == "edit"
+                      else self.driver.load_text_encoder(self.te_path, self.device))
                 try:
-                    for p, c in zip(need, self.driver.encode_text(te, list(need))):
-                        self._prompt_cache[(p,)] = c
+                    if kind == "vision":
+                        from PIL import Image
+                        with Image.open(ref) as im:
+                            conds = self.driver.encode_text_with_image(te, list(need), im.convert("RGB"),
+                                                                       megapixels=ref_mp)
+                    elif kind == "edit":
+                        pic = self._fit_reference(ref, *size)
+                        conds = self.driver.encode_text_with_references(te, list(need), [[pic]] * len(need))
+                    else:
+                        conds = self.driver.encode_text(te, list(need))
+                    for p, c in zip(need, conds):
+                        self._prompt_cache[(p,) + tag] = c
                 finally:
                     self.driver.unload_text_encoder(te)
                     del te
@@ -285,7 +340,7 @@ class WorkbenchEngine:
             finally:
                 if park:
                     self._park_dit(self.device)
-        return [self._prompt_cache[(p,)] for p in prompts]
+        return [self._prompt_cache[(p,) + tag] for p in prompts]
 
     def _cond_to_device(self, cond):
         return {k: (v.to(self.device) if torch.is_tensor(v) else v) for k, v in cond.items()}
@@ -299,8 +354,8 @@ class WorkbenchEngine:
         return s.steps, s.cfg, s.sigmas, s.options
 
     @torch.no_grad()
-    def render(self, cond, width, height, seed, *, steps=None, noise=None):
-        """One image from conditioning with the adapters as currently set."""
+    def render(self, cond, width, height, seed, *, steps=None, noise=None, refs=None):
+        """One image from conditioning with the adapters as currently set (refs: an edit's reference latents)."""
         d_steps, cfg, sigmas, options = self.sampling()
         steps = int(steps or d_steps)
 
@@ -315,7 +370,8 @@ class WorkbenchEngine:
                 raise RenderCancelled()
 
         lat = self.driver.generate(self.dit, self._cond_to_device(cond), width, height, steps=steps, seed=int(seed),
-                                   cfg=cfg, sigmas=sigmas, options=options, noise=noise, on_step=_step)
+                                   cfg=cfg, sigmas=sigmas, options=options, noise=noise, on_step=_step,
+                                   **({"refs": [r.to(self.device) for r in refs]} if refs else {}))
         if self.lowmem:
             self._park_dit("cpu")
             self.vae.to(self.device)
@@ -331,28 +387,38 @@ class WorkbenchEngine:
                          prev_latent=None, prev_latent_strength=1.0):
         """The tabs' render call (signature shared with the old engines; the Klein-only reference-latent and
         negative arguments are accepted and ignored). seed_b / travel_t: seed travel by noise slerp.
-        override_ctx: precomputed conditioning (prompt travel)."""
+        override_ctx: precomputed conditioning (prompt travel, text only as in the original Krea 2 engine).
+        The state's reference picture (ref_image_path, ref_megapixels) reaches the prompt the family's way."""
         self.apply_state(state)
         seed = state.seed if seed is None else seed
         width = int(width or state.preview_width)
         height = int(height or state.preview_height)
-        cond = override_ctx if override_ctx is not None else self.encode([prompt if prompt is not None
-                                                                          else state.prompt])[0]
+        ref, ref_mp = self._state_reference(state) if self.reference_kind else ("", 1.0)
+        refs = None
+        if override_ctx is not None:
+            cond = override_ctx
+        else:
+            cond = self.encode([prompt if prompt is not None else state.prompt], ref=ref, ref_mp=ref_mp,
+                               size=(width, height))[0]
+            if ref and self.reference_kind == "edit":
+                refs = [self._reference_latents(ref, width, height)]
         noise = None
         if seed_b is not None:
             noise = _slerp(float(travel_t or 0.0), self.driver.initial_noise(seed, width, height),
                            self.driver.initial_noise(seed_b, width, height))
-        return self.render(cond, width, height, seed, steps=steps, noise=noise)
+        return self.render(cond, width, height, seed, steps=steps, noise=noise, refs=refs)
 
     def generate_baseline(self, state):
         """The primary with every slider at 1.0 (at its load strength), donor off. Cached until the prompt, seed,
         size or load strength changes."""
         key = (self.primary_path, state.seed, state.prompt, state.preview_width, state.preview_height,
-               round(float(getattr(state, "primary_scale", 1.0)), 4))
+               round(float(getattr(state, "primary_scale", 1.0)), 4), self._state_reference(state))
         if self._baseline_key == key and self._baseline_img is not None:
             return self._baseline_img
         base = self.default_state(state.preview_width, state.preview_height)
         base.seed, base.prompt = state.seed, state.prompt
+        base.ref_image_path = getattr(state, "ref_image_path", "")
+        base.ref_megapixels = getattr(state, "ref_megapixels", 1.0)
         base.primary_scale = float(getattr(state, "primary_scale", 1.0))
         img = self.generate_preview(base)
         self._baseline_key, self._baseline_img = key, img

@@ -503,7 +503,9 @@ def _preview_flags(desc, st, plan, cmd):
         if sm.get("at_first"):
             out.append("--sample_at_first")
         if not edit_on(desc, st) and not slider_on(desc, st) and _sample_image(desc, sm):
-            out += ["--sample_image", _sample_image(desc, sm)]
+            # the Samples tab's picture: seen through the vision path, or edited by every preview prompt
+            out += ["--sample_image" if desc.reference_kind == "vision" else "--sample_reference",
+                    _sample_image(desc, sm)]
         if edit_on(desc, st):
             ref = _s(st.get("FAMILY_EDIT_REF"))
             if not ref:
@@ -517,8 +519,8 @@ def _preview_flags(desc, st, plan, cmd):
 
 
 def _sample_image(desc, sm):
-    """The Samples tab's reference image, for families whose previews see one (preview_image), when it exists."""
-    ref = _s(sm.get("reference")) if desc.preview_image else ""
+    """The Samples tab's reference image, for families whose previews take one (reference_kind), when it exists."""
+    ref = _s(sm.get("reference")) if desc.reference_kind else ""
     return ref if ref and os.path.isfile(ref) else ""
 
 

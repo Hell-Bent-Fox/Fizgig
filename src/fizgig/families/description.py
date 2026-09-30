@@ -191,6 +191,18 @@ class FamilyDescription:
     def training_ready(self) -> bool:
         return bool(self.driver)
 
+    @property
+    def reference_kind(self) -> str:
+        """How a reference picture reaches previews and the workbench: "vision" (the text encoder sees it,
+        preview_image), "edit" (the prompt edits it, edit_training) or "" (none)."""
+        return "vision" if self.preview_image else ("edit" if self.edit_training else "")
+
+    @property
+    def workbench_label(self) -> str:
+        """The family's name in the workbench tools' selectors: the Training tab's label when the family shares its
+        files with another (Krea 2 (driver) beside Krea 2), else its plain name."""
+        return self.gui_label if self.shares_prefs_with else self.display_name
+
     def load_driver(self):
         """Instantiate the family's FamilyDriver (imported lazily: the description stays importable without torch)."""
         import importlib
