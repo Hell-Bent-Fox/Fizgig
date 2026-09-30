@@ -14076,6 +14076,28 @@ class LoRATrainerGUI:
         speed_on = bool(sp and sp.pref_key and self._krea2_pref(sp.pref_key)
                         and os.path.exists(self._krea2_pref(sp.pref_key)))
         sp_steps, sp_strength = desc.preview_speed_defaults() or (None, None)
+        # The Turbo strength box is one widget: each family keeps its own value (last_used["turbo_strengths"]) -
+        # switching stores the box for the family left and shows the one entered, or its default (Qwen's 0 must not
+        # become Krea 2's).
+        if "FAMILY_TURBO_STRENGTH" in self.entries:
+            _e = self.entries["FAMILY_TURBO_STRENGTH"]
+            _map = self.last_used.setdefault("turbo_strengths", {})
+            _prev = getattr(self, "_turbo_strength_family", None)
+            if _prev != desc.key:
+                if _prev:
+                    _map[_prev] = _e.get().strip()
+                _e.delete(0, tk.END)
+                _e.insert(0, _map.get(desc.key) or (f"{sp_strength:g}" if sp_strength is not None else ""))
+                self._turbo_strength_family = desc.key
+                if not getattr(self, "_turbo_strength_bound", False):
+                    def _keep(_ev=None):
+                        _f = getattr(self, "_turbo_strength_family", None)
+                        if _f:
+                            self.last_used.setdefault("turbo_strengths", {})[_f] = _e.get().strip()
+                            self._save_last_used_paths()
+                    _e.bind("<FocusOut>", _keep, add="+")
+                    _e.bind("<KeyRelease>", _keep, add="+")
+                    self._turbo_strength_bound = True
         want = sp_steps if speed_on else desc.preview_steps
         other = desc.preview_steps if speed_on else sp_steps
         # A family's retired turbo defaults (desc.retired_preview_defaults) are replaced too, so settings saved by an
