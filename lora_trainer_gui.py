@@ -7855,15 +7855,21 @@ class LoRATrainerGUI:
         family's own card values as the widgets hold them now, and what the other tabs contribute."""
         d = dict(self.settings)
         # the family card as Start stores it (start_training): the switches only where the family offers them
+        _fr = self._ft_resume_active() if self._family_ft_on(desc) else None
         d.update(FAMILY_EDIT=self._family_edit_on(desc), FAMILY_SLIDER=self._family_slider_on(desc),
                  FAMILY_FT=self._family_ft_on(desc), FAMILY_FT_FUSED=bool(self.entries["FAMILY_FT_FUSED"].get()),
                  **{k: str(self.entries[k].get()).strip() for k in (
                      "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY", "FAMILY_FT_ROTATE_EVERY")},
+
                  FAMILY_TRAINING_ADAPTER=bool(self.entries["FAMILY_TRAINING_ADAPTER"].get()),
                  **{k: str(self.entries[k].get()).strip() for k in (
                      "FAMILY_EDIT_DIR", "FAMILY_EDIT_REF", "FAMILY_SLIDER_SOURCE", "FAMILY_SLIDER_DIR",
                      "FAMILY_SLIDER_CAPTION", "FAMILY_SLIDER_BASE", "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG",
                      "FAMILY_SLIDER_GUIDANCE")})
+        if _fr:                             # a paused fine-tune continues from its checkpoint, for what is left
+            d.update(FAMILY_FT_CONTINUE={"checkpoint": _fr["checkpoint"], "start_window": _fr["next_window"],
+                                         "epochs_done": _fr["epochs_done"]},
+                     FAMILY_FT_ROTATIONS=str(_fr.get("rotations_left", 1)))
         keys = {f.pref_key for f in desc.model_files}
         sp = desc.preview_speed()
         if sp and sp.pref_key:
@@ -33593,6 +33599,8 @@ class LoRATrainerGUI:
         # and the Tk checkbox can be flipped mid-run, so the truth is recorded at launch.
         self._launched_ft_family = None
         if (_desc := self._family_desc()) is not None:
+            if self._family_ft_on(_desc):
+                self._launched_ft_family = _desc.key
             return self._generic_train_command(_desc)
         if config.get("is_krea2"):
             if bool(getattr(self, "krea2_finetune_var", None) and self.krea2_finetune_var.get()):
@@ -34988,16 +34996,25 @@ class LoRATrainerGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to write pause flag:\n{e}")
             return
-        self.update_console(
-            "\n=== PAUSE REQUESTED — trainer will save full state and exit cleanly at end of current epoch. "
-            "GPU memory will be freed. Click Resume Training afterwards to continue. ===\n\n"
-        )
-        messagebox.showinfo(
-            "Pause Requested",
-            "Pause queued. The trainer will finish the CURRENT epoch, save full state, "
-            "and exit cleanly to free GPU memory.\n\n"
-            "Click Resume Training afterwards to continue.",
-        )
+        if self._family_desc() is not None and self._family_ft_on():
+            # a family fine-tune only ever saves a whole rotation, so the pause waits for the rotation to end
+            self.update_console("\n=== PAUSE REQUESTED - the fine-tune finishes the rotation it is in, saves that "
+                                "checkpoint and exits. Click Resume Training afterwards to continue. ===\n\n")
+            messagebox.showinfo("Pause Requested",
+                                "Pause queued. A fine-tune only saves whole rotations, so it finishes the rotation "
+                                "it is in first (the Log says at which epoch), saves that checkpoint, and exits.\n\n"
+                                "Click Resume Training afterwards to continue.")
+        else:
+            self.update_console(
+                "\n=== PAUSE REQUESTED — trainer will save full state and exit cleanly at end of current epoch. "
+                "GPU memory will be freed. Click Resume Training afterwards to continue. ===\n\n"
+            )
+            messagebox.showinfo(
+                "Pause Requested",
+                "Pause queued. The trainer will finish the CURRENT epoch, save full state, "
+                "and exit cleanly to free GPU memory.\n\n"
+                "Click Resume Training afterwards to continue.",
+            )
         self.training_state = "pausing"
         self._refresh_training_buttons()
 
@@ -35064,7 +35081,7 @@ class LoRATrainerGUI:
         elif self._is_minimax_arch():
             _on = bool(getattr(self, "minimax_finetune_var", None) and self.minimax_finetune_var.get())
         else:
-            _on = False
+            _on = self._family_ft_on()
         if not _on:
             return None
         if str(self.settings.get("LORA_NAME", "")) != str(_fr.get("output_name", "")):
@@ -35312,6 +35329,43 @@ class LoRATrainerGUI:
                 messagebox.showerror("Error", f"Paused fine-tune checkpoint not found:\n{state_path}")
                 return
             next_window, epochs_done = ft_checkpoint_continuation(state_path)
+            if self._family_ft_on():
+                # a family fine-tune counts in rotations: what is left of Train-for, in whole rotations of the
+                # paused run's cycle (the checkpoint records its window count)
+                try:
+                    from safetensors import safe_open
+                    with safe_open(state_path, framework="pt") as _f:
+                        _nw = int((_f.metadata() or {}).get("fizgig_ft_n_windows", 0) or 0)
+                    _per = max(1, int(float(self.entries["FAMILY_FT_ROTATE_EVERY"].get().strip() or 1)))
+                    _rot = max(1, int(float(self.entries["FAMILY_FT_ROTATIONS"].get().strip() or 1)))
+                except Exception:
+                    _nw, _per, _rot = 0, 1, 1
+                _done_rot = round(epochs_done / (_nw * _per)) if _nw else 0
+                if _rot - _done_rot <= 0:
+                    messagebox.showinfo(
+                        "Nothing left to train",
+                        f"This fine-tune has already trained {_done_rot} rotation(s) - Train for is {_rot}.\n\n"
+                        f"{os.path.basename(state_path)} IS the finished model.\n\n"
+                        f"To train it further, raise Train for above {_done_rot} and click Resume Training again.")
+                    return
+                self._ft_resume = {"checkpoint": state_path, "next_window": next_window, "epochs_done": epochs_done,
+                                   "rotations_left": _rot - _done_rot,
+                                   "output_name": self.settings.get("LORA_NAME", "")}
+                self.update_console(
+                    f"\n=== RESUMING fine-tune from {os.path.basename(state_path)} - {_rot - _done_rot} rotation(s) "
+                    f"left ===\n\n")
+                self.start_training()
+                _proc = getattr(self, "current_process", None)
+                if getattr(self, "training_state", "idle") == "running" and _proc is not None and _proc.poll() is None:
+                    try:
+                        if os.path.exists(self._paused_sidecar_path()):
+                            os.remove(self._paused_sidecar_path())
+                    except Exception:
+                        pass
+                else:
+                    self.training_state = "paused"
+                    self._refresh_training_buttons()
+                return
             try:
                 total = int(str(self.entries["MAX_TRAIN_EPOCHS"].get()).strip() or 0)
             except (KeyError, ValueError, TypeError):
