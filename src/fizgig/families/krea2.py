@@ -12,16 +12,16 @@ from fizgig.families.description import (
 _COMFY = "Comfy-Org/Krea-2"
 
 
-def _preset(rank, lr=1e-4, adaptive=None, epochs=30):
+def _preset(rank, lr=1e-4, adaptive=None, epochs=30, slider=False, mp="0.25"):
     """The original Krea 2 presets' values (lora_trainer_gui.py KREA2_BUILT_IN_PRESETS), in the standard layer's
     keys. adaptive=(min, max) turns Adaptive LR on."""
     lo, hi = adaptive or ("1e-4", "4e-4")
     return {
         "NETWORK_DIM": rank, "NETWORK_ALPHA": rank, "NETWORK_TYPE": "LoRA (standard)", "LEARNING_RATE": lr,
-        "MAX_TRAIN_EPOCHS": epochs, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42,
+        "MAX_TRAIN_EPOCHS": epochs, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42, "FAMILY_SLIDER": slider,
         "ADAPTIVE_LR": adaptive is not None, "ADAPTIVE_LR_MIN": lo, "ADAPTIVE_LR_MAX": hi,
         "OPTIMIZER_TYPE": "adamw8bit", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
-        "DATASET_MEGAPIXELS": "0.25", "BLOCKS_SWAP": "Auto (detect from GPU)",
+        "DATASET_MEGAPIXELS": mp, "BLOCKS_SWAP": "Auto (detect from GPU)",
         "FAMILY_PRECISION": "Auto (fits your free VRAM)", "FAMILY_EMA": "0.98 (recommended)",
         "KREA2_LOSS_WATCH": True, "KREA2_PER_IMAGE_LR": True, "KREA2_AUTO_RECAPTION": False,
         "KREA2_WARMUP_LOOK": False,
@@ -87,6 +87,7 @@ KREA2 = FamilyDescription(
                   "bf16": (((0.25, 26.0), (2.0, 26.44)), 0.84)},
     optimizers=("adamw8bit", "adamw"),
     network_types=("lora", "lokr"),
+    slider_training=True,             # the driver's diff-weighted loss (photo pairs) and noise_latents / predict (prompts)
 
     sampling=(
         SamplingSettings("RAW", steps=28, cfg=4.5, sampler="euler", scheduler="simple", negative_prompt=True,
@@ -118,6 +119,9 @@ KREA2 = FamilyDescription(
         ("✨ Krea 2 Ultra Fast (rank 8, adaptive LR)", _preset(8, adaptive=("2e-4", "4e-4"))),
         ("✨ Krea 2 Standard (rank 32, full model)", _preset(32, epochs=64)),
         ("✨ Krea 2 Style (rank 16, gentle LR)", _preset(16, adaptive=("5e-5", "2e-4"), epochs=64)),
+        # Slider: hot and short, as Qwen's and the experiment/slider-training branch's Krea 2 Slider (rank 4, 2e-4,
+        # 0.5 MP). The loss watch and Adaptive LR are switched off for sliders by the trainer.
+        ("✨ Krea 2 Slider (rank 4, 2e-4)", _preset(4, lr=2e-4, slider=True, mp="0.5")),
     ),
     notes=(
         ("Timesteps: logit-normal with a resolution-dependent shift (mu 0.5 at 256 image tokens to 1.15 at 6400), "
