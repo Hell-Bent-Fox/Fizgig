@@ -95,7 +95,11 @@ def _save_state(output_dir, output_name, net, optimizer, *, epoch, global_step, 
     return state_dir
 
 
-def _load_state(state_dir, net, optimizer, device):
+def _load_state(state_dir, net, optimizer, device, arch):
+    """(epoch, global step, training_state.json) of a saved state, its LoRA weights and RNG restored. The optimizer
+    (and, by the caller, the EMA) is restored only from a state this family wrote: another trainer's (the original
+    Krea 2's) orders its parameters differently, so its moments would land on the wrong tensors - that state goes on
+    from its weights with a fresh optimizer."""
     for need in ("lora.safetensors", "optimizer.pt", "training_state.json"):
         if not os.path.isfile(os.path.join(state_dir, need)):
             raise RuntimeError(f"[resume] {state_dir} is not a saved training state (missing {need}). Pick the "
@@ -103,15 +107,20 @@ def _load_state(state_dir, net, optimizer, device):
     if net.load_trainable(os.path.join(state_dir, "lora.safetensors")) == 0:
         raise RuntimeError(f"[resume] {state_dir} matched none of this LoRA's modules - different rank or "
                            f"target modules?")
-    optimizer.load_state_dict(torch.load(os.path.join(state_dir, "optimizer.pt"), map_location=device))
+    with open(os.path.join(state_dir, "training_state.json"), encoding="utf-8") as f:
+        meta = json.load(f)
+    meta["own_state"] = meta.get("architecture") == arch
+    if meta["own_state"]:
+        optimizer.load_state_dict(torch.load(os.path.join(state_dir, "optimizer.pt"), map_location=device))
+    else:
+        logger.info("[resume] this state was saved by another trainer: continuing from its LoRA weights, with a "
+                    "fresh optimizer and weight average (they settle within a few steps)")
     rng_path = os.path.join(state_dir, "rng.pt")
     if os.path.exists(rng_path):
         rng = torch.load(rng_path)
         torch.set_rng_state(rng["torch"])
         if "cuda" in rng and torch.cuda.is_available():
             torch.cuda.set_rng_state_all(rng["cuda"])
-    with open(os.path.join(state_dir, "training_state.json"), encoding="utf-8") as f:
-        meta = json.load(f)
     return int(meta.get("epoch", 0)), int(meta.get("global_step", 0)), meta
 
 
@@ -860,10 +869,10 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
 
     start_epoch = global_step = 0
     if resume_state_dir:
-        start_epoch, global_step, meta = _load_state(resume_state_dir, net, optimizer, device)
+        start_epoch, global_step, meta = _load_state(resume_state_dir, net, optimizer, device, arch)
         if adaptive:
             adaptive.load_state_dict(meta.get("adaptive_lr_state"))
-        if ema is not None and os.path.exists(os.path.join(resume_state_dir, "ema.pt")):
+        if ema is not None and meta["own_state"] and os.path.exists(os.path.join(resume_state_dir, "ema.pt")):
             ema.load_state_dict(torch.load(os.path.join(resume_state_dir, "ema.pt"), map_location="cpu"))
         logger.info(f"[resume] from {resume_state_dir}: continuing at epoch {start_epoch + 1}/{max_train_epochs}")
     from fizgig.families.loss_watch import Watch
