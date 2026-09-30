@@ -90,9 +90,13 @@ class Krea2Driver(FamilyDriver):
 
     @torch.no_grad()
     def encode_text(self, te, captions):
-        hiddens, mask = te(list(captions))                                       # (B, seq, L, D), (B, seq)
-        return [{"hidden_states": hiddens[b].cpu(), "attention_mask": mask[b].cpu().to(torch.bool)}
-                for b in range(len(captions))]
+        """One caption per forward, as the original cache script: a batched forward rounds a bf16 step or two
+        differently, so a caption's conditioning would depend on which captions shared its batch."""
+        out = []
+        for cap in captions:
+            hiddens, mask = te([cap])                                            # (1, seq, L, D), (1, seq)
+            out.append({"hidden_states": hiddens[0].cpu(), "attention_mask": mask[0].cpu().to(torch.bool)})
+        return out
 
     # ---- training -------------------------------------------------------------------------------
     @staticmethod
