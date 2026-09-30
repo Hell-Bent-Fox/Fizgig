@@ -18157,7 +18157,7 @@ class LoRATrainerGUI:
         # the wrong family's DiT/VAE/TE. Only a genuinely unrecognized file falls through to
         # the generic error below, same as before.
         from fizgig.networks.lora import lora_family_from_file, FAMILY_DISPLAY_NAMES
-        detected = lora_family_from_file(path)
+        detected = self._same_format_family(lora_family_from_file(path), self._explorer_family())
         from fizgig.networks.lora import INFERENCE_FAMILIES
         if detected is None and self._workbench_families("explorer"):
             from fizgig.families.registry import family_of_lora
@@ -19338,7 +19338,7 @@ class LoRATrainerGUI:
             # instead of erroring at run time (same as Explorer / Profiler).
             try:
                 from fizgig.networks.lora import lora_family_from_file
-                fam = lora_family_from_file(filepath)
+                fam = self._same_format_family(lora_family_from_file(filepath), self.extract_family_var.get())
                 if fam is None and self._workbench_families("extract"):
                     from fizgig.families.registry import family_of_lora
                     _dd = family_of_lora(filepath)
@@ -21439,7 +21439,7 @@ class LoRATrainerGUI:
             # the wrong family Just Works instead of erroring at run time.
             try:
                 from fizgig.networks.lora import lora_family_from_file
-                fam = lora_family_from_file(filepath)
+                fam = self._same_format_family(lora_family_from_file(filepath), self.profiler_family_var.get())
                 if fam is None and self._workbench_families("profiler"):
                     from fizgig.families.registry import family_of_lora
                     _dd = family_of_lora(filepath)
@@ -25265,7 +25265,8 @@ class LoRATrainerGUI:
             if not path or path in checked:
                 continue
             checked.add(path)
-            detected = lora_family_from_file(path)
+            detected = self._same_format_family(lora_family_from_file(path),
+                                                getattr(self, "royale_family_var", None) and self.royale_family_var.get())
             if detected is None and self._workbench_families("royale"):
                 from fizgig.families.registry import family_of_lora
                 _dd = family_of_lora(path)
@@ -26771,7 +26772,7 @@ class LoRATrainerGUI:
         # wrong family's DiT/VAE/TE. Only a genuinely unrecognized file falls through to the
         # generic error below, same as before.
         from fizgig.networks.lora import lora_family_from_file, FAMILY_DISPLAY_NAMES, INFERENCE_FAMILIES
-        detected = lora_family_from_file(path)
+        detected = self._same_format_family(lora_family_from_file(path), self.repair_family_var.get())
         if detected is None and self._workbench_families("repair"):
             # Standard-layer families (asked only when the old detector knows nothing about the file).
             from fizgig.families.registry import family_of_lora
@@ -32001,6 +32002,15 @@ class LoRATrainerGUI:
         is what every caller actually means: no category presets, no master sliders."""
         return (getattr(self, "repair_family_var", None) is not None
                 and (self.repair_family_var.get() in ("krea2", "minimax") or self._repair_desc() is not None))
+
+    def _same_format_family(self, detected, selected):
+        """A LoRA file names its family by its key format. A described family that shares another's model files and
+        LoRA format (Krea 2 (driver) with Krea 2) keeps the user's pick instead of being switched away by that."""
+        from fizgig.families.registry import get as _family
+        d = _family(str(selected)) if selected else None
+        if d is not None and detected and d.shares_prefs_with == detected:
+            return str(selected)
+        return detected
 
     def _workbench_families(self, tool):
         """Standard-layer families a workbench tool offers (the description's `workbench` names the tool)."""

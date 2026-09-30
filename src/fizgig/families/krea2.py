@@ -84,6 +84,7 @@ KREA2 = FamilyDescription(
     compiles=True,
     preview_image=True,
     finetune=True,
+    workbench=("repair", "explorer", "profiler", "extract", "royale"),
     # The original's measured 0.25 MP peaks (utils/capabilities.py: 5090, batch 1, rank 32; 0.42 GB saved per swapped
     # INT8 block) and the driver's measured growth to 1 MP on full-size photos (5090, rank 8, previews off): INT8
     # +2.9 GB (15.3 -> 18.2 GB whole-GPU; the original grows +2.6 on the same data), NF4 13.3 GB at 1 MP under a

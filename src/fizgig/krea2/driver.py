@@ -207,6 +207,11 @@ class Krea2Driver(FamilyDriver):
         align = 16                                                      # VAE 8 x patch 2
         return roundup(width, align, "width"), roundup(height, align, "height")
 
+    def pad_conditioning(self, conds):
+        """Prompt travel: every Krea 2 prompt is already the encoder's fixed 512 tokens with a validity mask, so the
+        shapes match as they are; blending the masks (as weights) fades in the tokens only one prompt has."""
+        return [dict(c) for c in conds]
+
     @torch.no_grad()
     def initial_noise(self, seed, width, height):
         width, height = self._grid(width, height)

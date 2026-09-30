@@ -123,8 +123,9 @@ class WorkbenchEngine:
                         lowmem=None, precision="auto", blocks_to_swap=0, **_ignored):
         """Load the DiT (resident) and the VAE once; the text encoder loads per new prompt. speed_lora_path: the
         family's speed LoRA file, attached unmerged and used for every preview ("" = default sampling).
-        precision: "auto" = bf16 with 20 GB+ free, else INT8 (when the family offers it); blocks_to_swap streams
-        blocks forward-only (previews never backprop)."""
+        precision: "auto" = bf16 when the model file fits the free VRAM with 6 GB to spare (Qwen 2.1's 14 GB: 20 GB
+        free), else INT8, else NF4 (whichever the family offers); blocks_to_swap streams blocks forward-only
+        (previews never backprop)."""
         if self.pipeline is not None:
             return
         from fizgig.families.train import _small_card_previews
@@ -133,7 +134,14 @@ class WorkbenchEngine:
         self.lowmem = _small_card_previews() if lowmem is None else bool(lowmem)
         from fizgig.families import quant
         if precision == "auto":
-            precision = "int8" if ("int8" in self.desc.precisions and _free_vram_gb() < 20.0) else "bf16"
+            try:
+                need = os.path.getsize(dit_path) / 1e9 + 6.0
+            except OSError:
+                need = 20.0
+            free = _free_vram_gb()
+            precision = ("bf16" if free >= need or not {"int8", "nf4"} & set(self.desc.precisions) else
+                         "int8" if "int8" in self.desc.precisions and free >= need / 2 else
+                         "nf4" if "nf4" in self.desc.precisions else "int8")
         elif precision not in self.desc.precisions:
             precision = "bf16"
         self.dit, self.swapped = quant.load_base(self.driver, dit_path, device, precision, blocks_to_swap,
