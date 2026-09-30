@@ -376,7 +376,7 @@ class _FineTune:
     whole-rotation length and cadence, a fresh optimizer per window, and the full-checkpoint save."""
 
     def __init__(self, driver, desc, dit, net, dit_path, device, *, max_train_epochs, rotations, save_every_rotations,
-                 rotate_every, start_window, epochs_done, fused, lr):
+                 rotate_every, start_window, epochs_done, fused, lr, master_dir):
         from fizgig.families import ft
         from fizgig.utils.device import plannable_free_vram
         self.ft, self.driver, self.desc, self.dit, self.src, self.lr = ft, driver, desc, dit, dit_path, lr
@@ -384,19 +384,24 @@ class _FineTune:
         if spec is None:
             raise RuntimeError(f"{desc.display_name}'s driver declares no fine-tune (ft_spec)")
         self.rot = ft.Rotator(dit, spec, device)
-        gb = self.rot.build_master(dit_path)
+        where = os.environ.get("FIZGIG_FT_MASTER", "auto")
+        self.scratch = os.path.join(master_dir, ".fizgig_ft_master")
+        gb, where = self.rot.build_master(dit_path, where, self.scratch)
         n_always = self.rot.start_always()
-        logger.info(f"[finetune] bf16 master: {len(self.rot.master)} weights, {gb:.1f} GB in system RAM; "
-                    f"{n_always} always-on Linears ({', '.join(spec.always_on) or 'none'}) train all run; biases frozen")
-        try:
-            import psutil
-            avail = psutil.virtual_memory().available / 1e9
-            if avail < gb + 10:
-                logger.warning(f"[finetune] system RAM is tight: {avail:.0f} GB available for a {gb:.0f} GB master "
-                               f"plus staging - expect paging; running out shows as 'CUDA error: out of memory' with "
-                               f"the GPU nearly empty")
-        except Exception:
-            pass
+        logger.info(f"[finetune] bf16 master: {len(self.rot.master)} weights, {gb:.1f} GB "
+                    + ("in system RAM" if where == "ram" else f"ON DISK at {self.scratch} (system memory can't "
+                       f"comfortably hold it; untouched weights read from the model file, trained ones spill there)")
+                    + f"; {n_always} always-on Linears ({', '.join(spec.always_on) or 'none'}) train all run; "
+                      f"biases frozen")
+        if where == "ram":
+            try:
+                import psutil
+                avail = psutil.virtual_memory().available / 1e9
+                if avail < 10:
+                    logger.warning(f"[finetune] system RAM is tight after the master ({avail:.0f} GB left) - "
+                                   f"FIZGIG_FT_MASTER=disk keeps the master on disk instead")
+            except Exception:
+                pass
         n_blocks = len(self.rot.blocks)
         logger.info(f"[finetune] planning with {torch.cuda.memory_allocated() / 1e9:.2f} GB allocated, "
                     f"{plannable_free_vram():.2f} GB free")
@@ -752,7 +757,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         ftr = _FineTune(driver, desc, dit, net, dit_path, device, max_train_epochs=None, rotations=ft_rotations,
                         save_every_rotations=ft_save_every_rotations, rotate_every=ft_rotate_every,
                         start_window=ft_start_window, epochs_done=ft_epochs_done, fused=ft_fused_backward,
-                        lr=learning_rate)
+                        lr=learning_rate, master_dir=output_dir)
         max_train_epochs, save_every_n_epochs = ftr.epochs, ftr.save_every
         if ftr.streamer is not None:
             swapped = 1          # blocks stream: previews and caption re-encodes must not park + restore the whole DiT
@@ -1092,6 +1097,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         optimizer = params = None
         ftr.park()
         save_lora(final, max_train_epochs)
+        if hasattr(ftr.rot.master, "cleanup"):
+            ftr.rot.master.cleanup()          # the final checkpoint holds everything the scratch did
         if sample_every_n_epochs:
             previews(max_train_epochs + ftr.epochs_done)
         logger.info(f"Fine-tune complete -> {final}")

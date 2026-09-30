@@ -5545,19 +5545,22 @@ class LoRATrainerGUI:
         # --- Edit LoRA — standard-layer families whose model edits images (description.edit_training) ----
         self.entries["FAMILY_EDIT"] = tk.BooleanVar(value=bool(self.settings.get("FAMILY_EDIT", False)))
         self.entries["FAMILY_SLIDER"] = tk.BooleanVar(value=bool(self.settings.get("FAMILY_SLIDER", False)))
-        # Kind of LoRA: one choice, stored as the two flags presets and the builders read
+        self.entries["FAMILY_FT"] = tk.BooleanVar(value=bool(self.settings.get("FAMILY_FT", False)))
+        # Kind of training: one choice, stored as the flags presets and the builders read
         self._family_kind_var = tk.StringVar(value=("edit" if self.entries["FAMILY_EDIT"].get() else
-                                                    "slider" if self.entries["FAMILY_SLIDER"].get() else "standard"))
-        self._family_edit_cb = ttk.Frame(training_content)          # the Kind of LoRA row
-        ttk.Label(self._family_edit_cb, text="Kind of LoRA:").pack(side=tk.LEFT, padx=(0, 10))
+                                                    "slider" if self.entries["FAMILY_SLIDER"].get() else
+                                                    "finetune" if self.entries["FAMILY_FT"].get() else "standard"))
+        self._family_edit_cb = ttk.Frame(training_content)          # the Kind of training row
+        ttk.Label(self._family_edit_cb, text="Kind of training:").pack(side=tk.LEFT, padx=(0, 10))
         self._family_kind_buttons = {}
-        for _k, _lab in (("standard", "Standard"), ("edit", "Edit (original + edited photo pairs)"),
-                         ("slider", "Slider (a dial between two looks)")):
+        for _k, _lab in (("standard", "Standard LoRA"), ("edit", "Edit (original + edited photo pairs)"),
+                         ("slider", "Slider (a dial between two looks)"),
+                         ("finetune", "Fine-tune the whole model")):
             self._family_kind_buttons[_k] = ttk.Radiobutton(self._family_edit_cb, text=_lab, value=_k,
                                                             variable=self._family_kind_var,
                                                             command=self._family_kind_chosen)
             self._family_kind_buttons[_k].pack(side=tk.LEFT, padx=(0, 14))
-        for _flag in ("FAMILY_EDIT", "FAMILY_SLIDER"):                  # presets set the flags
+        for _flag in ("FAMILY_EDIT", "FAMILY_SLIDER", "FAMILY_FT"):     # presets set the flags
             self.entries[_flag].trace_add("write", lambda *_: self._family_edit_rows())
         self._family_edit_cb.grid(row=54, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(10, 0))
         self._family_edit_hint = ttk.Label(
@@ -5687,9 +5690,45 @@ class LoRATrainerGUI:
             self.entries[_key] = ttk.Entry(_er, width=60 if _key != "FAMILY_SLIDER_GUIDANCE" else 8)
             self.entries[_key].insert(0, str(self.settings.get(_key, _default) or _default))
             self.entries[_key].pack(side=tk.LEFT)
+        # --- Fine-tune card: the whole base model trains, counted in whole rotations ----------------------------
+        self._family_ft_frame = ttk.Frame(training_content)
+        self._family_ft_frame.grid(row=58, column=0, columnspan=2, sticky=tk.W, padx=(26, 5), pady=(2, 4))
+        _f = self._family_ft_frame
+        _r[0] = 0
+        _block("How it works",
+               "The model's own weights train, not a LoRA. It trains one part at a time (e.g. every block's "
+               "attention, then each part of the MLP): one pass through every part is a rotation. How many parts "
+               "a rotation has depends on your card's free memory - fewer, bigger parts on a bigger card. Each "
+               "checkpoint is a complete model file you load in place of the base, and one is only ever saved at the "
+               "end of a whole rotation, with a preview of it. Pause finishes the rotation it is in first.")
+        _ftr = _row()
+        for _key, _lab, _default, _after in (("FAMILY_FT_ROTATIONS", "Train for", "10", "rotations,"),
+                                             ("FAMILY_FT_SAVE_EVERY", "checkpoint + preview every", "1",
+                                              "rotation(s)")):
+            ttk.Label(_ftr, text=_lab).pack(side=tk.LEFT, padx=(0, 4))
+            self.entries[_key] = ttk.Entry(_ftr, width=5)
+            self.entries[_key].insert(0, str(self.settings.get(_key, _default) or _default))
+            self.entries[_key].pack(side=tk.LEFT)
+            ttk.Label(_ftr, text=_after).pack(side=tk.LEFT, padx=(4, 10))
+            self.entries[_key].bind("<KeyRelease>", lambda *_: self._family_ft_plan_refresh(), add="+")
+        _ftr2 = _row()
+        ttk.Label(_ftr2, text="Each part trains for").pack(side=tk.LEFT, padx=(0, 4))
+        self.entries["FAMILY_FT_ROTATE_EVERY"] = ttk.Entry(_ftr2, width=5)
+        self.entries["FAMILY_FT_ROTATE_EVERY"].insert(0, str(self.settings.get("FAMILY_FT_ROTATE_EVERY", "1") or "1"))
+        self.entries["FAMILY_FT_ROTATE_EVERY"].pack(side=tk.LEFT)
+        self.entries["FAMILY_FT_ROTATE_EVERY"].bind("<KeyRelease>", lambda *_: self._family_ft_plan_refresh(),
+                                                    add="+")
+        ttk.Label(_ftr2, text="epoch(s) before the next").pack(side=tk.LEFT, padx=(4, 0))
+        self.entries["FAMILY_FT_FUSED"] = tk.BooleanVar(value=bool(self.settings.get("FAMILY_FT_FUSED", True)))
+        ttk.Checkbutton(_row(), text="Free each gradient as soon as it's used (less memory - recommended)",
+                        variable=self.entries["FAMILY_FT_FUSED"]).pack(side=tk.LEFT)
+        self._family_ft_plan = ttk.Label(_f, text="", foreground=COLORS["text_secondary"], font=HINT_FONT,
+                                         justify=tk.LEFT, wraplength=690)
+        self._family_ft_plan.grid(row=_r[0], column=0, sticky=tk.W, pady=(6, 2))
+        _r[0] += 1
         for _w in (self._family_adapter_cb, self._family_adapter_hint, self._family_ema_label,
                    self._family_ema_frame, self._family_ema_hint, self._family_edit_cb, self._family_edit_frame,
-                   self._family_edit_hint, self._family_slider_frame):
+                   self._family_edit_hint, self._family_slider_frame, self._family_ft_frame):
             _w._fizgig_described_family = "*"   # standard-layer widget: old-family goldens set it aside
             _w.grid_remove()
 
@@ -7610,7 +7649,9 @@ class LoRATrainerGUI:
                                     "FAMILY_TURBO_STRENGTH", "FAMILY_EDIT", "FAMILY_EDIT_DIR", "FAMILY_EDIT_REF",
                                     "FAMILY_EDIT_CAPTION", "FAMILY_SLIDER", "FAMILY_SLIDER_SOURCE",
                                     "FAMILY_SLIDER_DIR", "FAMILY_SLIDER_CAPTION", "FAMILY_SLIDER_BASE",
-                                    "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG", "FAMILY_SLIDER_GUIDANCE"})
+                                    "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG", "FAMILY_SLIDER_GUIDANCE",
+                                    "FAMILY_FT", "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY",
+                                    "FAMILY_FT_ROTATE_EVERY", "FAMILY_FT_FUSED"})
     from fizgig.families.launch import PRECISION_LABELS as _FAMILY_PRECISION_LABELS
 
     def _family_edit_on(self, desc=None):
@@ -7625,11 +7666,77 @@ class LoRATrainerGUI:
             on = self.entries["FAMILY_SLIDER_SOURCE"].get() == source
         return on
 
+    def _family_ft_on(self, desc=None):
+        desc = desc if desc is not None else self._family_desc()
+        return bool(desc is not None and desc.finetune and self.entries["FAMILY_FT"].get())
+
     def _family_kind_chosen(self):
-        """The Kind of LoRA radio sets the two flags (one at a time); the traces redraw the rows."""
+        """The Kind of training radio sets the flags (one at a time); the traces redraw the rows. Choosing
+        Fine-tune sets its learning rate (1e-5) and turns Adaptive LR off, as the fine-tune recipe needs."""
         k = self._family_kind_var.get()
+        was_ft = bool(self.entries["FAMILY_FT"].get())
         self.entries["FAMILY_EDIT"].set(k == "edit")
         self.entries["FAMILY_SLIDER"].set(k == "slider")
+        self.entries["FAMILY_FT"].set(k == "finetune")
+        if k == "finetune" and not was_ft:
+            if getattr(self, "adaptive_lr_var", None) is not None and self.adaptive_lr_var.get():
+                self.adaptive_lr_var.set(False)
+                self._on_adaptive_lr_toggle()          # un-greys the Learning Rate box before it is written
+            e = self.entries.get("LEARNING_RATE")
+            if e is not None:
+                e.delete(0, tk.END)
+                e.insert(0, "1e-5")
+
+    def _family_ft_plan_refresh(self):
+        """The fine-tune card's 'on this card' line: the rotation this card gets (planned from the model file's
+        header and the free memory now - no model loads), and the epochs its checkpoints and previews land on."""
+        lab = getattr(self, "_family_ft_plan", None)
+        desc = self._family_desc()
+        if lab is None or desc is None or not desc.finetune:
+            return
+        def _n(key, d):
+            try:
+                return max(1, int(float(self.entries[key].get().strip() or d)))
+            except ValueError:
+                return None
+        rot, every, per = _n("FAMILY_FT_ROTATIONS", 10), _n("FAMILY_FT_SAVE_EVERY", 1), _n("FAMILY_FT_ROTATE_EVERY", 1)
+        if None in (rot, every, per):
+            lab.configure(text="Rotations, checkpoint cadence and epochs per part are whole numbers of 1 or more.")
+            return
+        path = self._krea2_pref(desc.pref_for("dit"))
+        plan = None
+        try:
+            from fizgig.families import ft as _ft
+            from fizgig.utils.device import plannable_free_vram
+            free = plannable_free_vram()
+            key = (path, round(free, 1))
+            if getattr(self, "_ft_plan_cache", (None,))[0] != key:
+                spec = desc.load_driver().ft_spec(None)
+                self._ft_plan_cache = (key, _ft.plan_from_file(path, spec, free) if path and os.path.isfile(path)
+                                       else None)
+            plan = self._ft_plan_cache[1]
+        except Exception:
+            plan = None
+        if not plan or not plan[0]:
+            lab.configure(text=f"{rot} rotation(s), a checkpoint + preview every {every}. How many parts a rotation "
+                               f"has is planned from the free memory at Start; the log shows the epochs.")
+            return
+        windows, stream = plan[0], plan[1]
+        cyc = len(windows) * per
+        total = rot * cyc
+        at = list(range(cyc * every, total + 1, cyc * every))
+        if at and at[-1] != total:
+            at.append(total)
+        shown = ", ".join(str(e) for e in at[:5]) + (f", ... {at[-1]}" if len(at) > 5 else "")
+        try:
+            gb = os.path.getsize(path) / 1e9
+        except OSError:
+            gb = 0
+        lab.configure(text=(
+            f"On this card ({free:.0f} GB free): a rotation is {len(windows)} parts x {per} epoch(s) = {cyc} epochs"
+            + (" - parts outside the one training stream from system memory, so steps are slower" if stream else "")
+            + f". {rot} rotation(s) = {total} epochs. Checkpoint + preview at epoch {shown}"
+            + (f" (~{gb:.0f} GB each)" if gb else "") + ". The log confirms the plan at Start."))
 
     def _browse_family_slider_dir(self):
         path = filedialog.askdirectory(title="Folder of -1 end photos (same names as the +1 photos)")
@@ -7638,6 +7745,8 @@ class LoRATrainerGUI:
             self.entries["FAMILY_SLIDER_DIR"].insert(0, path)
 
     _KIND_HINTS = {
+        "finetune": "The whole model learns your photos, not a LoRA on top of it. The result is a full model file "
+                    "(large), loaded in place of the base. Needs plenty of system memory (the Log says how much).",
         "standard": "A normal LoRA: a person, a style or a concept, learned from your captioned photos.",
         "edit": "Teach the model an edit (a grade, a look, a relight) from pairs of the same photo: the original, "
                 "and your edited version. The LoRA learns to make that edit to new photos.",
@@ -7653,9 +7762,10 @@ class LoRATrainerGUI:
         desc = self._family_desc()
         can_edit = bool(desc is not None and desc.edit_training)
         can_slider = bool(desc is not None and desc.slider_training)
+        can_ft = bool(desc is not None and desc.finetune)
         if getattr(self, "_family_kind_buttons", None):
             for k, b in self._family_kind_buttons.items():
-                if k == "edit" and not can_edit or k == "slider" and not can_slider:
+                if k == "edit" and not can_edit or k == "slider" and not can_slider or k == "finetune" and not can_ft:
                     b.pack_forget()
                 elif not b.winfo_manager():
                     b.pack(side=tk.LEFT, padx=(0, 14))
@@ -7663,6 +7773,8 @@ class LoRATrainerGUI:
                 kind = "edit"
             elif self.entries["FAMILY_SLIDER"].get() and can_slider:
                 kind = "slider"
+            elif self.entries["FAMILY_FT"].get() and can_ft:
+                kind = "finetune"
             else:
                 kind = "standard"
             if self._family_kind_var.get() != kind:
@@ -7673,7 +7785,17 @@ class LoRATrainerGUI:
             prompts = self.entries["FAMILY_SLIDER_SOURCE"].get() == "prompts"
             self._set_widget_visible(self._family_slider_pairs, slider_on and not prompts)
             self._set_widget_visible(self._family_slider_prompts, slider_on and prompts)
-        can = can_edit or can_slider
+            self._set_widget_visible(self._family_ft_frame, kind == "finetune")
+            # a fine-tune counts in rotations: the epoch boxes stand down while it is chosen
+            for _k in ("MAX_TRAIN_EPOCHS", "SAVE_EVERY_N_EPOCHS"):
+                if _k in self.entries:
+                    try:
+                        self.entries[_k].configure(state=("disabled" if kind == "finetune" else "normal"))
+                    except tk.TclError:
+                        pass
+            if kind == "finetune":
+                self._family_ft_plan_refresh()
+        can = can_edit or can_slider or can_ft
         if can_edit:
             self._family_edit_need.configure(text=desc.edit_note or "An original and its edited version must have "
                                                                   "the same crop and shape.")
@@ -7734,6 +7856,9 @@ class LoRATrainerGUI:
         d = dict(self.settings)
         # the family card as Start stores it (start_training): the switches only where the family offers them
         d.update(FAMILY_EDIT=self._family_edit_on(desc), FAMILY_SLIDER=self._family_slider_on(desc),
+                 FAMILY_FT=self._family_ft_on(desc), FAMILY_FT_FUSED=bool(self.entries["FAMILY_FT_FUSED"].get()),
+                 **{k: str(self.entries[k].get()).strip() for k in (
+                     "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY", "FAMILY_FT_ROTATE_EVERY")},
                  FAMILY_TRAINING_ADAPTER=bool(self.entries["FAMILY_TRAINING_ADAPTER"].get()),
                  **{k: str(self.entries[k].get()).strip() for k in (
                      "FAMILY_EDIT_DIR", "FAMILY_EDIT_REF", "FAMILY_SLIDER_SOURCE", "FAMILY_SLIDER_DIR",
@@ -33179,9 +33304,11 @@ class LoRATrainerGUI:
                 "FAMILY_EDIT_REF": self.entries["FAMILY_EDIT_REF"].get().strip(),
                 "FAMILY_EDIT_CAPTION": self.entries["FAMILY_EDIT_CAPTION"].get().strip(),
                 "FAMILY_SLIDER": self._family_slider_on(),
+                "FAMILY_FT": self._family_ft_on(), "FAMILY_FT_FUSED": bool(self.entries["FAMILY_FT_FUSED"].get()),
                 **{k: self.entries[k].get().strip() for k in (
                     "FAMILY_SLIDER_SOURCE", "FAMILY_SLIDER_DIR", "FAMILY_SLIDER_CAPTION", "FAMILY_SLIDER_BASE",
-                    "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG", "FAMILY_SLIDER_GUIDANCE")}}
+                    "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG", "FAMILY_SLIDER_GUIDANCE",
+                    "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY", "FAMILY_FT_ROTATE_EVERY")}}
                if self._family_desc() is not None else {}),
             # experiment/tread: both ticks must be copied here or the builder reads a stale value
             "MINIMAX_TREAD": bool(self.entries["MINIMAX_TREAD"].get()),

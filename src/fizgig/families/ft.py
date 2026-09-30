@@ -70,6 +70,117 @@ def source_unfit_reason(path: str) -> Optional[str]:
     return None
 
 
+class DiskMaster:
+    """The bf16 master on disk instead of in RAM - for machines whose memory can't hold it (Krea 2's is ~24 GB).
+
+    An untouched weight is read straight from the bf16 model file when it's needed (no build step, nothing held);
+    only a weight that has trained is written, one raw bf16 file per weight plus a manifest, each replaced atomically
+    (H3's MasterStore, generalised). Bytes are bytes, so the master stays exact. The rotation's access pattern is
+    coarse - one window read in and written back per boundary - which sequential files serve far better than
+    letting the OS page a RAM master. Dict surface: get / [] / []= / in / keys."""
+
+    def __init__(self, src_path: str, keys, scratch_dir: str):
+        from fizgig.krea2.safetensors_utils import MemoryEfficientSafeOpen
+        import json
+        import shutil
+        self.src, self.dir, self._keys = src_path, scratch_dir, list(keys)
+        os.makedirs(scratch_dir, exist_ok=True)
+        self._f = MemoryEfficientSafeOpen(src_path)
+        self._shape = {k: tuple(self._f.header[k]["shape"]) for k in self._keys}
+        need = sum(2 * int(torch.Size(s).numel()) for s in self._shape.values())
+        self.est_gb = need / 1e9
+        free = shutil.disk_usage(scratch_dir).free
+        if free < need * 1.1:
+            raise RuntimeError(f"[finetune] the drive holding {scratch_dir} has {free / 1e9:.0f} GB free; the "
+                               f"on-disk master needs up to ~{self.est_gb:.0f} GB - free space there, or run where "
+                               f"system memory can hold it")
+        self._manifest = os.path.join(scratch_dir, "manifest.json")
+        self._trained = {}
+        if os.path.exists(self._manifest):
+            try:
+                with open(self._manifest, encoding="utf-8") as f:
+                    m = json.load(f)
+                if m.get("source") == os.path.basename(src_path):
+                    self._trained = m.get("trained", {})
+            except Exception:
+                self._trained = {}
+
+    def keys(self):
+        return list(self._keys)
+
+    def __iter__(self):
+        return iter(self._keys)
+
+    def __len__(self):
+        return len(self._keys)
+
+    def __contains__(self, key):
+        return key in self._shape
+
+    def get(self, key, default=None):
+        import numpy as np
+        rec = self._trained.get(key)
+        if rec is not None:
+            arr = np.fromfile(os.path.join(self.dir, rec), dtype=np.uint16)
+            return torch.from_numpy(arr).view(torch.bfloat16).reshape(self._shape[key])
+        if key in self._shape:
+            return self._f.get_tensor(key).to(torch.bfloat16)
+        return default
+
+    def __getitem__(self, key):
+        t = self.get(key)
+        if t is None:
+            raise KeyError(key)
+        return t
+
+    def __setitem__(self, key, t):
+        import hashlib
+        import json
+        if key not in self._shape:
+            raise KeyError(f"not a master weight: {key}")
+        fn = hashlib.sha1(key.encode()).hexdigest()[:16] + ".bin"
+        tmp = os.path.join(self.dir, fn + ".tmp")
+        t.detach().to("cpu", dtype=torch.bfloat16).contiguous().view(torch.uint16).numpy().tofile(tmp)
+        os.replace(tmp, os.path.join(self.dir, fn))          # the old bytes stay valid until this instant
+        self._trained[key] = fn
+        mt = self._manifest + ".tmp"
+        with open(mt, "w", encoding="utf-8") as f:
+            json.dump({"source": os.path.basename(self.src), "trained": self._trained}, f)
+        os.replace(mt, self._manifest)
+
+    def cleanup(self):
+        """Delete the scratch - only once a checkpoint holding its contents is safely written."""
+        import shutil
+        try:
+            self._f.file.close()
+        except Exception:
+            pass
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+class _TrainedView:
+    """The checkpoint's trained tensors, produced one at a time as the save writes them: the master (RAM or disk)
+    with the live GPU weights (active window, always-on) laid over it - never the whole master in RAM at once."""
+
+    def __init__(self, master, live):
+        self._m, self._live = master, live          # live: key -> Linear whose .weight is current
+
+    def keys(self):
+        return list(dict.fromkeys(list(self._m.keys()) + list(self._live)))
+
+    def __iter__(self):
+        return iter(self.keys())
+
+    def __contains__(self, key):
+        return key in self._live or key in self._m
+
+    def __getitem__(self, key):
+        lin = self._live.get(key)
+        if lin is not None:
+            return lin.weight.detach().to("cpu", dtype=torch.bfloat16)
+        return self._m[key]
+
+
 def _unwrapped(name: str) -> str:
     """A Linear's name as the model file knows it: FamilyLoRA wraps each target and keeps the real Linear as `.base`."""
     return name[:-len(".base")] if name.endswith(".base") else name
@@ -119,23 +230,33 @@ class Rotator:
         self._forward = {}
 
     # ---- master ---------------------------------------------------------------------------------------------------
-    def build_master(self, path: str) -> float:
-        """Read every rotating weight from the model file (bf16 on disk), one tensor at a time. Never dequantised
-        from the GPU copy: that has been through NF4, and the master is what gets trained and saved."""
+    def build_master(self, path: str, where: str = "auto", scratch_dir: Optional[str] = None):
+        """The bf16 master of every rotating weight, read from the model file (bf16 on disk) - never dequantised
+        from the GPU copy, which has been through NF4. `where`: "ram" (read now, one tensor at a time), "disk"
+        (DiskMaster in scratch_dir), or "auto" - disk when the master would take more than 40% of the free system
+        memory. Returns (GB, "ram" | "disk")."""
         from fizgig.krea2.safetensors_utils import MemoryEfficientSafeOpen
-        missing = []
         with MemoryEfficientSafeOpen(path) as src:
             have = set(src.keys())
-            for key, _m, _bi, _ln in self.targets:
-                if key not in have:
-                    missing.append(key)
-                    continue
-                self.master[key] = src.get_tensor(key).to("cpu", dtype=torch.bfloat16).clone()
+            gb = sum(2 * int(torch.Size(src.header[k]["shape"]).numel()) for k, *_ in self.targets if k in have) / 1e9
+        missing = [k for k, *_ in self.targets if k not in have]
         if missing:
             raise RuntimeError(f"[finetune] {len(missing)} weights are not in {os.path.basename(path)} under the "
                                f"expected names, e.g. {missing[:3]} (the driver's FTSpec.file_key maps them)")
+        if where == "auto":
+            try:
+                import psutil
+                where = "disk" if gb > 0.4 * psutil.virtual_memory().available / 1e9 else "ram"
+            except Exception:
+                where = "ram"
+        if where == "disk":
+            self.master = DiskMaster(path, [k for k, *_ in self.targets], scratch_dir)
+            return gb, "disk"
+        with MemoryEfficientSafeOpen(path) as src:
+            for key, *_ in self.targets:
+                self.master[key] = src.get_tensor(key).to("cpu", dtype=torch.bfloat16).clone()
         gc.collect()
-        return sum(v.numel() * v.element_size() for v in self.master.values()) / 1e9
+        return gb, "ram"
 
     # ---- windows --------------------------------------------------------------------------------------------------
     def _window(self, spec) -> list:
@@ -205,14 +326,10 @@ class Rotator:
     def trainable_params(self) -> List[nn.Parameter]:
         return [lin.weight for _k, lin in self._window(self.active)] + [lin.weight for _k, lin in self.always]
 
-    def state_dict(self) -> Dict[str, torch.Tensor]:
-        """Every trained weight in bf16 on the CPU: the master with the active window flushed in, plus always-on."""
-        out = dict(self.master)
-        for key, lin in self._window(self.active):
-            out[key] = lin.weight.detach().to("cpu", dtype=torch.bfloat16).clone()
-        for key, lin in self.always:
-            out[key] = lin.weight.detach().to("cpu", dtype=torch.bfloat16).clone()
-        return out
+    def state_dict(self):
+        """Every trained weight, produced as the save writes it: the master with the active window and the
+        always-on Linears laid over it."""
+        return _TrainedView(self.master, dict(self._window(self.active)) | {k: lin for k, lin in self.always})
 
 
 def _plan(comp_gb, n_blocks, trunk, spec: FTSpec, usable, allow_stream=True):
