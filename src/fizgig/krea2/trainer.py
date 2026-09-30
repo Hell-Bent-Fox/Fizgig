@@ -1492,67 +1492,6 @@ def _apply_caption_updates(output_dir, group, te_path, device, dit, blocks_to_sw
     return ok
 
 
-def sample_previews(turbo_path, ae, encoded_prompts, lora_sd, out_dir, epoch, *,
-                    output_name="krea2", steps=8, cfg_scale=1.0, neg=None,
-                    width=512, height=512,
-                    seed=42, context_lora_path=None, context_lora_strength=1.0,
-                    blocks_to_swap=0, int8=False, device="cuda", prompts=None):
-    """Load the (clean) pre-quant fp8 Turbo, apply the current LoRA LIVE (no merge -> no grid),
-    and render each pre-encoded prompt. Turbo is freed afterwards.
-
-    `blocks_to_swap` > 0 puts the Turbo on forward-only block swap so previews fit smaller cards
-    (mirrors Klein's Distilled sample-model auto-swap). Order mirrors load_dit_for_training: load
-    the base on CPU, apply the LoRA(s), then enable swap + place the resident blocks.
-
-    Filenames follow the Fizgig samples-gallery pattern
-    `{name}_e{epoch:06d}_{idx:02d}_{timestamp:14d}_{seed}.png` so the live preview gallery
-    (which parses that exact format) picks them up — same as the Klein training path."""
-    from fizgig.krea2.utils import load_krea2_dit
-    from fizgig.networks.lora import create_network_from_weights
-
-    _ld = "cpu" if blocks_to_swap > 0 else device
-    turbo = load_krea2_dit(turbo_path, device=device, dtype=torch.bfloat16,
-                           loading_device=_ld)  # prequant fp8 auto-detected
-    if int8:
-        # INT8 (W8A8) fast preview matmul — quantize the block Linears BEFORE the LoRA wraps them
-        # (so the LoRA wraps the int8 forward) and before block swap (so the offloader stages int8).
-        # Quantize on the load device so a swapped (CPU-loaded) model doesn't need the whole int8
-        # model resident on GPU.
-        from fizgig.modules.int8 import apply_int8_quantization
-        from fizgig.krea2.utils import (KREA2_FP8_OPTIMIZATION_TARGET_KEYS,
-                                        KREA2_FP8_OPTIMIZATION_EXCLUDE_KEYS)
-        apply_int8_quantization(turbo, target_keys=KREA2_FP8_OPTIMIZATION_TARGET_KEYS,
-                                exclude_keys=KREA2_FP8_OPTIMIZATION_EXCLUDE_KEYS,
-                                compute_device=torch.device(_ld))
-    # Context LoRA (frozen) goes on FIRST so previews match deployment: the trained LoRA runs
-    # on top of the same context at the same strength it was trained with.
-    ctx_net = None
-    if context_lora_path:
-        ctx_net = _apply_context_lora(turbo, context_lora_path, context_lora_strength,
-                                      device=device, dtype=torch.bfloat16)
-    net = create_network_from_weights(None, 1.0, lora_sd, None, turbo, for_inference=True)
-    net.apply_to(text_encoders=None, unet=turbo, apply_text_encoder=False, apply_unet=True)
-    # create_network_from_weights only builds the module STRUCTURE (sizes from dims/alphas);
-    # the trained values must be loaded in, or the LoRA stays at its zero init (lora_up=0) and
-    # contributes nothing — which made every epoch's preview identical. Mirrors the Klein path
-    # (inference.py: apply_to -> load_state_dict(strict=False)).
-    net.load_state_dict(lora_sd, strict=False)
-    net.to(device=device, dtype=torch.bfloat16).eval()
-    if blocks_to_swap > 0:
-        from fizgig.krea2.offloading import BlockSwapConfig
-        turbo.enable_block_swap(blocks_to_swap, BlockSwapConfig(torch.device(device), supports_backward=False))
-        turbo.move_to_device_except_swap_blocks(torch.device(device))
-        turbo.switch_block_swap_for_inference()
-    turbo.eval()
-    result = _render_prompt_set(turbo, ae, encoded_prompts, out_dir, epoch,
-                                output_name=output_name, steps=steps, cfg_scale=cfg_scale,
-                                neg=neg, width=width, height=height, seed=seed, device=device,
-                                prompts=prompts)
-    del turbo, net, ctx_net
-    torch.cuda.empty_cache()
-    return result
-
-
 def _preview_vram(tag: str, reset_peak: bool = False) -> None:
     """One line of VRAM state at a preview waypoint (#123 asked for these): allocated /
     reserved now, the peak reserved since the preview started (the number that has to fit
@@ -1775,10 +1714,8 @@ def train_krea2(
     lr_decay_steps: int = 0,
     lr_scheduler_num_cycles: int = 1,
     lr_scheduler_power: float = 1.0,
-    # in-training previews (sample the fp8 Turbo with the live LoRA — or, when
-    # turbo_lora_path is set, the resident training DiT with the Turbo LoRA @1.0)
+    # in-training previews: the resident training DiT with the Turbo LoRA @1.0
     sample_prompts: list = None,
-    turbo_path: str = None,
     turbo_lora_path: str = None,
     vae_path: str = None,
     te_path: str = None,
@@ -1791,8 +1728,6 @@ def train_krea2(
     sample_at_first: bool = False,   # render an epoch-0 preview before training starts
     sample_seed: int = 42,
     sample_ref_image: str = None,
-    preview_blocks_to_swap: int = 0,
-    preview_int8: bool = False,
     log_per_image_loss: bool = False,
     per_image_lr: bool = False,
     auto_recaption: bool = False,
@@ -2163,28 +2098,18 @@ def train_krea2(
     # Preview setup: pre-encode prompts (frees the 8GB encoder) + load the VAE BEFORE the RAW DiT,
     # so the encoder never coexists with the resident base.
     # sample_at_first counts as wanting previews even without a per-epoch cadence.
-    # A missing turbo-LoRA file must be caught BEFORE prompts are encoded, so the fallback
-    # decision (Turbo checkpoint, or no previews at all) is made once, up front.
+    # Previews render on the training DiT with the Turbo LoRA — the only preview engine. A missing
+    # file is caught BEFORE prompts are encoded, so the decision is made once, up front.
     if turbo_lora_path and not os.path.isfile(turbo_lora_path):
-        logger.warning("[preview] turbo LoRA not found at %s — %s", turbo_lora_path,
-                       "falling back to the Turbo checkpoint" if turbo_path
-                       else "previews need it or a Turbo checkpoint; disabling previews")
+        logger.warning("[preview] Turbo LoRA not found at %s — previews are off this run (set it "
+                       "in Preferences; the app downloads it at Start when missing)", turbo_lora_path)
         turbo_lora_path = None
+    elif (not turbo_lora_path and sample_prompts and (sample_every_n_epochs or sample_at_first)
+          and not ft_rotation):
+        logger.warning("[preview] no Turbo LoRA given (--turbo_lora) — previews are off this run")
     do_previews = bool((sample_every_n_epochs or sample_at_first)
-                       and sample_prompts and (turbo_path or turbo_lora_path)
+                       and sample_prompts and turbo_lora_path
                        and vae_path and te_path)
-    # Under a full fine-tune the trained weights live in the BASE, so the standalone Turbo
-    # checkpoint (a different model) cannot show them — the only faithful preview renders on
-    # the training DiT itself with the Turbo LoRA applied fresh inside a deactivate/reactivate
-    # bracket (the H3 pattern). Without the Turbo LoRA, previews stay off.
-    # MUST stay after every other do_previews decision — the FT gate wins.
-    _ft_preview_gap_warned = False
-    if do_previews and ft_rotation and not turbo_lora_path:
-        logger.info("[ft-rotation] in-training previews need the Turbo LoRA (the standalone "
-                    "Turbo checkpoint can't show fine-tuned weights) and none is configured — "
-                    "previews off. Evaluate saved checkpoints in ComfyUI instead.")
-        do_previews = False
-        _ft_preview_gap_warned = True
     encoded_prompts = sample_ae = sample_dir = None
     encoded_negative = None
     if do_previews and network_type == "lokr" and not ft_rotation:
@@ -2449,7 +2374,7 @@ def train_krea2(
                         "DiT via a deactivate/reactivate bracket with the Turbo LoRA applied "
                         "fresh each time.",
                         save_every_n_epochs if save_every_n_epochs else max_train_epochs)
-        elif sample_prompts and not _ft_preview_gap_warned:
+        elif sample_prompts:
             # H3's 7377f2c twin: a prompts file is the clearest statement the user WANTS
             # previews, so a silent off is the same class as the announce-then-never-render
             # lie fixed there — say which ingredient is missing instead (the cadence flag
@@ -3033,55 +2958,6 @@ def train_krea2(
         except Exception as _e0:
             logger.warning(f"[preview] Sample at Start failed ({type(_e0).__name__}) — training "
                            f"continues; per-epoch previews will still be attempted.")
-    elif sample_at_first and do_previews and start_epoch == 0:
-        from safetensors.torch import load_file as _lf0
-        _tmp0 = os.path.join(output_dir, "_sample_lora.safetensors")
-        if ema is not None:
-            ema.swap_in()
-        try:
-            _save_lora(network, _tmp0, network_dim, network_alpha, dtype)
-        finally:
-            if ema is not None:
-                ema.swap_out()
-        logger.info("rendering epoch-0 preview (Sample at Start)...")
-        dit.to("cpu")
-        if getattr(dit, "_nf4_quantized", False):
-            from fizgig.modules.nf4 import move_nf4_to_device
-            move_nf4_to_device(dit, "cpu")
-        gc.collect()
-        torch.cuda.empty_cache()
-        try:
-            _seed0 = sample_seed if sample_seed != 0 else random.randint(1, 2**31 - 1)
-            _, _last_p = sample_previews(turbo_path, sample_ae, encoded_prompts, _lf0(_tmp0), sample_dir, 0,
-                            output_name=output_name, steps=sample_steps,
-                            cfg_scale=sample_cfg_scale, neg=encoded_negative,
-                            width=sample_width, height=sample_height, seed=_seed0,
-                            context_lora_path=context_lora_path,
-                            context_lora_strength=context_lora_strength,
-                            blocks_to_swap=preview_blocks_to_swap, int8=preview_int8, device=device,
-                            prompts=sample_prompts)
-            if _last_p:
-                _last_sample_prompt = _last_p
-        except Exception as _e0:
-            logger.warning(f"[preview] Sample at Start failed ({type(_e0).__name__}) — training "
-                           f"continues; per-epoch previews will still be attempted.")
-        finally:
-            gc.collect()
-            torch.cuda.empty_cache()
-            # Placement first, THEN the NF4 packed weights — the two are complementary, not
-            # alternatives: nn.Module.to() moves the ordinary params/buffers, move_nf4_to_device
-            # moves `_nf4_packed`/`_nf4_state`, which are plain attributes .to() cannot see.
-            # Making the NF4 case an `elif` stranded every ordinary parameter on CPU.
-            if blocks_to_swap > 0:
-                dit.move_to_device_except_swap_blocks(torch.device(device))
-                dit.switch_block_swap_for_training()
-            else:
-                dit.to(device)
-            if getattr(dit, "_nf4_quantized", False):
-                from fizgig.modules.nf4 import move_nf4_to_device
-                move_nf4_to_device(dit, device)
-            dit.train()
-
     # Return the load-time transients (quantise staging, resume's optimizer-state copy) to the
     # driver before stepping. Fresh runs with Sample at Start got this for free from the
     # preview's empty_cache; resumed runs skip that preview and sat ~4 GB high until the first
@@ -3492,98 +3368,14 @@ def train_krea2(
                 )
                 do_previews = False
             network.train()
-        elif (do_previews and sample_every_n_epochs and rotator is None
-                and (epoch + 1) % sample_every_n_epochs == 0):
-            from safetensors.torch import load_file
-            tmp = os.path.join(output_dir, "_sample_lora.safetensors")
-            if ema is not None:
-                ema.swap_in()
-            try:
-                _save_lora(network, tmp, network_dim, network_alpha, dtype)
-            finally:
-                if ema is not None:
-                    ema.swap_out()
-            logger.info(f"rendering previews (epoch {epoch + 1}) on the fp8 Turbo...")
-            # The preview loads the fp8 Turbo (~13 GB) on top of the resident training DiT
-            # (~14 GB fp8) + the VAE — two full models won't fit (OOMs ~30 GB on a 32 GB card).
-            # Park the training DiT on CPU for the preview, then restore it (and its block-swap
-            # placement) before the next epoch. Costs one CPU<->GPU round-trip per preview.
-            dit.to("cpu")
-            if getattr(dit, "_nf4_quantized", False):
-                # NF4's packed weights + quant state are plain attributes that .to("cpu") ignores
-                # (~6 GB would stay on the GPU), so move them explicitly to free the VRAM the
-                # preview needs — restored in the finally below.
-                from fizgig.modules.nf4 import move_nf4_to_device
-                move_nf4_to_device(dit, "cpu")
-            gc.collect()
-            torch.cuda.empty_cache()
-            try:
-                # Live sample override (GUI status-bar panel) — model-agnostic prompt/seed/res
-                # for the next preview. Encoded here (after the training DiT is on CPU) so the
-                # text encoder has room. No override -> the configured pre-encoded prompts.
-                ov = _read_sample_override(output_dir)
-                if ov:
-                    logger.info(f"[sample override] active — '{ov['prompt'][:60]}' "
-                                f"seed={ov['seed']} {ov['width']}x{ov['height']}"
-                                f"{' +ref' if ov.get('ref_image') else ''}")
-                    prev_enc = encode_sample_prompts(te_path, [ov["prompt"]],
-                                                     ref_image=ov.get("ref_image") or None, device=device)
-                    prev_w, prev_h, prev_seed = ov["width"], ov["height"], ov["seed"]
-                    prev_prompts = [ov["prompt"]]
-                else:
-                    prev_enc, prev_w, prev_h, prev_seed = encoded_prompts, sample_width, sample_height, sample_seed
-                    prev_prompts = sample_prompts
-                # Seed 0 means "random": pick a fresh seed for this preview so 0 isn't a fixed seed
-                # (each epoch's sample differs). Covers the Samples-tab field and a 0 in the override.
-                if prev_seed == 0:
-                    prev_seed = random.randint(1, 2**31 - 1)
-                    logger.info(f"[sample] seed 0 -> random {prev_seed}")
-                _, _last_p = sample_previews(turbo_path, sample_ae, prev_enc, load_file(tmp), sample_dir, epoch + 1,
-                                output_name=output_name, steps=sample_steps,
-                                cfg_scale=sample_cfg_scale, neg=encoded_negative, width=prev_w,
-                                height=prev_h, seed=prev_seed,
-                                context_lora_path=context_lora_path, context_lora_strength=context_lora_strength,
-                                blocks_to_swap=preview_blocks_to_swap, int8=preview_int8, device=device,
-                                prompts=prev_prompts)
-                if _last_p:
-                    _last_sample_prompt = _last_p
-                # This epoch's checkpoint (if one was saved above) went out with the PREVIOUS
-                # epoch's preview as its auto thumbnail — the preview didn't exist yet (#122).
-                # Re-embed its own now. Explicit --metadata_thumbnail is the user's and stays.
-                _ck = os.path.join(output_dir, f"{output_name}-{epoch + 1:06d}.safetensors")
-                if os.path.exists(_ck) and not (metadata_thumbnail or "").strip():
-                    _own = sample_for_epoch(output_dir, output_name, epoch + 1)
-                    if _own:
-                        refresh_checkpoint_thumbnail(_ck, _own)
-            except Exception as _prev_err:
-                # A preview failure — almost always CUDA OOM (the ~13 GB Turbo + the Qwen3-VL
-                # encoder won't fit alongside the parked training DiT on a small card) — must NEVER
-                # kill the run. Training and LoRA saving are independent of previews, so we log,
-                # disable previews for the rest of this run (so we don't re-OOM every sample epoch),
-                # and carry on. The training DiT is restored in the finally below.
-                _oom = "out of memory" in str(_prev_err).lower()
-                logger.warning(
-                    f"[preview] epoch {epoch + 1} preview failed "
-                    f"({'CUDA OOM — this card is too small for the Turbo preview' if _oom else type(_prev_err).__name__}); "
-                    f"disabling previews for the rest of the run. Training continues and LoRAs still save normally."
-                )
-                do_previews = False
-            finally:
-                gc.collect()
-                torch.cuda.empty_cache()
-                if blocks_to_swap > 0:
-                    # Re-establish the training placement (non-swap blocks -> GPU, swap blocks -> CPU).
-                    dit.move_to_device_except_swap_blocks(torch.device(device))
-                    dit.switch_block_swap_for_training()
-                else:
-                    dit.to(device)
-                if getattr(dit, "_nf4_quantized", False):
-                    # Restore the 4-bit packed weights + quant state to the GPU (they were parked
-                    # on CPU above; .to(device) doesn't touch them). NF4 forces blocks_to_swap=0.
-                    from fizgig.modules.nf4 import move_nf4_to_device
-                    move_nf4_to_device(dit, device)
-            dit.train()
-            network.train()
+        # This epoch's checkpoint (if one was saved above) went out with the PREVIOUS epoch's
+        # preview as its auto thumbnail — the preview didn't exist yet (#122). Re-embed its own
+        # now. An explicit --metadata_thumbnail is the user's and stays.
+        _ck = os.path.join(output_dir, f"{output_name}-{epoch + 1:06d}.safetensors")
+        if os.path.exists(_ck) and not (metadata_thumbnail or "").strip():
+            _own = sample_for_epoch(output_dir, output_name, epoch + 1)
+            if _own:
+                refresh_checkpoint_thumbnail(_ck, _own)
 
         progress_bar.start_t += time.time() - _preview_t0
         # Graceful pause (GUI wrote <output_dir>/.pause_requested): save a full resumable

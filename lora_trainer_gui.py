@@ -2824,9 +2824,6 @@ class LoRATrainerGUI:
             data["sample_ref_image"] = self.sample_ref_image_var.get()
         if hasattr(self, 'sample_frames_var'):
             data["sample_frames"] = self.sample_frames_var.get()
-        # Krea 2 preview engine (Samples tab) — stored canonical, not the display label
-        if hasattr(self, 'krea2_preview_engine_var'):
-            data["krea2_preview_engine"] = self._krea2_preview_engine()
         # Repair Studio / Explorer Setup fields (one shared table drives restore + save)
         for _attr, _key in self._WORKBENCH_REMEMBER:
             _var = getattr(self, _attr, None)
@@ -4084,8 +4081,8 @@ class LoRATrainerGUI:
 
         def _check_model_paths(*_args):
             # Hidden forever once dismissed; otherwise satisfied by EITHER family being
-            # usable — Klein's four paths, or Krea 2's training trio (the Turbo checkpoint
-            # is optional now that previews default to the Turbo LoRA).
+            # usable — Klein's four paths, or Krea 2's training trio (the Turbo checkpoint is
+            # only for the Repair Studio / Explorer / Royale tools; previews use the Turbo LoRA).
             if self.prefs.get("setup_prompt_dismissed"):
                 self._setup_prompt_frame.pack_forget()
                 return
@@ -13457,41 +13454,6 @@ class LoRATrainerGUI:
                  wraplength=600, justify=tk.LEFT)
         self.cache_sample_model_note.grid(row=5, column=0, columnspan=3, sticky=tk.W, pady=(0, 4))
 
-        # Krea 2 preview engine — lives HERE with the other sample-model choices (the Distilled
-        # toggle above is Klein's equivalent choice). Shown only in Krea 2 mode, via
-        # _apply_samples_klein_only. raw_lora: previews render on the resident training DiT
-        # with the Turbo LoRA @1.0 — identical 8-step CFG-free settings, no ~13 GB Turbo load,
-        # no parking the trainer to CPU per preview. turbo_model: classic checkpoint path.
-        self._KREA2_ENGINE_LABELS = {
-            "raw_lora": "RAW + Turbo LoRA (no model swapping — recommended)",
-            "turbo_model": "Turbo model (classic — loads the fp8 Turbo each preview)",
-        }
-        _eng_saved = str(self.last_used.get("krea2_preview_engine", "raw_lora"))
-        if _eng_saved not in self._KREA2_ENGINE_LABELS:
-            _eng_saved = "raw_lora"
-        self.krea2_preview_engine_var = tk.StringVar(value=self._KREA2_ENGINE_LABELS[_eng_saved])
-        self.krea2_engine_frame = tk.Frame(freq_card, bg=COLORS["bg_surface"])
-        tk.Label(self.krea2_engine_frame, text="Krea 2 preview engine:", font=(FONT_FAMILY, 10),
-                 fg=COLORS["text_secondary"], bg=COLORS["bg_surface"]).pack(side=tk.LEFT, padx=(0, 8))
-        _eng_combo = ttk.Combobox(self.krea2_engine_frame, textvariable=self.krea2_preview_engine_var,
-                                  state="readonly", width=52,
-                                  values=list(self._KREA2_ENGINE_LABELS.values()))
-        _eng_combo.pack(side=tk.LEFT)
-        _eng_combo.bind("<<ComboboxSelected>>", lambda e: self._save_last_used_paths())
-        ToolTip(_eng_combo,
-                "RAW + Turbo LoRA renders previews on the training model itself with the Turbo\n"
-                "distillation LoRA applied at 1.0 — same 8-step CFG-free settings as the Turbo\n"
-                "model, but nothing is loaded or moved between epochs. The LoRA auto-downloads\n"
-                "(~470 MB) if missing. The classic mode loads the fp8 Turbo checkpoint per preview.")
-        self.krea2_engine_note = tk.Label(
-            freq_card,
-            text="Renders previews on the model already training, with the official Turbo LoRA "
-                 "switched on just for the render — nothing loaded or moved between epochs. The "
-                 "classic mode loads the ~13 GB Turbo checkpoint per preview instead.",
-            font=(FONT_FAMILY, 9, "italic"), fg=COLORS["text_explain"], bg=COLORS["bg_surface"],
-            wraplength=600, justify=tk.LEFT)
-        # Gridded (rows 6-7) / removed by _apply_samples_klein_only; hidden by default (Klein).
-
         # Card 3: Architecture-Specific (Flow Shift / Guidance / Negative / CFG)
         arch_card = self._start_section_card(
             self.sample_settings_frame, "Advanced",
@@ -14011,30 +13973,21 @@ class LoRATrainerGUI:
             if _w is not None and _w.winfo_manager():
                 _w.pack_forget()
 
-        # "Use Distilled model for samples" checkbox — Klein's sample-model choice. Krea 2's
-        # equivalent choice is the Preview engine dropdown, shown right below in Krea 2 mode.
+        # "Use Distilled model for samples" checkbox — Klein's sample-model choice. Krea 2 always
+        # previews on the training model with the Turbo LoRA.
         if hasattr(self, "use_distilled_check"):
             self.use_distilled_check.configure(
                 state=(tk.DISABLED if is_krea2 else tk.NORMAL),
-                text=("Use Distilled model for samples — Klein only (Krea 2: pick a preview engine below)"
+                text=("Use Distilled model for samples — Klein only (Krea 2 previews use the Turbo LoRA)"
                       if is_krea2 else
                       "Use Distilled model for samples (4-step, matches ComfyUI)"))
 
         # Steps note
         if hasattr(self, "sample_steps_note"):
             self.sample_steps_note.configure(
-                text=("Klein only — Krea 2 previews are 8-step either way (engine choice below)"
+                text=("Klein only — Krea 2 previews are 8-step with the Turbo LoRA"
                       if is_krea2 else
                       "Base samples only — Distilled is locked at 4 steps"))
-
-        # Krea 2 preview engine dropdown + note (rows 6-7 of the cadence card) — Krea 2 only.
-        if hasattr(self, "krea2_engine_frame"):
-            if is_krea2:
-                self.krea2_engine_frame.grid(row=6, column=0, columnspan=3, sticky=tk.W, pady=(8, 0))
-                self.krea2_engine_note.grid(row=7, column=0, columnspan=3, sticky=tk.W, pady=(0, 4))
-            else:
-                self.krea2_engine_frame.grid_remove()
-                self.krea2_engine_note.grid_remove()
 
         # Reference image — supported by BOTH families now (Klein: edit conditioning; Krea 2:
         # Qwen3-VL vision path). Always enabled; only the note differs. No strength dial on this
@@ -14149,9 +14102,6 @@ class LoRATrainerGUI:
                        f"standard one") if speed_on else
                       f"{desc.display_name}: {desc.preview_steps} steps at CFG {desc.preview_cfg:g}"
                       + (f" - set the {sp.name} in Preferences for {sp_steps}-step previews" if sp else "")))
-        if hasattr(self, "krea2_engine_frame"):
-            self.krea2_engine_frame.grid_remove()
-            self.krea2_engine_note.grid_remove()
         # the reference row: live where the family's previews see a picture (Krea 2's vision path)
         if hasattr(self, "sample_ref_entry"):
             self.sample_ref_entry.configure(state=("readonly" if desc.preview_image else tk.DISABLED))
@@ -20216,7 +20166,7 @@ class LoRATrainerGUI:
         )
         kr = self._add_pref_row(
             krea_card, kr, "Turbo DiT (fp8):", "krea2_turbo_dit",
-            "Krea 2 Turbo, pre-quantized fp8 (ComfyUI) — fast previews + inference (8-step, CFG-free)",
+            "Krea 2 Turbo, pre-quantized fp8 (ComfyUI) — Repair Studio, LoRA the Explorer and LoRA Royale (8-step, CFG-free)",
             download_url="https://huggingface.co/Comfy-Org/Krea-2/blob/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors",
             download_note="~13GB fp8 — Comfy-Org/Krea-2 → diffusion_models/krea2_turbo_fp8_scaled.safetensors",
         )
@@ -20242,9 +20192,8 @@ class LoRATrainerGUI:
         )
         kr = self._add_pref_row(
             krea_card, kr, "Turbo LoRA (rank 64):", "krea2_turbo_lora",
-            "Turbo distillation as a LoRA — RAW + this at strength 1.0 samples like the Turbo model "
-            "(same 8-step CFG-free settings), letting previews run on the training DiT without loading "
-            "the separate Turbo checkpoint",
+            "Turbo distillation as a LoRA — in-training previews: RAW + this at strength 1.0 samples like "
+            "the Turbo model (8-step, CFG-free) on the training model itself. Downloaded at Start if missing",
             download_url="https://huggingface.co/Comfy-Org/Krea-2/blob/main/loras/krea2_turbo_lora_rank_64_bf16.safetensors",
             download_note="~470MB bf16 — Comfy-Org/Krea-2 → loras/krea2_turbo_lora_rank_64_bf16.safetensors",
         )
@@ -32816,20 +32765,13 @@ class LoRATrainerGUI:
                             f"before training — each subject needs its own trigger word in "
                             f"every caption, or they will blend.")
         elif config.get("is_krea2"):
-            # Krea 2 reads its own four model paths from Preferences (krea2_*). The
-            # Turbo DiT is only required when in-training previews are enabled.
+            # Krea 2 reads its training model paths from Preferences (krea2_*). Previews use the
+            # Turbo LoRA, auto-downloaded at Start if missing, so nothing more is required.
             krea2_required = [
                 ("krea2_raw_dit", "Krea 2 RAW DiT"),
                 ("krea2_vae", "Qwen-Image VAE"),
                 ("krea2_text_encoder", "Qwen3-VL-4B text encoder"),
             ]
-            if self.sample_enabled_var.get():
-                # raw_lora engine renders previews on the training DiT + Turbo LoRA — the LoRA
-                # is auto-downloaded at training start if missing, so nothing is hard-required
-                # here (a failed download degrades to no previews, with console messages, never
-                # a blocked run). The classic engine still needs the Turbo checkpoint.
-                if self._krea2_preview_engine() != "raw_lora":
-                    krea2_required.append(("krea2_turbo_dit", "Krea 2 Turbo DiT (fp8) — needed for previews"))
             for pref_key, label in krea2_required:
                 path = self._krea2_pref(pref_key)
                 if not path:
@@ -33984,20 +33926,6 @@ class LoRATrainerGUI:
         var = self.prefs_vars.get(key)
         return var.get().strip() if var is not None else ""
 
-    def _krea2_preview_engine(self) -> str:
-        """Canonical Samples-tab preview engine for Krea 2: 'raw_lora' or 'turbo_model'.
-
-        The combobox holds a display label; this maps it back. Unknown/missing -> 'raw_lora'
-        (the default): renders previews on the resident training DiT with the Turbo LoRA @1.0
-        instead of loading the Turbo checkpoint and parking the trainer to CPU."""
-        var = getattr(self, "krea2_preview_engine_var", None)
-        if var is not None:
-            label = var.get()
-            for key, text in self._KREA2_ENGINE_LABELS.items():
-                if label == text:
-                    return key
-        return "raw_lora"
-
     def _krea2_script(self, name: str) -> str:
         return os.path.join(FIZGIG_DIR, "src", "fizgig", "scripts", name)
 
@@ -34392,47 +34320,35 @@ class LoRATrainerGUI:
                     "--sample_width", width,
                     "--sample_height", height,
                     "--sample_seed", sample_seed,
-                    "--turbo_dit", self._krea2_pref("krea2_turbo_dit"),
                     "--vae", self._krea2_pref("krea2_vae"),
                     "--text_encoder", self._krea2_pref("krea2_text_encoder"),
-                    # Forward-only block swap on the preview Turbo, auto-detected for the Turbo's
-                    # VRAM profile so previews fit the card — mirrors Klein's Distilled sample swap.
-                    # (Ignored in raw_lora engine mode — that path uses the training placement.)
-                    "--preview_blocks_to_swap", str(self._auto_krea2_inference_blocks_swap()),
                 ]
-                # Preview engine (Samples tab): raw_lora renders on the resident training DiT
-                # with the Turbo LoRA @1.0 — no Turbo checkpoint load, no CPU parking. The
-                # trainer prefers --turbo_lora over --turbo_dit when both are given, and falls
-                # back to the Turbo checkpoint by itself if the LoRA file has gone missing.
-                # Under a fine-tune the Turbo LoRA is REQUIRED for previews (the trained
-                # weights live in the base, which the standalone Turbo can't show), so the
-                # engine preference is overridden and the LoRA travels regardless.
-                if (self._krea2_preview_engine() == "raw_lora"
-                        or bool(self.krea2_finetune_var.get())):
-                    _tlora = self._krea2_pref("krea2_turbo_lora")
-                    if not _tlora or not os.path.isfile(_tlora):
-                        # First use after an update: fetch it now (~470 MB, idempotent — the
-                        # update script usually gets there first) and populate the pref.
-                        try:
-                            import sys as _sys
-                            _sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
-                            from fizgig.scripts.fetch_turbo_lora import ensure_turbo_lora
-                            self.update_console("[preview] Turbo LoRA not set — downloading it "
-                                                "now (one-time, ~470 MB)...\n")
-                            _tlora = ensure_turbo_lora(
-                                log=lambda m: self.update_console(f"[preview] {m}\n"),
-                                require=True)
-                            if _tlora and "krea2_turbo_lora" in self.prefs_vars:
-                                self.prefs_vars["krea2_turbo_lora"].set(_tlora)
-                        except Exception:
-                            _tlora = None
-                    if _tlora:
-                        cmd += ["--turbo_lora", _tlora]
-                    else:
-                        self.update_console(
-                            "[preview] Turbo LoRA unavailable (download failed?) — using the "
-                            "classic Turbo model for previews this run. Set the path in "
-                            "Preferences or re-run update_fizgig.bat.\n")
+                # Previews render on the resident training DiT with the Turbo LoRA @1.0 — the
+                # only preview engine (the Turbo checkpoint stays for Repair Studio, the Explorer
+                # and Royale).
+                _tlora = self._krea2_pref("krea2_turbo_lora")
+                if not _tlora or not os.path.isfile(_tlora):
+                    # First use after an update: fetch it now (~470 MB, idempotent — the
+                    # update script usually gets there first) and populate the pref.
+                    try:
+                        import sys as _sys
+                        _sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+                        from fizgig.scripts.fetch_turbo_lora import ensure_turbo_lora
+                        self.update_console("[preview] Turbo LoRA not set — downloading it "
+                                            "now (one-time, ~470 MB)...\n")
+                        _tlora = ensure_turbo_lora(
+                            log=lambda m: self.update_console(f"[preview] {m}\n"),
+                            require=True)
+                        if _tlora and "krea2_turbo_lora" in self.prefs_vars:
+                            self.prefs_vars["krea2_turbo_lora"].set(_tlora)
+                    except Exception:
+                        _tlora = None
+                if _tlora:
+                    cmd += ["--turbo_lora", _tlora]
+                else:
+                    self.update_console(
+                        "[preview] Turbo LoRA unavailable (download failed?) — previews are "
+                        "off this run. Set its path in Preferences or re-run the updater.\n")
                 # Steps / CFG / Negative / Sample-at-Start — previously visible on the Samples
                 # tab but never wired into krea2_train.
                 _st = self.sample_steps_var.get().strip()
@@ -34450,9 +34366,6 @@ class LoRATrainerGUI:
                     cmd += ["--sample_negative", _negp]
                 if _at_first:
                     cmd.append("--sample_at_first")
-                # INT8 fast preview matmul — same app-wide 'INT8 fast inference' toggle as the workbench.
-                if self._get_inference_int8():
-                    cmd.append("--preview_int8")
                 if prompt_file:
                     cmd += ["--sample_prompts", prompt_file]
                 if ref_img:

@@ -1,7 +1,7 @@
 """Krea 2 LoRA training CLI (wraps fizgig.krea2.trainer.train_krea2).
 
 The GUI drives the full run as three steps: krea2_cache_latents -> krea2_cache_text -> krea2_train.
-Trains on the RAW model; previews render on the fp8 Turbo (--turbo_dit) with the live LoRA.
+Trains on the RAW model; previews render on it with the Turbo LoRA (--turbo_lora) and the live LoRA.
 """
 
 import argparse
@@ -104,8 +104,7 @@ def setup_parser() -> argparse.ArgumentParser:
                    help="Slider mode: concentrate the loss where the pair differs (0-1). "
                         "1.0 = full disentanglement weighting; 0 = uniform")
     p.add_argument("--seed", type=int, default=42)
-    # previews (sample the fp8 Turbo with the live LoRA)
-    p.add_argument("--turbo_dit", default=None, help="Pre-quant fp8 Turbo for previews")
+    # previews (the training DiT with the Turbo LoRA and the live LoRA)
     p.add_argument("--turbo_lora", default=None,
                    help="Turbo distillation LoRA (rank 64) — previews render on the resident "
                         "training DiT with this at strength 1.0 instead of loading the Turbo "
@@ -137,10 +136,6 @@ def setup_parser() -> argparse.ArgumentParser:
     p.add_argument("--metadata_thumbnail", default=None,
                    help="Path to an image to embed as modelspec.thumbnail. Omit to "
                         "auto-use the latest sample preview; pass 'off' to disable.")
-    p.add_argument("--preview_blocks_to_swap", type=int, default=0,
-                   help="Forward-only block swap on the preview Turbo (fits smaller cards)")
-    p.add_argument("--preview_int8", action="store_true",
-                   help="INT8 (W8A8) fast matmul for the preview Turbo (experimental, same VRAM as fp8)")
     p.add_argument("--resume", default=None, help="Path to a <name>-NNNNNN-state dir to resume from")
     p.add_argument("--context_lora_path", default=None, help="Frozen+active context LoRA on the base")
     p.add_argument("--context_lora_strength", type=float, default=1.0)
@@ -260,7 +255,7 @@ def main():
         motion_weighted_loss=args.motion_weighted_loss,
         slider_pairs=args.slider_pairs,
         slider_diff_weight=args.slider_diff_weight,
-        sample_prompts=prompts, turbo_path=args.turbo_dit, turbo_lora_path=args.turbo_lora,
+        sample_prompts=prompts, turbo_lora_path=args.turbo_lora,
         vae_path=args.vae, te_path=args.text_encoder,
         sample_every_n_epochs=args.sample_every_n_epochs,
         sample_width=args.sample_width, sample_height=args.sample_height,
@@ -273,8 +268,6 @@ def main():
         metadata_license=args.metadata_license, metadata_tags=args.metadata_tags,
         metadata_trigger_phrase=args.metadata_trigger_phrase or args.trigger_word,
         metadata_thumbnail=args.metadata_thumbnail,
-        preview_blocks_to_swap=args.preview_blocks_to_swap,
-        preview_int8=args.preview_int8,
         resume_state_dir=args.resume,
         context_lora_path=args.context_lora_path, context_lora_strength=args.context_lora_strength,
         adaptive_lr=args.adaptive_lr,

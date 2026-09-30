@@ -46,7 +46,7 @@ Every script supports `--help` for the full argument list. This document covers 
 
 ## Model files: where they come from, where they go
 
-Headless, there is no Preferences tab: **model locations are passed as flags on every command** (`--dit`, `--vae`, `--text_encoder`, for Krea 2 previews `--turbo_dit`, for MiniMax H3 `--audio_vae`, `--turbo_lora_path` and `--training_adapter_path`, for Qwen Image 2.1 `--speed_lora` and `--training_adapter`). The CLI does not read the GUI's `prefs.json` — put the paths in a shell script or Makefile once and forget about them. The files themselves are the same ones the GUI's Preferences tab links to:
+Headless, there is no Preferences tab: **model locations are passed as flags on every command** (`--dit`, `--vae`, `--text_encoder`, for Krea 2 previews `--turbo_lora`, for MiniMax H3 `--audio_vae`, `--turbo_lora_path` and `--training_adapter_path`, for Qwen Image 2.1 `--speed_lora` and `--training_adapter`). The CLI does not read the GUI's `prefs.json` — put the paths in a shell script or Makefile once and forget about them. The files themselves are the same ones the GUI's Preferences tab links to:
 
 **Klein 9B:**
 
@@ -65,7 +65,7 @@ Headless, there is no Preferences tab: **model locations are passed as flags on 
 | File | Download | Used for |
 |---|---|---|
 | RAW DiT | [krea2_raw_bf16.safetensors](https://huggingface.co/Comfy-Org/Krea-2/blob/main/diffusion_models/krea2_raw_bf16.safetensors) | training (`--dit`) |
-| fp8 Turbo DiT | [krea2_turbo_fp8_scaled.safetensors](https://huggingface.co/Comfy-Org/Krea-2/blob/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors) | 8-step previews (`--turbo_dit`) |
+| Turbo LoRA | [krea2_turbo_lora_rank_64_bf16.safetensors](https://huggingface.co/Comfy-Org/Krea-2/blob/main/loras/krea2_turbo_lora_rank_64_bf16.safetensors) | 8-step previews (`--turbo_lora`) |
 | VAE `qwen_image_vae.safetensors` | [Krea-2 → vae](https://huggingface.co/Comfy-Org/Krea-2/blob/main/vae/qwen_image_vae.safetensors) | `--vae` |
 | Text encoder `qwen3vl_4b_bf16.safetensors` | [Krea-2 → text_encoders](https://huggingface.co/Comfy-Org/Krea-2/blob/main/text_encoders/qwen3vl_4b_bf16.safetensors) | `--text_encoder` |
 
@@ -365,7 +365,7 @@ python src/fizgig/scripts/krea2_train.py \
   --auto_recaption \
   --warmup_look_outliers \
   --trigger_word ohwx \
-  --turbo_dit /models/krea2-turbo-fp8.safetensors \
+  --turbo_lora /models/krea2_turbo_lora_rank_64_bf16.safetensors \
   --vae /models/qwen_image_vae.safetensors \
   --text_encoder /models/qwen3vl_4b_bf16.safetensors \
   --sample_prompts sample_prompts.txt \
@@ -395,7 +395,7 @@ The Krea 2 parser is small enough to know in full: run `krea2_train.py --help`. 
 - `--quantize_4bit` — NF4 4-bit frozen base, ~5.6 GB DiT residency, fits 10-12 GB cards (block swap forced off).
 - `--quant_int8 bf16` — INT8 W8A8 frozen base: ~18.6 GB, so it needs a 24 GB card, and in exchange it is both the fastest option measured (0.637 s/it vs NF4's 0.709 on an RTX 5090) and ~7× more accurate than NF4 in forward error, since 8 bits beat 4. `bf16` keeps gradients exact; `int8` quantises the backward too — faster again, lossier. The GUI picks this automatically when there is free VRAM for it; on the CLI it is opt-in. Mutually exclusive with `--quantize_4bit`. Block swap is force-zeroed under INT8 (the staged quantise makes the model fully resident anyway).
 - `--compile_blocks auto|on|outside|off` — torch.compile the transformer blocks (`outside` = the high-resolution boundary: checkpoint kept outside the compiled region, eager-level memory, chosen automatically by `auto`/`on` where inside-the-graph would not fit): roughly **2× faster steady-state steps** on the INT8 path after a one-off warm-up (~90 s + a pause on each new latent shape). `auto` (default) weighs the warm-up against the run length and only compiles when it pays. Needs triton (installs with requirements; `triton-windows` on Windows) and, on Windows, the MSVC C++ Build Tools — direct installer: https://aka.ms/vs/17/release/vs_BuildTools.exe ("Desktop development with C++" workload). Missing either → a console note and the run continues uncompiled.
-- `--blocks_to_swap` — see [VRAM guidance](#vram-guidance-block-swap). `--preview_blocks_to_swap` is the separate, forward-only swap for the preview Turbo. **Swapping is the slow path** (4.4× the time, 4× the CPU): quantise first, and only swap when even NF4 will not fit.
+- `--blocks_to_swap` — see [VRAM guidance](#vram-guidance-block-swap). **Swapping is the slow path** (4.4× the time, 4× the CPU): quantise first, and only swap when even NF4 will not fit.
 
 **The per-image loss watch** (any of these enables the watcher)
 
@@ -591,7 +591,7 @@ Recognized: `--w` width, `--h` height, `--d` seed, `--s` steps, `--g` guidance (
 
 Pass `--sample_dit <distilled>` to render previews on the Distilled model (4-step, fast) instead of the training Base; `--sample_blocks_to_swap` gives the sample model its own swap setting.
 
-**Krea 2** prompt files are plain prompts only; geometry and seed come from `--sample_width` / `--sample_height` / `--sample_seed`, and previews render on the fp8 Turbo (`--turbo_dit`; `--sample_steps`, default 8). `--sample_cfg_scale` above 1 enables CFG on the previews — pair it with `--sample_negative` for a real uncond (with CFG at 1.0 a negative is ignored, with a log note). `--sample_at_first` renders an epoch-0 preview (base + zero-init LoRA) before training, and works even with `--sample_every_n_epochs 0`. `--sample_ref_image` enables the Qwen3-VL vision path (generate driven by a reference picture; works even with an empty prompt file). `--metadata_title/author/description/license/tags` are recorded in the saved LoRA as `modelspec.*` keys.
+**Krea 2** prompt files are plain prompts only; geometry and seed come from `--sample_width` / `--sample_height` / `--sample_seed`, and previews render on the training model with the Turbo LoRA (`--turbo_lora`; `--sample_steps`, default 8). `--sample_cfg_scale` above 1 enables CFG on the previews — pair it with `--sample_negative` for a real uncond (with CFG at 1.0 a negative is ignored, with a log note). `--sample_at_first` renders an epoch-0 preview (base + zero-init LoRA) before training, and works even with `--sample_every_n_epochs 0`. `--sample_ref_image` enables the Qwen3-VL vision path (generate driven by a reference picture; works even with an empty prompt file). `--metadata_title/author/description/license/tags` are recorded in the saved LoRA as `modelspec.*` keys.
 
 **MiniMax H3** prompt files are plain prompts too. Previews are clips: `--sample_frames` sets the length on the model's 17n+5 frame grid (1 = a still, 56 ≈ 2.3 s, 124 = the trained minimum of ~5 s; off-grid values snap down), `--sample_audio` with `--audio_vae` decodes the clip's generated sound to a `.wav` beside the `.mp4`, and `--turbo_lora_path` with `--sample_steps 6` renders on the Turbo LoRA at `--turbo_lora_strength 0.75` (20 steps without it, matching ComfyUI's shipped template). `--sample_width/height` default to H3's native 768. The training adapter is switched off for previews; a Context LoRA stays on. Rendering a 56-frame clip every epoch costs more than the epoch's training on a small dataset — set `--sample_every_n_epochs` higher, or preview stills, when speed is the point.
 
