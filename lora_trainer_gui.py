@@ -3616,7 +3616,7 @@ class LoRATrainerGUI:
                 ("To update: close Fizgig and run update_fizgig_rocm.bat."
                  if os.environ.get("FIZGIG_GPU_BACKEND", "").lower() == "rocm" else
                  "To update: close Fizgig and run update_fizgig.bat."))
-        tk.Label(pad, text=_how, font=(FONT_FAMILY, 9), fg=COLORS["text_muted"],
+        tk.Label(pad, text=_how, font=(FONT_FAMILY, 9), fg=COLORS["text_explain"],
                  bg=COLORS["bg_deep"], wraplength=WRAP, justify=tk.LEFT).pack(
             anchor=tk.W, pady=(0, 10))
 
@@ -7099,7 +7099,7 @@ class LoRATrainerGUI:
         ttk.Button(foot, text="Clear queue", command=self._queue_clear_all).pack(side=tk.LEFT, padx=(12, 0))
         tk.Label(foot, text="Queued runs start automatically when the current run finishes cleanly. "
                             "After a failure, a Stop, or an app restart, the queue waits for you.",
-                 font=(FONT_FAMILY, 8), bg=COLORS["bg_deep"], fg=COLORS["text_explain"],
+                 font=(FONT_FAMILY, 9), bg=COLORS["bg_deep"], fg=COLORS["text_explain"],
                  wraplength=420, justify=tk.LEFT).pack(side=tk.RIGHT)
         self._render_queue_window()
 
@@ -7245,8 +7245,8 @@ class LoRATrainerGUI:
             tk.Label(txt, text=f"{badge}  —  {name}", font=(FONT_FAMILY, 11, "bold"),
                      bg=COLORS["bg_surface"], fg=COLORS["accent"], anchor="w",
                      wraplength=520, justify=tk.LEFT).pack(anchor=tk.W)
-            tk.Label(txt, text=summary.split("\n")[0], font=(FONT_FAMILY, 8),
-                     bg=COLORS["bg_surface"], fg=COLORS["text_muted"], anchor="w",
+            tk.Label(txt, text=summary.split("\n")[0], font=(FONT_FAMILY, 9),
+                     bg=COLORS["bg_surface"], fg=COLORS["text_explain"], anchor="w",
                      wraplength=520, justify=tk.LEFT).pack(anchor=tk.W)
             abtn = tk.Button(act, text="✎", font=(FONT_FAMILY, 10), width=3,
                              bg=COLORS["bg_surface"], fg=COLORS["text_primary"],
@@ -7302,8 +7302,8 @@ class LoRATrainerGUI:
             tk.Label(txt, text=f"{i + 1}.  {name}", font=(FONT_FAMILY, 11, "bold"),
                      bg=COLORS["bg_surface"], fg=COLORS["text_primary"], anchor="w",
                      wraplength=520, justify=tk.LEFT).pack(anchor=tk.W)
-            tk.Label(txt, text=summary, font=(FONT_FAMILY, 8),
-                     bg=COLORS["bg_surface"], fg=COLORS["text_muted"], anchor="w",
+            tk.Label(txt, text=summary, font=(FONT_FAMILY, 9),
+                     bg=COLORS["bg_surface"], fg=COLORS["text_explain"], anchor="w",
                      wraplength=520, justify=tk.LEFT).pack(anchor=tk.W)
 
             def _mk(parent, label, cmd, tip):
@@ -7394,7 +7394,7 @@ class LoRATrainerGUI:
         "SAMPLE_ENABLED", "SAMPLE_WIDTH", "SAMPLE_HEIGHT", "SAMPLE_STEPS",
         "SAMPLE_SEED", "SAMPLE_EVERY_N_EPOCHS", "SAMPLE_EVERY_N_STEPS",
         "SAMPLE_AT_FIRST", "SAMPLE_FLOW_SHIFT",
-        "SAMPLE_NEGATIVE", "SAMPLE_CFG_SCALE",
+        "SAMPLE_NEGATIVE", "SAMPLE_CFG_SCALE", "SAMPLE_FRAMES",
         "MINIMAX_TURBO_STEPS", "MINIMAX_TURBO_STRENGTH",
         "RESUME_TRAINING",
     }
@@ -19785,7 +19785,7 @@ class LoRATrainerGUI:
                 text=("Takes effect for the next training run straight away. The in-app tools "
                       "(Repair Studio, Explorer, Royale, Profiler, Extract) hold on to the card "
                       "they started with, so restart Fizgig to move those."),
-                font=(FONT_FAMILY, 9), fg=COLORS["text_muted"], bg=COLORS["bg_surface"],
+                font=(FONT_FAMILY, 9), fg=COLORS["text_explain"], bg=COLORS["bg_surface"],
                 wraplength=720, justify=tk.LEFT)
             _gpu_note.grid(row=1, column=1, sticky=tk.W, pady=(0, 4))
             if os.environ.get("CUDA_VISIBLE_DEVICES") and not str(
