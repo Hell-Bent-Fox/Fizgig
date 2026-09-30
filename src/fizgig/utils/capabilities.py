@@ -219,17 +219,24 @@ _INT8_PEAK_GB = 16.2
 # Smaller than it looks: the budget is FREE VRAM, which already excludes whatever else is
 # resident, so this only has to cover allocator slack and fragmentation.
 _HEADROOM_GB = 1.5
+# NF4 keeps less: the measured peaks already include the allocator's cached memory, and NF4 cannot
+# swap, so its only fallback is fp8 + swap at ~4x the step time. At 1.5 a 16 GB card with a browser
+# open fell off NF4 at 1 MP although NF4 fits there (13.4 GB peak under a 16 GB cap, previews on).
+_NF4_HEADROOM_GB = 1.0
 
 # Run-shape terms, measured on a 5090 (36-image grid, 28 Jul 2026; whole-GPU peaks minus the
 # ~1 GB desktop baseline; gradient checkpointing on, as the trainers force):
 #   batch      +2.4 GB per extra image — flat across 0.25–1.05 MP, and by far the largest
 #              term (the old single-constant budget's blind spot: batch 2 sailed through the
 #              check and OOM'd).
-#   resolution +0.15 GB from 0.25 → 1.05 MP at batch 1 (checkpointing absorbs it); budgeted
-#              at 0.25 GB/MP for slack.
 #   rank       +0.35 GB from r8 → r32 (~15 MB/rank); bases are measured AT rank 32.
+# Resolution, per base (30 Sep 2026, 5090, full-size photos with buckets at 0.98 MP, rank 8, previews
+# off, whole-GPU above idle): 0.25 → 0.98 MP grew NF4 10.5 → 13.2, INT8 15.1 → 17.7, fp8 17.5 →
+# 22.0 GB. The slopes run from the 0.25 MP bases above to those 1 MP peaks (+ the rank-32 term).
+# The earlier single 0.25 GB/MP ("+0.15 GB, checkpointing absorbs it") planned 1 MP runs 2.5-4 GB
+# light: INT8 on 18-20 GB cards and fp8 + swap everywhere ran out.
 _BATCH_GB_PER_IMAGE = 2.4
-_RES_GB_PER_MP = 0.25
+_RES_GB_PER_MP = {"nf4": 3.0, "int8": 2.6, "fp8": 5.1}
 _RANK_GB_PER_RANK = 0.015
 
 # Block swap: GB of peak removed per swapped block, measured on the real trainer under an
@@ -274,10 +281,13 @@ def _lokr_extra_gb(factor: int) -> float:
 def estimate_krea2_peak(base_gb: float, mp: float = 0.25, batch: int = 1,
                         rank: int = 32, network_type: str = "lora",
                         lokr_factor: int = 8) -> float:
-    """Peak VRAM estimate for a Krea 2 run of this shape (base measured at 0.25 MP, b1, r32)."""
+    """Peak VRAM estimate for a Krea 2 run of this shape (base measured at 0.25 MP, b1, r32). The
+    resolution slope follows the base; an unknown base takes the steepest."""
+    kind = {_NF4_PEAK_GB: "nf4", _INT8_PEAK_GB: "int8", _FP8_PEAK_GB: "fp8"}.get(base_gb)
+    res = _RES_GB_PER_MP[kind] if kind else max(_RES_GB_PER_MP.values())
     return (base_gb
             + _BATCH_GB_PER_IMAGE * max(0, int(batch) - 1)
-            + _RES_GB_PER_MP * max(0.0, float(mp) - 0.25)
+            + res * max(0.0, float(mp) - 0.25)
             + _RANK_GB_PER_RANK * max(0, int(rank) - 32)
             + (_lokr_extra_gb(lokr_factor) if network_type == "lokr" else 0.0))
 
@@ -539,7 +549,7 @@ def recommend_krea2_strategy(vram_gb: Optional[float] = None,
             if force_quant == "nf4":
                 # NF4 cannot block-swap: the weights live in `_nf4_packed`, which the offloader
                 # cannot move, and the trainer force-zeroes blocks_to_swap under 4-bit.
-                fits = need + _HEADROOM_GB <= vram
+                fits = need + _NF4_HEADROOM_GB <= vram
                 return MemoryStrategy(
                     True, 0,
                     f"NF4 4-bit as you set it (~{need:.0f} GB needed, {vram:.1f} GB free)"
@@ -583,7 +593,7 @@ def recommend_krea2_strategy(vram_gb: Optional[float] = None,
             "fastest measured, and ~7x more accurate than NF4 (8-bit vs 4-bit)",
             quant_int8="bf16")
 
-    if caps.bitsandbytes and vram >= _nf4_need + _HEADROOM_GB:
+    if caps.bitsandbytes and vram >= _nf4_need + _NF4_HEADROOM_GB:
         return MemoryStrategy(
             True, 0,
             f"NF4 4-bit, no block swap (~{_nf4_need:.0f} GB needed at this run shape, {vram:.1f} GB free) — "
