@@ -131,6 +131,9 @@ class FamilyDescription:
     # what Auto may choose, in order ((): every offered precision, most precise first). Krea 2: INT8, then NF4 - its
     # original trainer's order; bf16 stays a manual choice
     auto_precisions: tuple = ()
+    # the driver can torch.compile its blocks (FamilyDriver.compile_blocks); the Training tab's Compile Blocks
+    # control shows and the launch sends --compile_blocks
+    compiles: bool = False
     # measured training memory for the Auto plan: {precision: (peak GB with no block swap, GB saved per swapped
     # block)}; the peak may instead be ((megapixels, GB), ...) points, interpolated for the run's resolution.
     # {} = Auto just takes the first precision

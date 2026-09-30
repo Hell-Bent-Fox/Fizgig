@@ -37,6 +37,11 @@ class Krea2Driver(FamilyDriver):
     # driver run starts from the same INT8 weights as a Krea 2 run.
     int8_fp32_scales = False
 
+    def compile_blocks(self, dit, boundary="inside", blocks_to_swap=0):
+        # the original's per-block compile, with its guards (block swap, triton, host compiler, fp8 on pre-Ada)
+        from fizgig.krea2.trainer import _compile_blocks
+        _compile_blocks(dit, blocks_to_swap, fp8_scaled=False, boundary=boundary)
+
     # ---- models ---------------------------------------------------------------------------------
     def load_dit(self, path, device):
         from fizgig.krea2.utils import load_krea2_dit

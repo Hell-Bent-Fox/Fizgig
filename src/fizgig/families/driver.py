@@ -158,6 +158,12 @@ class FamilyDriver:
         """Dotted module names (relative to dit) of the Linears a LoRA wraps: every module in the block map."""
         return [m for g in self.block_map(dit) for b in g.blocks for m in b.modules]
 
+    def compile_blocks(self, dit, boundary: str = "inside", blocks_to_swap: int = 0) -> None:
+        """torch.compile the transformer blocks, in place, after every adapter has patched the forwards. `boundary`
+        places the gradient checkpoint inside or outside the compiled region. Only for descriptions with
+        compiles=True; a driver refuses (logs, runs eager) what it cannot compile."""
+        raise NotImplementedError
+
     def quant_target_names(self, dit) -> list:
         """The Linears an INT8 / NF4 base quantises (families/quant.py). Default: the LoRA targets. A family whose
         LoRA reaches layers that must stay bf16 (Krea 2's text fusion and I/O layers) narrows it."""

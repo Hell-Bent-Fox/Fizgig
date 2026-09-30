@@ -292,6 +292,10 @@ def train_command(desc, inputs, plan):
                 cmd += ["--lr_warmup_steps", str(int(float(st["LR_WARMUP_STEPS"])))]
         except ValueError:
             pass
+    if desc.compiles:
+        cb = str(st.get("COMPILE_BLOCKS", "auto") or "auto").lower()
+        if cb in ("auto", "on", "off", "outside"):
+            cmd += ["--compile_blocks", cb]
     try:
         if int(float(str(st.get("GRADIENT_ACCUMULATION", "") or 1))) > 1:
             cmd += ["--gradient_accumulation_steps", str(int(float(st["GRADIENT_ACCUMULATION"])))]

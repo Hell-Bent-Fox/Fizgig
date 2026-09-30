@@ -386,7 +386,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  resume_state_dir=None, adaptive_lr=False, adaptive_lr_min=1e-4, adaptive_lr_max=2e-4,
                  max_grad_norm=1.0, ema_decay=0.0, optimizer_type="adamw", optimizer_args="",
                  lr_scheduler="constant", lr_warmup_steps=0, lr_scheduler_num_cycles=1, lr_scheduler_power=1.0,
-                 gradient_accumulation_steps=1, gradient_checkpointing=True, blocks_to_swap=0, network_type="lora", lokr_factor=8,
+                 gradient_accumulation_steps=1, compile_blocks="auto", gradient_checkpointing=True, blocks_to_swap=0, network_type="lora", lokr_factor=8,
                  log_per_image_loss=False, per_image_lr=False, auto_recaption=False, warmup_look_outliers=False,
                  trigger_word=None, trigger_position="start", recaption_instruction=None,
                  recaption_instruction_detailed=None, captioner=None):
@@ -488,6 +488,32 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         precision, blocks_to_swap, why = quant.plan(desc, driver, precision, blocks_to_swap, megapixels=mp)
         why += f" at {mp:.2f} MP"
         logger.info(f"[precision] Auto plan: {precision}, block swap {blocks_to_swap} ({why}); asked {req}")
+
+    # ---- torch.compile (Krea 2's rule), decided here on the empty card as the original does - the free VRAM its
+    # checks read would be the loaded DiT's leftovers later - and applied last, after every LoRA has patched the
+    # forwards and the slider bank has rendered. Auto weighs the warm-up against this run's length; On places the
+    # checkpoint where it fits at the largest bucket.
+    do_compile = False
+    cb = str(compile_blocks or "off").lower()
+    if desc.compiles and cb != "off":
+        from fizgig.utils.capabilities import compile_boundary, should_compile
+        q4, q8 = precision == "nf4", ("int8" if precision == "int8" else "")
+        try:
+            mp_max = max(w * h / 1e6 for ds in group.datasets for (w, h) in ds.batch_manager.bucket_resos)
+        except Exception:
+            mp_max = 0.25
+        if cb == "auto":
+            do_compile, why = should_compile(group.num_train_items * max_train_epochs, q4, q8,
+                                             max(0, blocks_to_swap) if precision != "nf4" else 0, mp=mp_max)
+            logger.info("[compile] auto: %s - %s", "ENABLED (checkpoint outside)" if do_compile == "outside"
+                        else ("ENABLED" if do_compile else "off"), why)
+        elif cb == "outside":
+            do_compile = "outside"
+        else:
+            do_compile = compile_boundary(q4, q8, mp=mp_max)
+            if do_compile == "outside":
+                logger.info("[compile] on: inside-the-graph won't fit at this token load - compiling with the "
+                            "checkpoint OUTSIDE the region instead.")
 
     # ---- previews: encode prompts once, keep the VAE ---------------------------------------------
     encoded = neg = vae = ref_imgs = ref_latents = None
@@ -596,6 +622,9 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         group.latents = bank
         torch.cuda.empty_cache()
         logger.info("[slider] %d practice images rendered at %dx%d", len(bank), slider_bank_res, slider_bank_res)
+    if do_compile:                       # decided before the load (below the Auto plan), applied last
+        driver.compile_blocks(dit, "outside" if do_compile == "outside" else "inside",
+                              blocks_to_swap if swapped else 0)
     params = net.parameters()
     logger.info((f"LoKR factor {lokr_factor}" if network_type == "lokr" else
                  f"LoRA rank {network_dim} alpha {network_alpha:g}") +
@@ -929,6 +958,8 @@ def setup_parser():
     p.add_argument("--max_grad_norm", type=float, default=1.0)
     p.add_argument("--gradient_accumulation_steps", type=int, default=1,
                    help="micro-batches averaged into one optimizer step (sliders: always 1)")
+    p.add_argument("--compile_blocks", default="auto", choices=("auto", "on", "outside", "off"),
+                   help="torch.compile the DiT blocks (families with compiles=True); auto weighs warm-up vs run length")
     p.add_argument("--ema_decay", type=float, default=0.0)
     p.add_argument("--optimizer_type", default="adamw")
     p.add_argument("--optimizer_args", default="")
@@ -981,7 +1012,7 @@ def main():
         ema_decay=a.ema_decay, optimizer_type=a.optimizer_type, optimizer_args=a.optimizer_args,
         lr_scheduler=a.lr_scheduler, lr_warmup_steps=a.lr_warmup_steps,
         lr_scheduler_num_cycles=a.lr_scheduler_num_cycles, lr_scheduler_power=a.lr_scheduler_power,
-        gradient_accumulation_steps=a.gradient_accumulation_steps)
+        gradient_accumulation_steps=a.gradient_accumulation_steps, compile_blocks=a.compile_blocks)
 
 
 if __name__ == "__main__":

@@ -9291,10 +9291,10 @@ class LoRATrainerGUI:
 
         # Krea 2-ONLY controls (inverse of the above): the per-image loss watch toggles are only
         # wired into krea2_train for now — hide them under Klein.
-        for w in (self._krea2_ft_cb,
-                  # torch.compile is wired into krea2_train only.
-                  self._compile_blocks_label, self.compile_blocks_check, self._compile_blocks_hint):
-            self._set_widget_visible(w, is_krea2)
+        self._set_widget_visible(self._krea2_ft_cb, is_krea2)
+        # torch.compile: krea2_train, and standard-layer families whose driver compiles (Krea 2 (driver))
+        for w in (self._compile_blocks_label, self.compile_blocks_check, self._compile_blocks_hint):
+            self._set_widget_visible(w, is_krea2 or bool(desc is not None and desc.compiles))
         # The per-image loss watch also runs for standard-layer families (families/loss_watch.py); auto-recaption
         # only where the family's text encoder can caption images.
         for w in (self._krea2_losswatch_frame, self._krea2_perimglr_cb, self._krea2_warmuplook_cb,
