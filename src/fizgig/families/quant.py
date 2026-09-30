@@ -39,12 +39,14 @@ def quantize(dit, driver, precision, compute_device):
     if precision == "int8":
         from fizgig.modules.int8_train import int8_train_forward
         from fizgig.modules.nf4 import _dequantize_source_weight
+        fp32 = getattr(driver, "int8_fp32_scales", True)
         for _, m in targets:
-            w = _dequantize_source_weight(m).to(compute_device).float()
+            w = _dequantize_source_weight(m).to(compute_device)
+            w = w.float() if fp32 else w.contiguous()         # a driver may keep its original trainer's bf16 scales
             scale = w.abs().amax(dim=-1, keepdim=True).clamp_min(1e-8) / 127.0
             m.weight.requires_grad_(False)
             m.weight.data = (w / scale).round_().clamp_(-127, 127).to(torch.int8).contiguous()
-            m.register_buffer("_int8_wscale", scale.reshape(1, -1), persistent=False)
+            m.register_buffer("_int8_wscale", scale.reshape(1, -1).to(torch.float32), persistent=False)
             m._is_int8 = True
             m._int8_grad_mode = "bf16"
             m.forward = int8_train_forward.__get__(m, type(m))

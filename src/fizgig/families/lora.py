@@ -261,9 +261,45 @@ class FamilyLoRA:
             ar[full] = scale
             n += 1
         self._frozen[name] = {"alpha_rank": ar, "load": float(strength), "on": True, "block_mult": {},
-                              "block_on": {}, "outside_on": True, "path": path}
+                              "block_on": {}, "outside_on": True, "path": path, "biases": self._read_biases(path),
+                              "bias_saved": []}
         self._apply(name)
         return n
+
+    def _read_biases(self, path):
+        """A file's bias deltas (`<module>.diff_b`, e.g. Krea 2's turbo LoRA on its input, timestep and output
+        layers - a low-rank pair cannot carry them): [(module name, delta on CPU)] for Linears with a matching bias."""
+        from safetensors import safe_open
+        out = []
+        with safe_open(path, framework="pt") as f:
+            for k in f.keys():
+                if not k.endswith(".diff_b"):
+                    continue
+                full = self._module_for(k[:-len(".diff_b")])
+                bias = self._bias(full) if full else None
+                delta = f.get_tensor(k)
+                if bias is not None and tuple(bias.shape) == tuple(delta.shape):
+                    out.append((full, delta.cpu()))
+        return out
+
+    def _bias(self, full):
+        w = self.wrapped.get(full)
+        mod = w.base if w is not None else self.dit.get_submodule(full)
+        return getattr(mod, "bias", None)
+
+    def _apply_biases(self, name):
+        """Put back the biases as they were, then (adapter on) add the deltas at the load strength. Snapshot and
+        restore, not += and -=, which in bf16 does not land back on the same values."""
+        st = self._frozen[name]
+        for bias, snap in st["bias_saved"]:
+            bias.data.copy_(snap)
+        st["bias_saved"] = []
+        if st["on"]:
+            for full, delta in st["biases"]:
+                bias = self._bias(full)
+                st["bias_saved"].append((bias, bias.detach().clone()))
+                d = delta if st["load"] == 1.0 else delta.float() * st["load"]
+                bias.data.add_(d.to(device=bias.device, dtype=bias.dtype))
 
     def has(self, name):
         return name in self._frozen
@@ -275,6 +311,8 @@ class FamilyLoRA:
             on = st["on"] and (st["outside_on"] if b is None else st["block_on"].get(b, True))
             mult = 1.0 if b is None else st["block_mult"].get(b, 1.0)
             self.wrapped[full].scales[name] = ar * st["load"] * mult if on else 0.0
+        if st.get("biases"):
+            self._apply_biases(name)
 
     def set_enabled(self, name, enabled: bool):
         """Switch a frozen adapter on (with its load strength and block settings) or fully off - every module,
@@ -338,6 +376,10 @@ class FamilyLoRA:
 
     def remove(self, name):
         """Drop a frozen adapter's weights entirely."""
+        st = self._frozen.get(name)
+        if st and st.get("bias_saved"):
+            st["on"] = False
+            self._apply_biases(name)
         for w in self.wrapped.values():
             if name in w.adapters:
                 del w.adapters[name]

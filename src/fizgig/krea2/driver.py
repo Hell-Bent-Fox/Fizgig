@@ -33,6 +33,10 @@ def _mu(num_img_tokens):
 
 class Krea2Driver(FamilyDriver):
 
+    # INT8 scales computed in bf16, exactly as the original trainer's apply_int8_training quantises Krea 2 - so a
+    # driver run starts from the same INT8 weights as a Krea 2 run.
+    int8_fp32_scales = False
+
     # ---- models ---------------------------------------------------------------------------------
     def load_dit(self, path, device):
         from fizgig.krea2.utils import load_krea2_dit
@@ -113,8 +117,10 @@ class Krea2Driver(FamilyDriver):
     @staticmethod
     def _text(cond, device):
         from fizgig.krea2.sampling import gather_valid_text
-        return gather_valid_text(cond["hidden_states"].to(device=device, dtype=DTYPE),
-                                 cond["attention_mask"].to(device).bool())
+        h, m = cond["hidden_states"], cond["attention_mask"]
+        if h.dim() == 3:                      # one caption as encoded (previews); training batches carry a batch dim
+            h, m = h[None], m[None]
+        return gather_valid_text(h.to(device=device, dtype=DTYPE), m.to(device).bool())
 
     def _forward(self, dit, noised, t, cond):
         """The DiT's velocity for a noised latent (B, 16, h, w) at t (B,), image tokens only."""
