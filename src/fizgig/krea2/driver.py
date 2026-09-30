@@ -43,7 +43,8 @@ class Krea2Driver(FamilyDriver):
         from fizgig.families.ft import FTSpec
         return FTSpec(blocks="blocks", components=("attn", "mlp.gate", "mlp.up", "mlp.down"),
                       always_on=("txtfusion",), overhead_gb=9.5, trunk_gb_per_block=0.217,
-                      stream_base_gb=3.2)      # measured 30 Sep: 2.7 GB worst window (12 GB card) + 0.5 slack
+                      stream_base_gb=3.2,      # measured 30 Sep: 2.7 GB worst window (12 GB card) + 0.5 slack
+                      calib_mp=0.25, act_gb_per_mp=3.2)   # 0.25 -> 0.98 MP measured +2.2 GB (3.0 GB/MP)
 
     def compile_blocks(self, dit, boundary="inside", blocks_to_swap=0):
         # the original's per-block compile, with its guards (block swap, triton, host compiler, fp8 on pre-Ada)

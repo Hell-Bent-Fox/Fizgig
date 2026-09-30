@@ -371,12 +371,20 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
     return paths
 
 
+def _largest_bucket_mp(group):
+    """Megapixels of the run's largest actual bucket (what sets activation memory), or None."""
+    try:
+        return max(w * h / 1e6 for ds in group.datasets for (w, h) in ds.batch_manager.bucket_resos)
+    except Exception:
+        return None
+
+
 class _FineTune:
     """The fine-tune's side of the training loop: the rotator and its master, the window plan for this card, the
     whole-rotation length and cadence, a fresh optimizer per window, and the full-checkpoint save."""
 
     def __init__(self, driver, desc, dit, net, dit_path, device, *, max_train_epochs, rotations, save_every_rotations,
-                 rotate_every, start_window, epochs_done, fused, lr, master_dir):
+                 rotate_every, start_window, epochs_done, fused, lr, master_dir, mp=None):
         from fizgig.families import ft
         from fizgig.utils.device import plannable_free_vram
         self.ft, self.driver, self.desc, self.dit, self.src, self.lr = ft, driver, desc, dit, dit_path, lr
@@ -406,7 +414,8 @@ class _FineTune:
         logger.info(f"[finetune] planning with {torch.cuda.memory_allocated() / 1e9:.2f} GB allocated, "
                     f"{plannable_free_vram():.2f} GB free")
         windows, stream, why, usable = ft.plan_windows(
-            dit, spec, self.rot, plannable_free_vram(), allow_stream=os.environ.get("FIZGIG_NO_FT_STREAM") != "1")
+            dit, spec, self.rot, plannable_free_vram(), allow_stream=os.environ.get("FIZGIG_NO_FT_STREAM") != "1",
+            mp=mp)
         for line in why:
             logger.info(f"[finetune] {line}")
         if windows is None:
@@ -757,7 +766,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         ftr = _FineTune(driver, desc, dit, net, dit_path, device, max_train_epochs=None, rotations=ft_rotations,
                         save_every_rotations=ft_save_every_rotations, rotate_every=ft_rotate_every,
                         start_window=ft_start_window, epochs_done=ft_epochs_done, fused=ft_fused_backward,
-                        lr=learning_rate, master_dir=output_dir)
+                        lr=learning_rate, master_dir=output_dir, mp=_largest_bucket_mp(group))
         max_train_epochs, save_every_n_epochs = ftr.epochs, ftr.save_every
         if ftr.streamer is not None:
             swapped = 1          # blocks stream: previews and caption re-encodes must not park + restore the whole DiT

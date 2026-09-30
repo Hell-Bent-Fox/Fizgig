@@ -61,6 +61,11 @@ class FTSpec:
     # streaming: what a step needs beyond its own resident blocks and window (activations, streamed blocks in flight,
     # fragmentation), in the planner's budget frame. None = derived from overhead_gb (conservative)
     stream_base_gb: Optional[float] = None
+    # activation growth with resolution: overhead_gb and stream_base_gb are measured at calib_mp megapixels, and a
+    # run's largest bucket above that adds act_gb_per_mp for each extra megapixel (4 GB/MP above 0.25 MP when the
+    # driver has measured nothing - cautious)
+    calib_mp: float = 0.25
+    act_gb_per_mp: float = 4.0
 
 
 _PREFIX = "diffusion_model."
@@ -396,16 +401,18 @@ class Rotator:
                             self.loc, self.src)
 
 
-def _plan(comp_gb, n_blocks, trunk, spec: FTSpec, usable, allow_stream=True):
+def _plan(comp_gb, n_blocks, trunk, spec: FTSpec, usable, allow_stream=True, mp=None):
     overhead = spec.overhead_gb if spec.overhead_gb is not None else trunk * n_blocks + 3.5
+    extra = spec.act_gb_per_mp * max(0.0, float(mp or spec.calib_mp) - spec.calib_mp)
+    overhead += extra                  # a bigger bucket's activations, resident and streaming alike
     # the shared planner's streaming base is overhead - trunk + slots; a measured stream_base_gb sets it directly
     slots = (spec.slots_gb if spec.stream_base_gb is None
-             else spec.stream_base_gb - (overhead - trunk * n_blocks))
+             else spec.stream_base_gb + extra - (overhead - trunk * n_blocks))
     return plan_component_windows(usable, range(n_blocks), n_blocks, comp_gb, overhead_gb=overhead,
                                   trunk_gb_per_block=trunk, slots_gb=slots, allow_stream=allow_stream)
 
 
-def plan_windows(dit, spec: FTSpec, rotator: Rotator, free_gb: float, allow_stream: bool = True):
+def plan_windows(dit, spec: FTSpec, rotator: Rotator, free_gb: float, allow_stream: bool = True, mp=None):
     """(windows, stream, reasons, usable GB) for this card, with the model loaded: component sizes measured from it,
     `free_gb` read after the NF4 trunk landed (so the trunk is added back into the budget)."""
     block0 = dit.get_submodule(spec.blocks)[0]
@@ -423,11 +430,11 @@ def plan_windows(dit, spec: FTSpec, rotator: Rotator, free_gb: float, allow_stre
                      if getattr(lin, "_nf4_packed", None) is not None)
         trunk = packed / 1e9 / max(1, n)
     usable = free_gb + trunk * n - 1.5
-    windows, stream, why = _plan(comp_gb, n, trunk, spec, usable, allow_stream)
+    windows, stream, why = _plan(comp_gb, n, trunk, spec, usable, allow_stream, mp)
     return windows, stream, why, usable
 
 
-def plan_from_file(path: str, spec: FTSpec, free_gb: float):
+def plan_from_file(path: str, spec: FTSpec, free_gb: float, mp=None):
     """The same plan before anything loads (the Training tab's "on this card" line): component sizes from the model
     file's header, `free_gb` read on the idle card. The trainer budgets after its model and preview VAE are in, so
     the non-block layers (kept bf16) and ~1.05 GB (VAE + runtime; measured on Krea 2 and Qwen 2.1) come off here. Returns (windows, stream, usable) or
@@ -464,7 +471,7 @@ def plan_from_file(path: str, spec: FTSpec, free_gb: float):
     n = len(blocks)
     trunk = float(spec.trunk_gb_per_block) if spec.trunk_gb_per_block is not None else block0_params * 0.53 / 1e9
     usable = free_gb - nonblock - 1.05 - 1.5
-    windows, stream, _why = _plan(comp_gb, n, trunk, spec, usable)
+    windows, stream, _why = _plan(comp_gb, n, trunk, spec, usable, mp=mp)
     return windows, stream, usable
 
 

@@ -7709,11 +7709,16 @@ class LoRATrainerGUI:
             from fizgig.families import ft as _ft
             from fizgig.utils.device import plannable_free_vram
             free = plannable_free_vram()
-            key = (path, round(free, 1))
+            key = (path, round(free, 1), str(getattr(self, "dataset_megapixels_var", None) and
+                                             self.dataset_megapixels_var.get()))
             if getattr(self, "_ft_plan_cache", (None,))[0] != key:
                 spec = desc.load_driver().ft_spec(None)
-                self._ft_plan_cache = (key, _ft.plan_from_file(path, spec, free) if path and os.path.isfile(path)
-                                       else None)
+                try:
+                    _mp = float(str(self.dataset_megapixels_var.get()).split()[0])
+                except Exception:
+                    _mp = None
+                self._ft_plan_cache = (key, _ft.plan_from_file(path, spec, free, mp=_mp)
+                                       if path and os.path.isfile(path) else None)
             plan = self._ft_plan_cache[1]
         except Exception:
             plan = None
