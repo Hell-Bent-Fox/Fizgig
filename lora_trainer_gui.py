@@ -14003,6 +14003,12 @@ class LoRATrainerGUI:
         secondary = COLORS["text_secondary"]
         label_fg = muted if is_krea2 else secondary
 
+        # The described families' Turbo strength box (_generic_samples_ui shows it) means nothing here: Klein, Krea 2
+        # and MiniMax set their preview turbo elsewhere, so a box left on screen from Qwen only showed a stale value.
+        for _w in (getattr(self, "_family_turbo_label", None), self.entries.get("FAMILY_TURBO_STRENGTH")):
+            if _w is not None and _w.winfo_manager():
+                _w.pack_forget()
+
         # "Use Distilled model for samples" checkbox — Klein's sample-model choice. Krea 2's
         # equivalent choice is the Preview engine dropdown, shown right below in Krea 2 mode.
         if hasattr(self, "use_distilled_check"):
