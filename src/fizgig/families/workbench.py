@@ -120,14 +120,18 @@ class WorkbenchEngine:
 
     # ---- models -------------------------------------------------------------------------------------
     def ensure_pipeline(self, dit_path, vae_path, text_encoder_path, speed_lora_path="", device="cuda",
-                        lowmem=None, precision="auto", blocks_to_swap=0, **_ignored):
+                        lowmem=None, precision="auto", blocks_to_swap=0, preview_sampling=None, **_ignored):
         """Load the DiT (resident) and the VAE once; the text encoder loads per new prompt. speed_lora_path: the
         family's speed LoRA file, attached unmerged and used for every preview ("" = default sampling).
         precision: "auto" = bf16 when the model file fits the free VRAM with 6 GB to spare (Qwen 2.1's 14 GB: 20 GB
         free), else INT8, else NF4 (whichever the family offers); blocks_to_swap streams blocks forward-only
-        (previews never backprop)."""
+        (previews never backprop). preview_sampling: dit_path is the family's preview checkpoint (a distilled model,
+        description.preview_checkpoint) sampled this way, with no speed LoRA."""
         if self.pipeline is not None:
             return
+        self.checkpoint_sampling = preview_sampling
+        if preview_sampling is not None:
+            speed_lora_path = ""
         from fizgig.families.train import _small_card_previews
         self.device = device
         self.te_path = text_encoder_path
@@ -347,6 +351,9 @@ class WorkbenchEngine:
 
     def sampling(self):
         """(steps, cfg, sigmas, options) previews use."""
+        if getattr(self, "checkpoint_sampling", None) is not None:
+            s = self.checkpoint_sampling
+            return s.steps, s.cfg, s.sigmas, s.options
         if self.speed is not None:
             s = self.speed.settings
             return s.steps, s.cfg, s.sigmas, s.options

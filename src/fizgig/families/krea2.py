@@ -48,6 +48,10 @@ KREA2 = FamilyDescription(
         ModelFile("krea2_turbo_lora", "Turbo LoRA (previews)", False, _COMFY,
                   "loras/krea2_turbo_lora_rank_64_bf16.safetensors", 0.47,
                   "Optional: 8-step previews on the training model.", role="speed_lora"),
+        ModelFile("krea2_turbo_dit", "Turbo DiT (fp8, workbench previews)", False, _COMFY,
+                  "diffusion_models/krea2_turbo_fp8_scaled.safetensors", 13.1,
+                  "Optional: Repair Studio, LoRA the Explorer and LoRA Royale preview on it by default (8-step, "
+                  "CFG-free); without it they use the Turbo LoRA on the RAW model.", role="preview_dit"),
     ),
     shares_prefs_with="krea2",
     text_encoder_label="Qwen3-VL-4B",
@@ -83,6 +87,10 @@ KREA2 = FamilyDescription(
     auto_precisions=("int8", "nf4"),
     compiles=True,
     preview_image=True,
+    preview_checkpoint_sampling=SamplingSettings(
+        "Turbo checkpoint", steps=8, cfg=1.0, sampler="euler", scheduler="simple", options=(("mu", 1.15),),
+        note="The distilled Turbo: CFG-free, mu pinned at 1.15, as the original workbench.",
+        source="src/fizgig/repair_studio/krea2_engine.py generate_preview"),
     finetune=True,
     workbench=("repair", "explorer", "profiler", "extract", "royale"),
     # The original's measured 0.25 MP peaks (utils/capabilities.py: 5090, batch 1, rank 32; 0.42 GB saved per swapped

@@ -18100,8 +18100,7 @@ class LoRATrainerGUI:
                 messagebox.showerror("Error", f"{labels.get(role, role)} path not set or not found.\n"
                                               "Configure on Preferences tab.")
                 return False
-        sp = desc.preview_speed()
-        speed_path = self.prefs_vars.get(sp.pref_key, tk.StringVar()).get().strip() if sp is not None else ""
+        dit, speed_path, ck = self._workbench_preview_model(desc)
         from fizgig.families.workbench import WorkbenchEngine
         if self._explorer_engine is None or not isinstance(self._explorer_engine, WorkbenchEngine) \
                 or self._explorer_engine.desc.key != desc.key:
@@ -18110,9 +18109,8 @@ class LoRATrainerGUI:
             self.explorer_status_var.set(f"Loading {desc.display_name}...")
             self.master.update_idletasks()
             self._explorer_engine.ensure_pipeline(
-                dit_path=paths["dit"], vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
-                speed_lora_path=speed_path if speed_path and os.path.exists(speed_path) else "", device="cuda",
-                **self._family_inference_memory())
+                dit_path=dit, vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
+                speed_lora_path=speed_path, preview_sampling=ck, device="cuda", **self._family_inference_memory())
             self.explorer_status_var.set("Models loaded.")
             return True
         except Exception:
@@ -22038,9 +22036,11 @@ class LoRATrainerGUI:
             # Standard-layer family: previews with its speed LoRA (when set in Preferences) or its default
             # sampling. Radio values stay distilled / base so the rest of the tab reads them unchanged.
             sp, ds = desc.preview_speed(), desc.default_sampling()
+            _ck = desc.preview_checkpoint()
             self._repair_dit_radio_a.configure(
-                text=(f"{sp.name.split(' (')[0]} ({sp.settings.steps}-step, default)" if sp else "Default"),
-                state="normal" if sp else "disabled")
+                text=(f"{_ck[1].name} ({_ck[1].steps}-step, default)" if _ck else
+                      f"{sp.name.split(' (')[0]} ({sp.settings.steps}-step, default)" if sp else "Default"),
+                state="normal" if (sp or _ck) else "disabled")
             self._repair_dit_radio_b.configure(text=f"Full ({ds.steps}-step, slow)", state="normal")
             if not self._repair_dit_radio_b.winfo_manager():
                 self._repair_dit_radio_b.pack(side=tk.LEFT)
@@ -23777,20 +23777,35 @@ class LoRATrainerGUI:
                 messagebox.showerror("Error", f"{labels.get(role, role)} path not set or not found.\n"
                                               "Configure on Preferences tab.")
                 return False
-        sp = desc.preview_speed()
-        speed_path = ""
-        if sp is not None and self.repair_dit_choice_var.get() != "base":
-            speed_path = self.prefs_vars.get(sp.pref_key, tk.StringVar()).get().strip()
-            if speed_path and not os.path.exists(speed_path):
-                speed_path = ""
+        dit, speed_path, ck = self._workbench_preview_model(desc, self.repair_dit_choice_var.get() != "base")
         from fizgig.families.workbench import WorkbenchEngine
         if self.repair_engine is None or not isinstance(self.repair_engine, WorkbenchEngine) \
                 or self.repair_engine.desc.key != desc.key:
             self.repair_engine = WorkbenchEngine(desc)
-        steps = sp.settings.steps if speed_path else desc.default_sampling().steps
-        self.repair_status_var.set(f"Loading {desc.display_name} ({steps}-step previews)…")
-        return dict(dit_path=paths["dit"], vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
-                    speed_lora_path=speed_path, device="cuda", **self._family_inference_memory())
+        sp = desc.preview_speed()
+        steps = ck.steps if ck else (sp.settings.steps if speed_path else desc.default_sampling().steps)
+        self.repair_status_var.set(f"Loading {desc.workbench_label} "
+                                   f"({ck.name + ', ' if ck else ''}{steps}-step previews)…")
+        return dict(dit_path=dit, vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
+                    speed_lora_path=speed_path, preview_sampling=ck, device="cuda",
+                    **self._family_inference_memory())
+
+    def _workbench_preview_model(self, desc, fast=True):
+        """(DiT path, speed LoRA path, checkpoint sampling) a standard-layer workbench engine previews with. Fast: the
+        family's preview checkpoint when it is set in Preferences (Krea 2's Turbo), else its speed LoRA on the
+        training model when that is set; otherwise (or fast=False) the training model at its default sampling."""
+        def _pref(key):
+            p = self.prefs_vars.get(key, tk.StringVar()).get().strip() if key else ""
+            return p if p and os.path.exists(p) else ""
+        dit = self.prefs_vars.get(desc.pref_for("dit"), tk.StringVar()).get().strip()
+        if fast:
+            ck = desc.preview_checkpoint()
+            if ck is not None and _pref(ck[0].pref_key):
+                return _pref(ck[0].pref_key), "", ck[1]
+            sp = desc.preview_speed()
+            if sp is not None and _pref(sp.pref_key):
+                return dit, _pref(sp.pref_key), None
+        return dit, "", None
 
     def _family_inference_memory(self):
         """The app's inference memory preferences for a standard-layer workbench engine: INT8 when the inference INT8
@@ -25230,15 +25245,13 @@ class LoRATrainerGUI:
                 messagebox.showerror("Error", f"{labels.get(role, role)} path not set or not found.\n"
                                               "Configure on Preferences tab.")
                 return False
-        sp = desc.preview_speed()
-        speed = self.prefs_vars.get(sp.pref_key, tk.StringVar()).get().strip() if sp is not None else ""
+        dit, speed, ck = self._workbench_preview_model(desc)
         from fizgig.families.workbench import WorkbenchEngine
         if not isinstance(self.royale_engine, WorkbenchEngine) or self.royale_engine.desc.key != desc.key:
             self.royale_engine = WorkbenchEngine(desc)
         self._royale_pipeline_kwargs = dict(
-            dit_path=paths["dit"], vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
-            speed_lora_path=speed if speed and os.path.exists(speed) else "", device="cuda",
-            **self._family_inference_memory())
+            dit_path=dit, vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
+            speed_lora_path=speed, preview_sampling=ck, device="cuda", **self._family_inference_memory())
         return True
 
     def _royale_validate_models_krea2(self):

@@ -25,7 +25,9 @@ class ModelFile:
     size_gb: float = 0.0
     note: str = ""                    # one plain line shown under the row
     local_name: str = ""              # name in models/ when the repo's own is generic (diffusion_pytorch_model...)
-    role: str = ""                    # "dit" | "vae" | "text_encoder" | "training_adapter" | "speed_lora" | ""
+    role: str = ""                    # "dit" | "vae" | "text_encoder" | "training_adapter" | "speed_lora" |
+    #                                   "preview_dit" (a separate model the workbench previews on, e.g. a distilled
+    #                                   checkpoint; see preview_checkpoint_sampling) | ""
 
 
 @dataclass(frozen=True)
@@ -137,6 +139,9 @@ class FamilyDescription:
     # previews can take the Samples tab's reference image through the text encoder's vision path ('prompt from a
     # picture', Krea 2) - conditioning only, not an edit reference (edit_training)
     preview_image: bool = False
+    # how the workbench samples its preview checkpoint (the model file with role "preview_dit"), which it uses by
+    # default for fast previews when the file is set; None = the family has none
+    preview_checkpoint_sampling: Optional[SamplingSettings] = None
     # a full fine-tune of the base model is offered (the driver's ft_spec returns its FTSpec, families/ft.py): the
     # Training tab shows the fine-tune card and the launch sends --finetune. Optional - most families never need it
     finetune: bool = False
@@ -202,6 +207,11 @@ class FamilyDescription:
         """The family's name in the workbench tools' selectors: the Training tab's label when the family shares its
         files with another (Krea 2 (driver) beside Krea 2), else its plain name."""
         return self.gui_label if self.shares_prefs_with else self.display_name
+
+    def preview_checkpoint(self):
+        """(ModelFile, SamplingSettings) of the workbench's preview checkpoint, or None."""
+        f = next((m for m in self.model_files if m.role == "preview_dit"), None)
+        return (f, self.preview_checkpoint_sampling) if f is not None and self.preview_checkpoint_sampling else None
 
     def load_driver(self):
         """Instantiate the family's FamilyDriver (imported lazily: the description stays importable without torch)."""
