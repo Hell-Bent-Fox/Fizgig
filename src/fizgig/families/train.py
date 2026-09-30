@@ -35,8 +35,8 @@ from fizgig.families import quant  # noqa: E402
 from fizgig.families.lora import FamilyLoRA  # noqa: E402
 from fizgig.families.registry import get as get_family  # noqa: E402
 from fizgig.krea2.trainer import AdaptiveLR  # noqa: E402
-from fizgig.training.metadata import (build_metadata, latest_sample_image, resolve_title,  # noqa: E402
-                                      thumbnail_data_uri)
+from fizgig.training.metadata import (build_metadata, latest_sample_image, refresh_checkpoint_thumbnail,  # noqa: E402
+                                      resolve_title, sample_for_epoch, thumbnail_data_uri)
 from fizgig.training.train_utils import LossRecorder, prune_state_dirs  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -875,6 +875,12 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             _tp = time.time()
             previews(done)
             progress.start_t += time.time() - _tp       # the bar's s/it is training speed, not previews
+            # this epoch's checkpoint was saved before its preview existed, with the previous epoch's as its
+            # thumbnail (#122): re-embed its own. An explicit --metadata_thumbnail (or "off") stays.
+            if cadence and not (metadata_thumbnail or "").strip():
+                own = sample_for_epoch(output_dir, output_name, done)
+                if own:
+                    refresh_checkpoint_thumbnail(os.path.join(output_dir, f"{output_name}-{done:06d}.safetensors"), own)
         if os.path.exists(pause_flag) and done < max_train_epochs:
             if state_saved:
                 logger.info(f"[pause] requested - state for epoch {done} already saved; exiting cleanly")
