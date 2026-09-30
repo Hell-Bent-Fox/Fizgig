@@ -386,7 +386,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  resume_state_dir=None, adaptive_lr=False, adaptive_lr_min=1e-4, adaptive_lr_max=2e-4,
                  max_grad_norm=1.0, ema_decay=0.0, optimizer_type="adamw", optimizer_args="",
                  lr_scheduler="constant", lr_warmup_steps=0, lr_scheduler_num_cycles=1, lr_scheduler_power=1.0,
-                 gradient_checkpointing=True, blocks_to_swap=0, network_type="lora", lokr_factor=8,
+                 gradient_accumulation_steps=1, gradient_checkpointing=True, blocks_to_swap=0, network_type="lora", lokr_factor=8,
                  log_per_image_loss=False, per_image_lr=False, auto_recaption=False, warmup_look_outliers=False,
                  trigger_word=None, trigger_position="start", recaption_instruction=None,
                  recaption_instruction_detailed=None, captioner=None):
@@ -639,16 +639,26 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                   trigger_word=trigger_word, trigger_position=trigger_position,
                   recaption_instruction=recaption_instruction,
                   recaption_instruction_detailed=recaption_instruction_detailed, captioner_path=captioner)
+    # Gradient accumulation (Krea 2's rule): N micro-batches average into one update - each loss is divided by N, the
+    # optimizer steps every N and at every epoch end (a partial group is flushed), so updates per epoch are
+    # ceil(steps / N) and the schedule runs in those updates. Sliders already backpropagate two poles per step: 1.
+    accum = 1 if slider else max(1, int(gradient_accumulation_steps or 1))
+    updates_per_epoch = math.ceil(steps_per_epoch / accum)
+    if accum > 1:
+        logger.info(f"[grad_accum] {accum} micro-batches per optimizer step (effective batch {accum}); "
+                    f"{updates_per_epoch} updates/epoch")
+    elif int(gradient_accumulation_steps or 1) > 1:
+        logger.info("[grad_accum] off for sliders: each step already backpropagates both ends")
     scheduler = None
     if not adaptive and not owns_its_rate(optimizer):
-        scheduler = _step_scheduler(optimizer, lr_scheduler, lr_warmup_steps, steps_per_epoch * max_train_epochs,
+        scheduler = _step_scheduler(optimizer, lr_scheduler, lr_warmup_steps, updates_per_epoch * max_train_epochs,
                                     lr_scheduler_num_cycles, lr_scheduler_power)
         import warnings
         with warnings.catch_warnings():
             # a resume moves the schedule to where the run paused before the first optimizer step, on purpose;
             # PyTorch's "lr_scheduler.step() before optimizer.step()" warning is for training loops, not this
             warnings.filterwarnings("ignore", message=r"Detected call of `lr_scheduler\.step\(\)` before")
-            for _ in range(global_step):
+            for _ in range(start_epoch * updates_per_epoch if accum > 1 else global_step):
                 scheduler.step()
 
     last_prompt = [None]
@@ -733,6 +743,19 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     recorder = LossRecorder()
     progress = tqdm(total=steps_per_epoch * max_train_epochs, initial=global_step, desc="steps", smoothing=0)
     dit.train()
+    pending = 0                            # micro-batches backpropagated since the last optimizer step
+
+    def _update():
+        nonlocal pending
+        if max_grad_norm:
+            torch.nn.utils.clip_grad_norm_(params, max_grad_norm)
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+        if ema is not None:
+            ema.update()                   # after the clipped step, so the average tracks what was applied
+        pending = 0
+
     for epoch in range(start_epoch, max_train_epochs):
         shared_epoch.value = epoch + 1
         torch.cuda.reset_peak_memory_stats()
@@ -777,22 +800,22 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                                                             key=lambda k: int(k.rsplit("_", 1)[1]))]
                 loss, _info = driver.training_loss(dit, latents, cond, gen, min_t=min_timestep, max_t=max_timestep,
                                                    **({"refs": refs} if refs else {}))
-                optimizer.zero_grad(set_to_none=True)
+                if pending == 0:
+                    optimizer.zero_grad(set_to_none=True)
                 mult = watch.multiplier(batch)     # per-image LR (batch size 1): the raw loss is still what's recorded
-                (loss * mult if mult != 1.0 else loss).backward()
-            if max_grad_norm:
-                torch.nn.utils.clip_grad_norm_(params, max_grad_norm)
-            optimizer.step()
-            if scheduler is not None:
-                scheduler.step()
-            if ema is not None:
-                ema.update()
+                _scaled = loss * mult if mult != 1.0 else loss
+                (_scaled / accum if accum > 1 else _scaled).backward()
+            pending += 1
+            if pending >= accum:
+                _update()
             global_step += 1
             recorder.add(epoch=epoch, step=i, loss=loss.item())
             watch.observe(epoch + 1, global_step, batch, _info.get("t", 0.5), loss.item())
             progress.set_postfix(avr_loss=f"{recorder.moving_average:.4f}", refresh=False)
             progress.update(1)
 
+        if pending:                        # a partial group: settle the optimizer before the epoch-end work
+            _update()
         logger.info(f"epoch {epoch + 1}/{max_train_epochs}  avr_loss={recorder.moving_average:.4f}  step={global_step}  "
                     f"{(time.time() - t0) / max(1, steps_per_epoch):.2f}s/step  "
                     f"lr={optimizer.param_groups[0]['lr']:.3e}  "
@@ -904,6 +927,8 @@ def setup_parser():
     p.add_argument("--adaptive_lr_min", type=float, default=1e-4)
     p.add_argument("--adaptive_lr_max", type=float, default=2e-4)
     p.add_argument("--max_grad_norm", type=float, default=1.0)
+    p.add_argument("--gradient_accumulation_steps", type=int, default=1,
+                   help="micro-batches averaged into one optimizer step (sliders: always 1)")
     p.add_argument("--ema_decay", type=float, default=0.0)
     p.add_argument("--optimizer_type", default="adamw")
     p.add_argument("--optimizer_args", default="")
@@ -955,7 +980,8 @@ def main():
         adaptive_lr_min=a.adaptive_lr_min, adaptive_lr_max=a.adaptive_lr_max, max_grad_norm=a.max_grad_norm,
         ema_decay=a.ema_decay, optimizer_type=a.optimizer_type, optimizer_args=a.optimizer_args,
         lr_scheduler=a.lr_scheduler, lr_warmup_steps=a.lr_warmup_steps,
-        lr_scheduler_num_cycles=a.lr_scheduler_num_cycles, lr_scheduler_power=a.lr_scheduler_power)
+        lr_scheduler_num_cycles=a.lr_scheduler_num_cycles, lr_scheduler_power=a.lr_scheduler_power,
+        gradient_accumulation_steps=a.gradient_accumulation_steps)
 
 
 if __name__ == "__main__":

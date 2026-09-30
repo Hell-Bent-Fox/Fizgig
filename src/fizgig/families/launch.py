@@ -293,6 +293,11 @@ def train_command(desc, inputs, plan):
         except ValueError:
             pass
     try:
+        if int(float(str(st.get("GRADIENT_ACCUMULATION", "") or 1))) > 1:
+            cmd += ["--gradient_accumulation_steps", str(int(float(st["GRADIENT_ACCUMULATION"])))]
+    except ValueError:
+        pass
+    try:
         if abs(float(str(st.get("MAX_GRAD_NORM", "") or 1.0)) - 1.0) > 1e-9:
             cmd += ["--max_grad_norm", str(float(st["MAX_GRAD_NORM"]))]
     except ValueError:
