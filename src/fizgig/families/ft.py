@@ -58,6 +58,9 @@ class FTSpec:
     trunk_gb_per_block: Optional[float] = None
     slots_gb: float = 1.5
     file_layout: tuple = ()
+    # streaming: what a step needs beyond its own resident blocks and window (activations, streamed blocks in flight,
+    # fragmentation), in the planner's budget frame. None = derived from overhead_gb (conservative)
+    stream_base_gb: Optional[float] = None
 
 
 _PREFIX = "diffusion_model."
@@ -395,8 +398,11 @@ class Rotator:
 
 def _plan(comp_gb, n_blocks, trunk, spec: FTSpec, usable, allow_stream=True):
     overhead = spec.overhead_gb if spec.overhead_gb is not None else trunk * n_blocks + 3.5
+    # the shared planner's streaming base is overhead - trunk + slots; a measured stream_base_gb sets it directly
+    slots = (spec.slots_gb if spec.stream_base_gb is None
+             else spec.stream_base_gb - (overhead - trunk * n_blocks))
     return plan_component_windows(usable, range(n_blocks), n_blocks, comp_gb, overhead_gb=overhead,
-                                  trunk_gb_per_block=trunk, slots_gb=spec.slots_gb, allow_stream=allow_stream)
+                                  trunk_gb_per_block=trunk, slots_gb=slots, allow_stream=allow_stream)
 
 
 def plan_windows(dit, spec: FTSpec, rotator: Rotator, free_gb: float, allow_stream: bool = True):
@@ -424,7 +430,7 @@ def plan_windows(dit, spec: FTSpec, rotator: Rotator, free_gb: float, allow_stre
 def plan_from_file(path: str, spec: FTSpec, free_gb: float):
     """The same plan before anything loads (the Training tab's "on this card" line): component sizes from the model
     file's header, `free_gb` read on the idle card. The trainer budgets after its model and preview VAE are in, so
-    the non-block layers (kept bf16) and ~0.3 GB for the VAE come off here. Returns (windows, stream, usable) or
+    the non-block layers (kept bf16) and ~1.05 GB (VAE + runtime; measured on Krea 2 and Qwen 2.1) come off here. Returns (windows, stream, usable) or
     None when the file does not show the spec's blocks."""
     from fizgig.krea2.safetensors_utils import MemoryEfficientSafeOpen
     import re
@@ -457,7 +463,7 @@ def plan_from_file(path: str, spec: FTSpec, free_gb: float):
         return None
     n = len(blocks)
     trunk = float(spec.trunk_gb_per_block) if spec.trunk_gb_per_block is not None else block0_params * 0.53 / 1e9
-    usable = free_gb - nonblock - 0.3 - 1.5
+    usable = free_gb - nonblock - 1.05 - 1.5
     windows, stream, _why = _plan(comp_gb, n, trunk, spec, usable)
     return windows, stream, usable
 
