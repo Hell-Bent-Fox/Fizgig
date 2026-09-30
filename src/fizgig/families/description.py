@@ -128,6 +128,9 @@ class FamilyDescription:
     ema_default: str = ""             # default EMA decay for the Training tab ("0.98", "Off"); "" = no EMA control
     implementation: str = ""          # SAI modelspec.implementation (reference repo URL)
     precisions: tuple = ("bf16",)     # base precisions offered for training: any of "bf16", "int8", "nf4"
+    # what Auto may choose, in order ((): every offered precision, most precise first). Krea 2: INT8, then NF4 - its
+    # original trainer's order; bf16 stays a manual choice
+    auto_precisions: tuple = ()
     # measured training memory for the Auto plan: {precision: (peak GB with no block swap, GB saved per swapped
     # block)}; the peak may instead be ((megapixels, GB), ...) points, interpolated for the run's resolution.
     # {} = Auto just takes the first precision

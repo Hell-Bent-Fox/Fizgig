@@ -80,6 +80,11 @@ KREA2 = FamilyDescription(
     implementation="https://github.com/krea-ai/krea-2",
     ema_default="0.98",               # the original's default (Peter's A/B, 9 Sep 2026)
     precisions=("int8", "nf4", "bf16"),
+    auto_precisions=("int8", "nf4"),
+    # The original's measured peaks (utils/capabilities.py: 5090, 0.25 MP, batch 1, rank 32; +0.25 GB per extra
+    # megapixel; 0.42 GB saved per swapped INT8 block). bf16: measured on the driver, rank 8, 0.25 MP, 26.0 GB.
+    train_memory={"int8": (((0.25, 16.2), (2.0, 16.64)), 0.42), "nf4": (((0.25, 11.4), (2.0, 11.84)), 0.0),
+                  "bf16": (((0.25, 26.0), (2.0, 26.44)), 0.84)},
     optimizers=("adamw8bit", "adamw"),
     network_types=("lora", "lokr"),
 

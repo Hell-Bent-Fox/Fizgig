@@ -128,6 +128,8 @@ def plan(desc, driver, precision="auto", blocks_to_swap=-1, free_gb=None, margin
         free_gb = free_vram_gb()
     mem = {p: (_peak(v, megapixels), v[1]) for p, v in (desc.train_memory or {}).items()}
     offered = [p for p in PRECISIONS if p in desc.precisions]
+    if precision == "auto" and getattr(desc, "auto_precisions", ()):
+        offered = [p for p in desc.auto_precisions if p in desc.precisions]
     cap = driver.max_blocks_to_swap()
     budget = free_gb - margin_gb
 
