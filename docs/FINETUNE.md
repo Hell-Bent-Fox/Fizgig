@@ -2,7 +2,7 @@
 
 [← Back to the README](../README.md)
 
-Fine-tuning trains the **base model itself** — no adapter, no rank bottleneck — on a single consumer GPU, for **Krea 2** and **MiniMax H3**. Tick **⚗ Fine-tune the BASE MODEL instead of training a LoRA** on the Training tab and leave **Window** on **Auto (by VRAM)**.
+Fine-tuning trains the **base model itself** — no adapter, no rank bottleneck — on a single consumer GPU, for **Krea 2**, **Qwen Image 2.1** and **MiniMax H3**. On Krea 2 and Qwen, pick **Fine-tune the whole model** under **Kind of training** on the Training tab; on MiniMax H3, tick **⚗ Fine-tune the BASE MODEL instead of training a LoRA**. The window plan sizes itself to your card either way.
 
 For step-by-step answers, including five-minute recipes for both families, see **["How do I…?"](FINETUNE_HOWDOI.md)**.
 
@@ -10,7 +10,9 @@ For step-by-step answers, including five-minute recipes for both families, see *
 
 ## Epochs and cycles
 
-**An epoch trains one slice of the model.** The trainable window rotates each epoch, so a full cycle — typically **4 epochs** — trains every part of the model once. Rule of thumb: **4 fine-tune epochs ≈ 1 true epoch of the whole model.** This is why epoch defaults are high and why saves land on cycle boundaries: each saved checkpoint is a whole, evenly trained model. Some plans split windows and lengthen the cycle; the console prints your cycle length at launch. **Run at least one full cycle** or some weights never train; the console warns you.
+**An epoch trains one slice of the model.** The trainable window rotates each epoch, so a full cycle — a **rotation**, typically **4 epochs** — trains every part of the model once. Rule of thumb: **one rotation ≈ 1 true epoch of the whole model.** Saves land on rotation boundaries, so each saved checkpoint is a whole, evenly trained model. Some plans split windows and lengthen the rotation; the console prints the plan at launch.
+
+On Krea 2 and Qwen the fine-tune card counts in rotations: **Train for N rotations**, **checkpoint + preview every K rotations**, and **each part trains for E epochs** before the next. A live line under the card says how many windows your card gets and how many epochs that makes. On MiniMax H3 you set epochs, and **Run at least one full cycle** or some weights never train; the console warns you.
 
 ## What card do I need?
 
@@ -27,7 +29,7 @@ The "trains on 8 GB" figures elsewhere apply to **LoRA** training. Fine-tuning t
 - Whole-model 5.2 s clips need more than 32 GB (measured).
 - With Training mode set to Off, one clip anywhere in the folder trains the **whole** model, so a mixed photos + clips dataset uses the clip column.
 - **16 GB is the fine-tune floor.** 12 GB cards train LoRAs only.
-- Measured 16 GB peaks: **8.8–12.3 GB for H3**, **8.4–11.0 GB for Krea 2**. The console prints your run's peak every epoch.
+- Measured 16 GB peaks: **8.8–12.3 GB for H3**, **up to 11.4 GB for Krea 2** (at 1 MP). The console prints your run's peak every epoch.
 - Too little VRAM refuses cleanly at launch instead of running out of memory mid-run.
 
 ## How it fits
@@ -44,7 +46,8 @@ A naive full fine-tune of Krea 2 (12.9B) needs roughly **78 GB** — bf16 weight
 
 Fine-tuning uses the same training bases as LoRA training; nothing new to download.
 
-- **Krea 2** fine-tunes the **RAW bf16 model** (`krea2_raw_bf16.safetensors`, ~26 GB). The fp8 Turbo is the preview model and can't be fine-tuned.
+- **Krea 2** fine-tunes the **RAW bf16 model** (`krea2_raw_bf16.safetensors`, ~26 GB). The fp8 Turbo is the workbench preview model and can't be fine-tuned.
+- **Qwen Image 2.1** fine-tunes its **bf16 DiT** (`qwen_image_2.1_bf16.safetensors`); the training adapter stays on, as for LoRAs.
 - **MiniMax H3** fine-tunes the **pruned int8 checkpoint** (`minimax_h3_fl2va_pruned_int8_convrot.safetensors`, ~21 GB), the same file ComfyUI runs. The ~66 GB bf16 file works for LoRA training only; the trainer refuses it for fine-tuning with a clear message.
 
 A finished fine-tune checkpoint is a valid base for its family:
@@ -52,27 +55,24 @@ A finished fine-tune checkpoint is a valid base for its family:
 - **Keep training it** — point the model path at the checkpoint; the console prints the exact continuation settings at every save.
 - **Train LoRAs on top of it** — set it as the family's base in **Preferences**. Teach the base your world or cast once, then train quick LoRAs for individual subjects. Deploy those LoRAs with the same fine-tuned base in ComfyUI.
 
-**Pause / Resume** works on a fine-tune. Pause saves a full checkpoint even between regular save epochs; Resume carries over the rotation window, checkpoint numbering and remaining epoch count.
+**Pause / Resume** works on a fine-tune. On Krea 2 and Qwen, Pause **finishes the rotation it is in**, then saves a full checkpoint and exits, so a checkpoint is never a partial rotation; Resume continues from that checkpoint for the rotations left. On MiniMax H3, Pause saves a full checkpoint even between regular save epochs; Resume carries over the rotation window, checkpoint numbering and remaining epoch count.
 
 ## Why fine-tune
 
 A LoRA constrains every update to a low-rank subspace, so concepts compete for the same few directions. That is why LoRAs tend to drag pose, framing and lighting toward the training set along with the likeness. A full-rank update can change how the model *represents* a concept, so it composes with what the model already knows. In our tests, multi-character and concept teaching landed at a much deeper level than LoRA training, with much better results. [Checkpoint to LoRA](#turn-it-back-into-a-lora) turns the result into a shareable file.
 
-## Krea 2
+## Krea 2 and Qwen Image 2.1
 
-Measured peaks (RTX 5090):
+Both fine-tune through the same card. The frozen base is **4-bit NF4**; the trainable window is held in bf16 from a bf16 master copy, and **biases stay frozen**. The windows are **components across the full depth** — attention across all the blocks, then each MLP matrix in turn — so a concept is learned by every layer at once. On Krea 2 the text-fusion stack stays trainable throughout: rotation would never reach it, and it is where prompt-to-concept binding happens.
 
-| Window mode | Peak VRAM | Speed | Fits |
+Measured on Krea 2 at 0.25 MP:
+
+| Card | Plan | Peak VRAM | Speed |
 |---|---|---|---|
-| **component + 4-bit NF4 (the default)** — full-depth windows, resident | ~16 GB (24 GB budget) / ~21–23 GB (32 GB, more headroom held) | ~1.0 s/it | **24 GB and up** |
-| component + **4-bit NF4** + streaming | 8.4–11.0 GB | ~2.8 s/it | **16 GB** |
-| component on the **fp8 base** (explicit Base-precision pick) — depth-split + streamed | 15.6–17.6 GB | ~3.0 s/it | 24 GB |
+| **32 GB / 24 GB** | 4 windows, resident | ~15.6 GB | ~0.85 s/step |
+| **16 GB** (with 32 GB of system RAM) | 8 windows, frozen blocks streamed from RAM, master on disk | under 16 GB | ~5.1 s/step |
 
-**Base precision.** NF4 is the default and needs no setting. On 24 GB it keeps the full-depth component windows resident: **4 windows per cycle instead of 8**, at roughly **3× the step speed** of the fp8 base (~1.0 s/it vs ~3.0 s/it, same dataset, same 24 GB budget). On 16 GB it is the only base that fits. The trade is that the *frozen* part of the model is held more coarsely while the trainable window learns against it; the saved checkpoint is unaffected. For the more accurate frozen context, pick **fp8** under Base precision if you have the VRAM.
-
-**Component mode** (used by Auto at every budget). Every window spans the model's full depth — attention across all 28 blocks, then each MLP matrix in turn — so a concept is learned by every layer at once. The text-fusion stack stays trainable throughout: rotation would never reach it, and it is where prompt-to-concept binding happens. When the budget is tight the planner **depth-splits** windows (a fat window trains in slices — more windows per cycle, still full speed); below that, frozen out-of-window blocks **stream from system RAM** — slower steps, same component-mode learning.
-
-**Block mode** is an explicit Window-dropdown choice: contiguous depth slices with frozen blocks streamed, slower than component at every budget and **not quality-tested**. The good results have all come from component runs.
+At 1 MP a 16 GB card plans 12 streamed windows (peak 11.4 GB, ~9.8 s/step). When the budget is tight the planner splits windows, and below that the frozen out-of-window blocks **stream from system RAM** — slower steps, the same learning. Too little VRAM refuses cleanly at launch.
 
 ## MiniMax H3
 
@@ -91,9 +91,9 @@ Video, voice, Training mode and Gizmo are covered in [MINIMAX_H3.md](MINIMAX_H3.
 
 ## Saves, previews and numbering
 
-These follow the rotation cycle, not the Samples tab, on both families.
+These follow the rotation cycle, not the Samples tab, on every family.
 
-- **Max epochs** and **Save every** snap to cycle boundaries — the Save-every box follows the fine-tune controls live in the GUI and the trainer snaps it again at launch — so every checkpoint has each window trained equally.
+- On Krea 2 and Qwen the card's **checkpoint + preview every K rotations** is the cadence, and the epoch boxes are greyed out. On MiniMax H3, **Max epochs** and **Save every** snap to cycle boundaries — the Save-every box follows the fine-tune controls live in the GUI and the trainer snaps it again at launch. Either way every checkpoint has each window trained equally.
 - **Previews ride the saves:** one render per saved checkpoint plus the final one, overriding the Samples tab's "every N epochs". Prompts, resolution, seed and the live sample override still come from the Samples tab and status bar. Every sample in the gallery maps to a deployable file. Krea 2 previews render on the training DiT with the Turbo LoRA.
 - **Checkpoints are numbered by epoch** (`-000004`, `-000008`, …) and numbering continues across Pause/Resume, so a resumed run never overwrites an earlier save.
 - **Adaptive LR is off** under fine-tune: rotation boundaries would read as instability to it. Judge the per-save previews, evaluate checkpoints in ComfyUI, or extract a LoRA and scrub the epochs in LoRA Royale.
@@ -105,7 +105,7 @@ An H3 fine-tune is a normal H3 checkpoint: load it in ComfyUI directly, or extra
 **Fine-tuning wants much lower learning rates than LoRAs.** A LoRA nudges a small adapter on a frozen model; a fine-tune moves the model's own weights, so a normal LoRA rate can wreck a fine-tune.
 
 - **MiniMax H3: 3e-5**, the tested fast-and-reliable rate. **1e-4 destroys an H3 fine-tune** (measured).
-- **Krea 2: 1e-5.** 1e-4 trains, but treat it as the top of the experiment range; the best results are found lower. When a run looks almost right but slightly overcooked, lower the rate rather than the epoch count.
+- **Krea 2 and Qwen Image 2.1: 1e-5** (choosing Fine-tune sets it, and turns Adaptive LR off). On Krea 2, 1e-4 trains, but treat it as the top of the experiment range; the best results are found lower. When a run looks almost right but slightly overcooked, lower the rate rather than the epoch count.
 - The regularisation **LR ×** multiplier (below) is part of the same tuning space.
 
 ## Regularisation images (optional)
@@ -126,8 +126,8 @@ Full fine-tuning moves every weight, so a long run on a few subjects drifts the 
 
 ## What it costs
 
-- **VRAM:** on the default NF4 base, **24 GB** runs the full-depth component cycle at full speed and **16 GB** streams frozen blocks from RAM at ~1.5× the step time on H3 and ~2.8× on Krea 2 (see the tables above). The fp8 base costs a 24 GB card depth-split, streamed windows at ~3× the step time, and doesn't fit 16 GB.
-- **System RAM** for the bf16 master copy, on top of VRAM: ~24 GB on Krea 2, ~23 GB (likeness) to ~38 GB (full model) on H3. H3's master spills to disk automatically, so full-model H3 fine-tuning runs on a 64 GB box. **Krea 2's does not spill, so Krea 2 fine-tuning realistically wants 48 GB+ of system RAM.** The trainer warns at launch when RAM looks tight.
+- **VRAM:** on the NF4 base, **24 GB** runs the full-depth component cycle at full speed and **16 GB** streams frozen blocks from RAM at a slower step (see the tables above).
+- **System RAM** for the bf16 master copy, on top of VRAM: ~24 GB on Krea 2, ~23 GB (likeness) to ~38 GB (full model) on H3. The master spills to disk automatically when RAM is short (Krea 2 and Qwen when it would take over 40% of the available RAM), so a 32 GB box fine-tunes Krea 2, more slowly. The trainer warns at launch when RAM looks tight.
 - **Disk — set the save location before the run.** Every save is a full checkpoint: ~26 GB on Krea 2, ~21 GB on H3. Saving once per 4-epoch cycle over a 40-epoch run is ~260 GB, and a Pause writes an extra full checkpoint. The Training tab's **Output Directory** defaults to your LoRA folder; point it at a roomy drive before you press Start, because afterwards the only fix is moving huge files by hand.
 - **NVIDIA only.** Fine-tuning is untested on AMD/ROCm: every measured tier is NVIDIA, and the NF4 default relies on bitsandbytes 4-bit, the least-travelled part of the ROCm stack. Reports welcome either way.
 - **Low learning rates and long step counts** — see [Learning rates](#learning-rates).

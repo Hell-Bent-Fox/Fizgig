@@ -1,5 +1,5 @@
 """MiniMax H3 block layout for the Repair Studio (and Explorer / Royale in H3 mode).
-Companion to `state.py`'s Klein layout and `krea2_blocks.py` — the `SliderState` dataclass
+Companion to `state.py`'s Klein layout — the `SliderState` dataclass
 is shared and model-agnostic; only the block-id set + the per-block regex differ.
 
 An H3 full-model LoRA covers (from real trained LoRAs):

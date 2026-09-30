@@ -103,8 +103,8 @@ class FamilyDescription:
     model_files: tuple = ()
     text_encoder_label: str = ""
     vae_label: str = ""
-    # a family already in the Preferences tab whose rows these model files are ("krea2"): no section of its own
-    shares_prefs_with: str = ""
+    # a tip under the family's Preferences section (e.g. filling the paths by hand from a ComfyUI install)
+    prefs_note: str = ""
 
     # latent rules
     latent_channels: int = 16
@@ -150,6 +150,12 @@ class FamilyDescription:
     # {} = Auto just takes the first precision
     train_memory: dict = field(default_factory=dict)
     optimizers: tuple = ("adamw8bit", "adamw")
+    # Automagic v3 keeps one learning rate per parameter group: (group name, (substrings of the dotted module
+    # name, ...)) splits the LoRA so each family of modules finds its own rate; the first match wins, the rest form
+    # "other". () = one group
+    optimizer_families: tuple = ()
+    # Automagic v3's sign window for this family when Optimizer Args doesn't set polarity_history (0 = its default)
+    automagic_sign_window: int = 0
     network_types: tuple = ("lora",)
     edit_training: bool = False       # Edit LoRA from before/after pairs (the driver's supports_references)
     edit_note: str = ""               # the Edit LoRA section's "What you need" line: pair count and photo size
@@ -183,6 +189,8 @@ class FamilyDescription:
 
     # workbench tools that support this family ("repair", ...); the generic WorkbenchEngine drives them all
     workbench: tuple = ()
+    # Repair Studio built-ins beyond Reset All: (name, ((block id, strength), ...)) - every other block at 1.0
+    repair_presets: tuple = ()
 
     # things a user or a later session must know, with sources
     notes: tuple = ()
@@ -201,12 +209,6 @@ class FamilyDescription:
         """How a reference picture reaches previews and the workbench: "vision" (the text encoder sees it,
         preview_image), "edit" (the prompt edits it, edit_training) or "" (none)."""
         return "vision" if self.preview_image else ("edit" if self.edit_training else "")
-
-    @property
-    def workbench_label(self) -> str:
-        """The family's name in the workbench tools' selectors: the Training tab's label when the family shares its
-        files with another (Krea 2 (driver) beside Krea 2), else its plain name."""
-        return self.gui_label if self.shares_prefs_with else self.display_name
 
     def preview_checkpoint(self):
         """(ModelFile, SamplingSettings) of the workbench's preview checkpoint, or None."""

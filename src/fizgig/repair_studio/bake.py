@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 _BLOCK_KEY_RE = re.compile(r"(?:lora_unet_)?(double_blocks|single_blocks)_(\d+)_")
-# Krea 2 + MiniMax H3 module naming (see repair_studio.krea2_blocks / h3_blocks). txtfusion
+# Krea 2 + MiniMax H3 module naming (see repair_studio.h3_blocks). txtfusion
 # and token_refiner are checked before main blocks. Krea 2 and H3 SHARE the raw
 # `lora_unet_blocks_N_` key shape but use disjoint block-id namespaces (block_N vs h3blk_N),
 # so the mapper is resolved against the STATE's own ids: whichever namespace the state

@@ -35,10 +35,10 @@ from fizgig.dataset.config import (BlueprintGenerator, ConfigSanitizer,  # noqa:
 from fizgig.families import quant  # noqa: E402
 from fizgig.families.lora import FamilyLoRA  # noqa: E402
 from fizgig.families.registry import get as get_family  # noqa: E402
-from fizgig.krea2.trainer import AdaptiveLR  # noqa: E402
+from fizgig.training.adaptive_lr import AdaptiveLR  # noqa: E402
 from fizgig.training.metadata import (build_metadata, latest_sample_image, refresh_checkpoint_thumbnail,  # noqa: E402
                                       resolve_title, sample_for_epoch, thumbnail_data_uri)
-from fizgig.training.train_utils import LossRecorder, prune_state_dirs  # noqa: E402
+from fizgig.training.train_utils import LossRecorder, prune_state_dirs, validate_output_name  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,28 @@ def _save_state(output_dir, output_name, net, optimizer, *, epoch, global_step, 
         json.dump({"epoch": epoch, "global_step": global_step, "architecture": arch_id, **(extra or {})}, f)
     logger.info(f"[state] saved -> {state_dir}")
     return state_dir
+
+
+def _optimizer_family_groups(desc, net, lr):
+    """The LoRA's trainable parameters split by the description's optimizer_families (first match on the dotted
+    module name; the rest are "other"), as optimizer param groups - or None when the family declares none or
+    everything lands in one group."""
+    if not desc.optimizer_families:
+        return None
+    from fizgig.families.lora import TRAINABLE
+    buckets, counts = {}, {}
+    for full, w in net.wrapped.items():
+        if TRAINABLE not in w.adapters:
+            continue
+        fam = next((name for name, needles in desc.optimizer_families if any(n in full for n in needles)), "other")
+        ps = [p for p in w.adapters[TRAINABLE].parameters() if p.requires_grad]
+        if ps:
+            buckets.setdefault(fam, []).extend(ps)
+            counts[fam] = counts.get(fam, 0) + 1
+    if len(buckets) < 2:
+        return None
+    order = [n for n, _ in desc.optimizer_families] + ["other"]
+    return [{"params": buckets[f], "lr": float(lr), "family": f, "modules": counts[f]} for f in order if f in buckets]
 
 
 def _load_state(state_dir, net, optimizer, device, arch):
@@ -534,6 +556,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     desc = get_family(family)
     if desc is None or not desc.training_ready:
         raise RuntimeError(f"unknown or untrainable family {family!r}")
+    validate_output_name(output_name)          # before any model loads, not at the first save an epoch in (#70)
     driver = desc.load_driver()
     arch = desc.arch_id
     speed_desc = desc.preview_speed() if speed_lora else None
@@ -836,7 +859,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     if do_compile:                       # decided before the load (below the Auto plan), applied last
         driver.compile_blocks(dit, "outside" if do_compile == "outside" else "inside",
                               blocks_to_swap if swapped else 0)
-    from fizgig.training.optimizers import create_optimizer, owns_its_rate
+    from fizgig.training.optimizers import create_optimizer, group_rates, optimizer_lr, owns_its_rate
     if ftr is not None:
         params, optimizer, opt_label = [], None, ftr.opt_label
     else:
@@ -845,7 +868,18 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                      f"LoRA rank {network_dim} alpha {network_alpha:g}") +
                     f": {len(net.trainable_modules())} modules, {sum(p.numel() for p in params) / 1e6:.1f}M "
                     f"trainable params")
-        optimizer, opt_label = create_optimizer(optimizer_type, params, learning_rate, optimizer_args)
+        opt_params = params
+        if str(optimizer_type or "").lower() == "automagic3":
+            groups = _optimizer_family_groups(desc, net, learning_rate)
+            if groups:                   # one rate per group: each family of modules finds its own
+                opt_params = groups
+                logger.info("[optimizer] per-family rates: " + ", ".join(
+                    f"{g['family']} ({g['modules']} modules)" for g in groups) + " - each votes its own rate")
+            if desc.automagic_sign_window and "polarity_history" not in (optimizer_args or ""):
+                optimizer_args = f"{optimizer_args or ''} polarity_history={desc.automagic_sign_window}".strip()
+                logger.info(f"[optimizer] Automagic v3: sign window {desc.automagic_sign_window} (this family's "
+                            f"default; set polarity_history in Optimizer Args to override)")
+        optimizer, opt_label = create_optimizer(optimizer_type, opt_params, learning_rate, optimizer_args)
     if owns_its_rate(optimizer):        # Automagic v3 sets its own rate: the watcher and schedulers stand down
         if adaptive_lr:
             logger.info("[adaptive_lr] ignored - the optimizer sets its own learning rate")
@@ -1074,7 +1108,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         _off = ftr.epochs_done if ftr is not None else 0
         logger.info(f"epoch {epoch + 1 + _off}/{max_train_epochs + _off}  avr_loss={recorder.moving_average:.4f}  "
                     f"step={global_step}  {(time.time() - t0) / max(1, steps_per_epoch):.2f}s/step  "
-                    f"lr={learning_rate if optimizer is None else optimizer.param_groups[0]['lr']:.3e}  "
+                    f"lr={learning_rate if optimizer is None else optimizer_lr(optimizer):.3e}  "
+                    + (f"({group_rates(optimizer)})  " if optimizer is not None and group_rates(optimizer) else "") +
                     f"peak VRAM {torch.cuda.max_memory_reserved() / 1024 ** 3:.1f} GB")
         if adaptive:
             adaptive.epoch_boundary(epoch, recorder.moving_average, net.trainable_modules(), optimizer)

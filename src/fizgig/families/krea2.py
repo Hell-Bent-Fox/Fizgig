@@ -1,9 +1,7 @@
-"""Krea 2 through the standard layer (the driver migration, branch experiment/krea2-driver).
-
-It sits beside the original Krea 2 entry ("Krea 2 (driver)") until the two are shown to train the same: same model
-files and Preferences rows (shares_prefs_with), its own cache files (arch_id krea2drv - the driver's cache layout
-differs, so neither path may read the other's), and ComfyUI-compatible kohya keys like the original.
-Facts are the original trainer's (src/fizgig/krea2/trainer.py, utils.py, sampling.py), cited per value.
+"""Krea 2 through the standard layer. It replaced the original Krea 2 trainer (30 Sep 2026) once the two were shown
+to train the same: the same model files and Preferences keys, ComfyUI-compatible kohya keys like the original, and
+its own cache files (arch_id krea2drv - the cache layout differs from the original's, so its caches are rebuilt).
+Facts are the original trainer's (src/fizgig/krea2/trainer.py - removed with the original family on 30 Sep 2026, in git history - utils.py, sampling.py), cited per value.
 """
 from fizgig.families.description import (
     FamilyDescription, LoRAFormat, ModelFile, SamplingSettings, SpeedLoRA,
@@ -29,10 +27,10 @@ def _preset(rank, lr=1e-4, adaptive=None, epochs=30, slider=False, mp="0.25"):
 
 
 KREA2 = FamilyDescription(
-    key="krea2_driver",
+    key="krea2",
     arch_id="krea2drv",
     display_name="Krea 2",
-    gui_label="Krea 2 (driver)",
+    gui_label="Krea 2",
     lora_name_suffix="krea2",
     experimental=True,
 
@@ -53,7 +51,11 @@ KREA2 = FamilyDescription(
                   "Optional: Repair Studio, LoRA the Explorer and LoRA Royale preview on it by default (8-step, "
                   "CFG-free); without it they use the Turbo LoRA on the RAW model.", role="preview_dit"),
     ),
-    shares_prefs_with="krea2",
+    prefs_note=("💡 Already have these files for ComfyUI? Filling the paths in by hand works perfectly — the download "
+                "button is a convenience, not a requirement. The first time you caption or train while online, Fizgig "
+                "quietly fetches a few tiny helper files and keeps them, and from then on everything runs fully "
+                "offline. Setting up a machine that will never see the internet? Paste a complete HuggingFace model "
+                "folder into the text encoder field instead of a single file and nothing needs downloading at all."),
     text_encoder_label="Qwen3-VL-4B",
     vae_label="Qwen-Image VAE",
 
@@ -90,9 +92,15 @@ KREA2 = FamilyDescription(
     preview_checkpoint_sampling=SamplingSettings(
         "Turbo checkpoint", steps=8, cfg=1.0, sampler="euler", scheduler="simple", options=(("mu", 1.15),),
         note="The distilled Turbo: CFG-free, mu pinned at 1.15, as the original workbench.",
-        source="src/fizgig/repair_studio/krea2_engine.py generate_preview"),
+        source="the original Krea 2 workbench engine (removed with the original family)"),
     finetune=True,
     workbench=("repair", "explorer", "profiler", "extract", "royale"),
+    # the text-fusion boosts (15 Sep 2026, #137): the four text-fusion blocks at x2 / x3, everything else untouched.
+    # Measured across several LoRAs, x3 lifted the detail metric ~72 -> ~77 and likeness 2-7 points on every LoRA but
+    # an overtrained one, composition unchanged
+    repair_presets=tuple((f"✨Text fusion ×{m} (experimental)",
+                          tuple((f"txt_{s}_{i}", float(m)) for s in ("lw", "rf") for i in range(2)))
+                         for m in (2, 3)),
     # The original's measured 0.25 MP peaks (utils/capabilities.py: 5090, batch 1, rank 32; 0.42 GB saved per swapped
     # INT8 block) and the driver's measured growth to 1 MP on full-size photos (5090, rank 8, previews off): INT8
     # +2.9 GB (15.3 -> 18.2 GB whole-GPU; the original grows +2.6 on the same data), NF4 13.3 GB at 1 MP under a
@@ -101,6 +109,12 @@ KREA2 = FamilyDescription(
     train_memory={"int8": (((0.25, 16.2), (1.0, 19.1)), 0.42), "nf4": (((0.25, 11.4), (1.0, 13.4)), 0.0),
                   "bf16": (((0.25, 26.0), (1.0, 28.9)), 0.84)},
     optimizers=("adamw8bit", "adamw"),
+    # the original's Automagic setup (Peter, 17 Sep 2026): the 264 Linears converge at very different speeds, and the
+    # text-fusion stack (under-trained by the recipe) is the minority one shared rate outvotes; a 16-step sign window
+    # because batch one, logit-normal timesteps and bucketed resolutions make consecutive steps different problems,
+    # so the default 8 reads that noise as overshoot (measured: the rate crawled 1e-6 -> 4.3e-6 in an epoch)
+    optimizer_families=(("txtfusion", ("txtfusion.",)), ("attn", (".attn.",)), ("mlp", (".mlp.",))),
+    automagic_sign_window=16,
     network_types=("lora", "lokr"),
     slider_training=True,             # the driver's diff-weighted loss (photo pairs) and noise_latents / predict (prompts)
 

@@ -62,20 +62,6 @@ _CAPTION_TE = Weight("krea2_text_encoder", "Comfy-Org/Krea-2",
 
 # Paths verified against the HuggingFace API, not the README — the two can drift.
 FAMILIES = {
-    "krea2": [
-        Weight("krea2_raw_dit", "Comfy-Org/Krea-2",
-               "diffusion_models/krea2_raw_bf16.safetensors", 26.0,
-               "RAW DiT — what training runs on"),
-        _CAPTION_TE,
-        Weight("krea2_vae", "Comfy-Org/Krea-2",
-               "vae/qwen_image_vae.safetensors", 0.25, "Qwen-Image VAE"),
-        Weight("krea2_turbo_lora", "Comfy-Org/Krea-2",
-               "loras/krea2_turbo_lora_rank_64_bf16.safetensors", 0.47,
-               "Turbo LoRA — in-training previews"),
-        Weight("krea2_turbo_dit", "Comfy-Org/Krea-2",
-               "diffusion_models/krea2_turbo_fp8_scaled.safetensors", 13.0,
-               "Turbo DiT — Repair Studio, Explorer, Royale and classic previews"),
-    ],
     "minimax": [
         Weight("minimax_dit", "Comfy-Org/MiniMax-H3",
                "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors", 21.0,
@@ -142,11 +128,17 @@ def _described_families():
         from fizgig.families.registry import FAMILIES as _REG
     except Exception:
         return {}
-    # Every family's button also fetches the Captions tab's Qwen3-VL captioner, as the old families' lists do.
-    return {d.key: [Weight(f.pref_key, f.repo, f.path, f.size_gb, f.label + (" — " + f.note if f.note else ""),
-                           optional=not f.required, local_name=f.local_name or None)
-                    for f in d.model_files if f.repo and f.path] + [_CAPTION_TE]
-            for d in _REG.values() if d.training_ready}
+    # Every family's button also fetches the Captions tab's Qwen3-VL captioner (Krea 2's own text encoder, so not
+    # twice there), as the old families' lists do.
+    out = {}
+    for d in _REG.values():
+        if not d.training_ready:
+            continue
+        ws = [Weight(f.pref_key, f.repo, f.path, f.size_gb, f.label + (" — " + f.note if f.note else ""),
+                     optional=not f.required, local_name=f.local_name or None)
+              for f in d.model_files if f.repo and f.path]
+        out[d.key] = ws + ([] if any(w.pref_key == _CAPTION_TE.pref_key for w in ws) else [_CAPTION_TE])
+    return out
 
 
 def _described_helpers():
@@ -466,7 +458,7 @@ def fetch(families, models_dir=None, repo_dir=REPO_DIR, token=None, include_opti
 def main():
     p = argparse.ArgumentParser(
         description="Download Fizgig's model files and write them into Preferences.")
-    p.add_argument("--family", action="append", choices=["krea2", "klein", "minimax", "tools", *DESCRIBED],
+    p.add_argument("--family", action="append", choices=["klein", "minimax", "tools", *DESCRIBED],
                    help="Repeatable. Krea 2 needs no HF account; Klein is gated.")
     p.add_argument("--all", action="store_true", help="Every family, including the helper models.")
     p.add_argument("--include-optional", action="store_true",

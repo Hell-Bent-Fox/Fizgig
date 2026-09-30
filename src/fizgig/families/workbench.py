@@ -1,7 +1,7 @@
 """The standard layer's workbench engine: Repair Studio (and later the Explorer and Royale) for any described family.
 
 One engine over a family's driver (model code) and the family LoRA layer (adapters, block controls, bake). It speaks
-the same protocol as the old per-family engines (repair_studio.engine / krea2_engine / h3_engine), so the tabs drive
+the same protocol as the old per-family engines (repair_studio.engine / h3_engine), so the tabs drive
 it unchanged: ensure_pipeline, load_primary / load_donor / unload_donor, swap_primary_weights, apply_state,
 generate_preview, generate_baseline, request_cancel / clear_cancel, reset, plus the primary_* / donor_* attributes.
 

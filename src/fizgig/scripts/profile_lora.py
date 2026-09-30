@@ -46,12 +46,13 @@ def main():
     args = parser.parse_args()
 
     if args.krea2:
-        from fizgig.profiler.krea2_profile import profile_krea2_weight_only
+        from fizgig.families.registry import get
+        from fizgig.families.weight_profile import profile_weight_only
 
         out_html = args.output
         if not out_html.lower().endswith(".html"):
             out_html = os.path.splitext(args.lora)[0] + "_krea2_profile.html"
-        html, sidecar = profile_krea2_weight_only(args.lora, out_html)
+        html, sidecar = profile_weight_only(get("krea2"), args.lora, out_html)
         print(f"\nKrea 2 weight-only profile:")
         print(f"  Report:  {html}")
         print(f"  Sidecar: {sidecar}")

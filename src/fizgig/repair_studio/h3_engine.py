@@ -1,4 +1,4 @@
-"""Repair-Studio engine for MiniMax H3 — the parallel of `krea2_engine.Krea2RepairEngine`.
+"""Repair-Studio engine for MiniMax H3.
 
 H3's `sampling.sample_image` is a complete sampler (audio carried-variable math included), so
 the preview is thin: apply the slider state to the LoRA networks (the model-agnostic

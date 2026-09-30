@@ -19,9 +19,6 @@ from fizgig.families.driver import Block, BlockGroup, FamilyDriver
 
 DTYPE = torch.bfloat16
 _BLOCK_MODULES = ("attn.wq", "attn.wk", "attn.wv", "attn.gate", "attn.wo", "mlp.gate", "mlp.up", "mlp.down")
-_FUSION = ([f"txtfusion.layerwise_blocks.{i}.{m}" for i in range(2) for m in _BLOCK_MODULES]
-           + ["txtfusion.projector"]
-           + [f"txtfusion.refiner_blocks.{i}.{m}" for i in range(2) for m in _BLOCK_MODULES])
 _IO = ("first", "tmlp.0", "tmlp.2", "txtmlp.1", "txtmlp.3", "tproj.1", "last.linear")
 
 
@@ -48,7 +45,7 @@ class Krea2Driver(FamilyDriver):
 
     def compile_blocks(self, dit, boundary="inside", blocks_to_swap=0):
         # the original's per-block compile, with its guards (block swap, triton, host compiler, fp8 on pre-Ada)
-        from fizgig.krea2.trainer import _compile_blocks
+        from fizgig.krea2.compile import _compile_blocks
         _compile_blocks(dit, blocks_to_swap, fp8_scaled=False, boundary=boundary)
 
     # ---- models ---------------------------------------------------------------------------------
@@ -270,9 +267,16 @@ class Krea2Driver(FamilyDriver):
             return [m for m in mods if names is None or m in names]
         blocks = [Block(f"block_{i}", f"Block {i}", keep([f"blocks.{i}.{m}" for m in _BLOCK_MODULES]))
                   for i in range(self.description.n_blocks)]
+        # the text-fusion stack as the original's four sliders (its layerwise and refiner blocks); its projector
+        # rides with the input / output layers
+        fusion = [Block(f"txt_{short}_{i}", f"Text fusion {name} {i}",
+                        keep([f"txtfusion.{stack}_blocks.{i}.{m}" for m in _BLOCK_MODULES]))
+                  for short, name, stack in (("lw", "layerwise", "layerwise"), ("rf", "refiner", "refiner"))
+                  for i in range(2)]
         return [BlockGroup("Blocks", blocks),
-                BlockGroup("Text fusion", [Block("txtfusion", "Text fusion", keep(_FUSION))]),
-                BlockGroup("Input and output", [Block("io", "Input, timestep and output layers", keep(list(_IO)))])]
+                BlockGroup("Text fusion", fusion),
+                BlockGroup("Input and output", [Block("io", "Input, timestep and output layers",
+                                                      keep(list(_IO) + ["txtfusion.projector"]))])]
 
     def quant_target_names(self, dit):
         """The blocks' Linears only: the text-fusion stack and the I/O layers stay bf16, as in the original."""
