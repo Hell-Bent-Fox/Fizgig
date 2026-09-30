@@ -82,6 +82,18 @@ def slider_on(desc, inputs, source=None):
     return on
 
 
+def ft_on(desc, inputs):
+    """A full fine-tune of the base model, for a family whose driver offers one (description.finetune)."""
+    return bool(desc.finetune and inputs.get("FAMILY_FT"))
+
+
+def _ft_int(inputs, key, default):
+    try:
+        return max(1, int(float(str(inputs.get(key, "") or default))))
+    except ValueError:
+        return None
+
+
 def caches(desc, inputs):
     """Whether the cache stages run: not on a resume (the cache is already built), not for a prompt slider (no
     photos), not with Enable Cache off."""
@@ -161,6 +173,11 @@ def problems(desc, inputs):
     required model file (plus the training adapter while it is on) set and on disk."""
     errors = []
     folder = _s(inputs.get("image_folder"))
+    if ft_on(desc, inputs):
+        for key, label in (("FAMILY_FT_ROTATIONS", "Rotations"), ("FAMILY_FT_SAVE_EVERY", "Save every"),
+                           ("FAMILY_FT_ROTATE_EVERY", "Epochs per window")):
+            if _ft_int(inputs, key, 1) is None:
+                errors.append(f"Fine-tune: {label} must be a whole number of 1 or more")
     ext = inputs.get("caption_ext") or ".txt"
     if edit_on(desc, inputs) and slider_on(desc, inputs):
         errors.append("Edit LoRA and Slider are both on - a run is one kind of LoRA: pick Edit or Slider")
@@ -271,7 +288,7 @@ def train_command(desc, inputs, plan):
            "--learning_rate", str(st["LEARNING_RATE"]), "--max_train_epochs", str(st["MAX_TRAIN_EPOCHS"]),
            "--save_every_n_epochs", str(st["SAVE_EVERY_N_EPOCHS"]), "--seed", str(st["SEED"])]
     cmd += _state_flags(st)
-    if _s(st.get("RESUME_TRAINING")):
+    if _s(st.get("RESUME_TRAINING")) and not ft_on(desc, st):
         cmd += ["--resume", _s(st["RESUME_TRAINING"])]
     if desc.training_adapter and st.get("FAMILY_TRAINING_ADAPTER", True):
         cmd += ["--training_adapter", (st.get("models") or {}).get(desc.training_adapter, "")]
@@ -310,6 +327,18 @@ def train_command(desc, inputs, plan):
         lab = str(st.get("FAMILY_PRECISION", "") or "")
         prec = next((k for k, v in PRECISION_LABELS.items() if v == lab), "auto")
         cmd += ["--precision", prec if prec == "auto" or prec in desc.precisions else "auto"]
+    if ft_on(desc, st):
+        # the length and cadence in whole rotations; a continuation starts from the paused run's checkpoint
+        cmd += ["--finetune", "--ft_rotations", str(_ft_int(st, "FAMILY_FT_ROTATIONS", 10)),
+                "--ft_save_every_rotations", str(_ft_int(st, "FAMILY_FT_SAVE_EVERY", 1)),
+                "--ft_rotate_every", str(_ft_int(st, "FAMILY_FT_ROTATE_EVERY", 1))]
+        if st.get("FAMILY_FT_FUSED", True):
+            cmd.append("--ft_fused_backward")
+        cont = st.get("FAMILY_FT_CONTINUE") or {}
+        if cont.get("checkpoint"):
+            cmd[cmd.index("--dit") + 1] = cont["checkpoint"]
+            cmd += ["--ft_start_window", str(int(cont.get("start_window", 0))),
+                    "--ft_epochs_done", str(int(cont.get("epochs_done", 0)))]
     # per-image loss watch (families/loss_watch.py), batch size 1 only
     try:
         bs1 = int(str(st.get("batch_size", 1)).strip() or 1) <= 1

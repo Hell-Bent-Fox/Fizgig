@@ -37,6 +37,13 @@ class Krea2Driver(FamilyDriver):
     # driver run starts from the same INT8 weights as a Krea 2 run.
     int8_fp32_scales = False
 
+    def ft_spec(self, dit):
+        # the original's component windows (balanced: attention ~30% of a block, the MLP split in its three
+        # matrices), text fusion trained throughout, and its measured NF4-trunk planner calibration
+        from fizgig.families.ft import FTSpec
+        return FTSpec(blocks="blocks", components=("attn", "mlp.gate", "mlp.up", "mlp.down"),
+                      always_on=("txtfusion",), overhead_gb=9.5, trunk_gb_per_block=0.217)
+
     def compile_blocks(self, dit, boundary="inside", blocks_to_swap=0):
         # the original's per-block compile, with its guards (block swap, triton, host compiler, fp8 on pre-Ada)
         from fizgig.krea2.trainer import _compile_blocks

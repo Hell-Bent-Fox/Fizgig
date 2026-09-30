@@ -163,6 +163,27 @@ class FamilyDriver:
         preview_image=True) -> conditioning dicts, as encode_text."""
         raise NotImplementedError
 
+    # ---- full fine-tune (optional: families/ft.py) ------------------------------------------------------------------
+    def ft_spec(self, dit):
+        """The family's fine-tune declaration (families.ft.FTSpec), or None: no fine-tune. Descriptions that set
+        finetune=True return one."""
+        return None
+
+    def install_ft_streamer(self, dit, streamer) -> None:
+        """Hand the fine-tune's block streamer to the model: it implements the block-swap interface the forward
+        already calls (wait_for_block / submit_move_blocks_forward). The default suits the common
+        `offloader` + `blocks_to_swap` convention; a family without block swap cannot stream (small cards then refuse
+        up front)."""
+        if not self.max_blocks_to_swap(dit):
+            raise RuntimeError(f"{self.description.display_name} has no block swap, so a fine-tune cannot stream "
+                               f"frozen blocks on this card - it needs more free VRAM")
+        old = getattr(dit, "offloader", None)
+        for fn in ("remove", "remove_hooks"):
+            if old is not None and hasattr(old, fn):
+                getattr(old, fn)()
+        dit.offloader = streamer
+        dit.blocks_to_swap = 1
+
     def compile_blocks(self, dit, boundary: str = "inside", blocks_to_swap: int = 0) -> None:
         """torch.compile the transformer blocks, in place, after every adapter has patched the forwards. `boundary`
         places the gradient checkpoint inside or outside the compiled region. Only for descriptions with

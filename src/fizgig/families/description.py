@@ -137,6 +137,9 @@ class FamilyDescription:
     # previews can take the Samples tab's reference image through the text encoder's vision path ('prompt from a
     # picture', Krea 2) - conditioning only, not an edit reference (edit_training)
     preview_image: bool = False
+    # a full fine-tune of the base model is offered (the driver's ft_spec returns its FTSpec, families/ft.py): the
+    # Training tab shows the fine-tune card and the launch sends --finetune. Optional - most families never need it
+    finetune: bool = False
     # measured training memory for the Auto plan: {precision: (peak GB with no block swap, GB saved per swapped
     # block)}; the peak may instead be ((megapixels, GB), ...) points, interpolated for the run's resolution.
     # {} = Auto just takes the first precision
