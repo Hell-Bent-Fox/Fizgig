@@ -643,8 +643,13 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     if not adaptive and not owns_its_rate(optimizer):
         scheduler = _step_scheduler(optimizer, lr_scheduler, lr_warmup_steps, steps_per_epoch * max_train_epochs,
                                     lr_scheduler_num_cycles, lr_scheduler_power)
-        for _ in range(global_step):
-            scheduler.step()
+        import warnings
+        with warnings.catch_warnings():
+            # a resume moves the schedule to where the run paused before the first optimizer step, on purpose;
+            # PyTorch's "lr_scheduler.step() before optimizer.step()" warning is for training loops, not this
+            warnings.filterwarnings("ignore", message=r"Detected call of `lr_scheduler\.step\(\)` before")
+            for _ in range(global_step):
+                scheduler.step()
 
     last_prompt = [None]
 
