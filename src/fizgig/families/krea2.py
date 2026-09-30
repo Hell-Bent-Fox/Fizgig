@@ -126,8 +126,9 @@ KREA2 = FamilyDescription(
         ("✨ Krea 2 Standard (rank 32, full model)", _preset(32, epochs=64)),
         ("✨ Krea 2 Style (rank 16, gentle LR)", _preset(16, adaptive=("5e-5", "2e-4"), epochs=64)),
         # Slider: hot and short, as Qwen's and the experiment/slider-training branch's Krea 2 Slider (rank 4, 2e-4,
-        # 0.5 MP). The loss watch and Adaptive LR are switched off for sliders by the trainer.
-        ("✨ Krea 2 Slider (rank 4, 2e-4)", _preset(4, lr=2e-4, slider=True, mp="0.5")),
+        # 0.5 MP). The loss watch and Adaptive LR are switched off for sliders by the trainer. 20 epochs: a happy/sad
+        # prompt slider (16 practice pictures, guidance 2) was right at 20 and had turned +1 into an illustration by 25.
+        ("✨ Krea 2 Slider (rank 4, 2e-4)", _preset(4, lr=2e-4, epochs=20, slider=True, mp="0.5")),
     ),
     notes=(
         ("Timesteps: logit-normal with a resolution-dependent shift (mu 0.5 at 256 image tokens to 1.15 at 6400), "
