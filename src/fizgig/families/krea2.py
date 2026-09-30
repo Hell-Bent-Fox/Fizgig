@@ -83,10 +83,13 @@ KREA2 = FamilyDescription(
     auto_precisions=("int8", "nf4"),
     compiles=True,
     preview_image=True,
-    # The original's measured peaks (utils/capabilities.py: 5090, 0.25 MP, batch 1, rank 32; +0.25 GB per extra
-    # megapixel; 0.42 GB saved per swapped INT8 block). bf16: measured on the driver, rank 8, 0.25 MP, 26.0 GB.
-    train_memory={"int8": (((0.25, 16.2), (2.0, 16.64)), 0.42), "nf4": (((0.25, 11.4), (2.0, 11.84)), 0.0),
-                  "bf16": (((0.25, 26.0), (2.0, 26.44)), 0.84)},
+    # The original's measured 0.25 MP peaks (utils/capabilities.py: 5090, batch 1, rank 32; 0.42 GB saved per swapped
+    # INT8 block) and the driver's measured growth to 1 MP on full-size photos (5090, rank 8, previews off): INT8
+    # +2.9 GB (15.3 -> 18.2 GB whole-GPU; the original grows +2.6 on the same data), NF4 13.3 GB at 1 MP under a
+    # 16 GB card. The original's +0.25 GB/MP under-plans 1 MP: INT8 + 16 swapped blocks ran out on a 12 GB card.
+    # bf16: measured on the driver, rank 8, 0.25 MP, 26.0 GB; its 1 MP point carries INT8's growth.
+    train_memory={"int8": (((0.25, 16.2), (1.0, 19.1)), 0.42), "nf4": (((0.25, 11.4), (1.0, 13.4)), 0.0),
+                  "bf16": (((0.25, 26.0), (1.0, 28.9)), 0.84)},
     optimizers=("adamw8bit", "adamw"),
     network_types=("lora", "lokr"),
     slider_training=True,             # the driver's diff-weighted loss (photo pairs) and noise_latents / predict (prompts)

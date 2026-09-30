@@ -28,8 +28,10 @@ def _targets(dit, driver):
 
 
 @torch.no_grad()
-def quantize(dit, driver, precision, compute_device):
-    """Quantise the block map's Linears in place. Returns the number quantised (0 for bf16)."""
+def quantize(dit, driver, precision, compute_device, store_device=None):
+    """Quantise the block map's Linears in place. Returns the number quantised (0 for bf16). INT8 weights are
+    quantised on `compute_device` and kept on `store_device` when given (the CPU, for a block-swapped base: the swap
+    streams them in, where a fully resident INT8 base would have to fit before swapping could start)."""
     if precision == "bf16":
         return 0
     if precision not in PRECISIONS:
@@ -45,7 +47,8 @@ def quantize(dit, driver, precision, compute_device):
             w = w.float() if fp32 else w.contiguous()         # a driver may keep its original trainer's bf16 scales
             scale = w.abs().amax(dim=-1, keepdim=True).clamp_min(1e-8) / 127.0
             m.weight.requires_grad_(False)
-            m.weight.data = (w / scale).round_().clamp_(-127, 127).to(torch.int8).contiguous()
+            q = (w / scale).round_().clamp_(-127, 127).to(torch.int8).contiguous()
+            m.weight.data = q if store_device is None else q.to(store_device)
             m.register_buffer("_int8_wscale", scale.reshape(1, -1).to(torch.float32), persistent=False)
             m._is_int8 = True
             m._int8_grad_mode = "bf16"
@@ -92,7 +95,7 @@ def load_base(driver, path, device, precision="bf16", blocks_to_swap=0, supports
             logger.info(f"[block swap] {swap} requested, {cap} is the maximum")
             swap = cap
     dit = driver.load_dit(path, "cpu" if (swap or precision != "bf16") else device)
-    quantize(dit, driver, precision, device)
+    quantize(dit, driver, precision, device, store_device="cpu" if swap else None)
     if swap:
         driver.enable_block_swap(dit, swap, device, supports_backward)
         logger.info(f"[block swap] {swap} blocks stream between CPU and GPU")
