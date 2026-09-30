@@ -23,7 +23,7 @@ PRECISIONS = ("bf16", "int8", "nf4")
 
 
 def _targets(dit, driver):
-    names = set(driver.lora_target_names(dit))
+    names = set(driver.quant_target_names(dit))
     return [(n, m) for n, m in dit.named_modules() if n in names and isinstance(m, torch.nn.Linear)]
 
 

@@ -101,6 +101,8 @@ class FamilyDescription:
     model_files: tuple = ()
     text_encoder_label: str = ""
     vae_label: str = ""
+    # a family already in the Preferences tab whose rows these model files are ("krea2"): no section of its own
+    shares_prefs_with: str = ""
 
     # latent rules
     latent_channels: int = 16

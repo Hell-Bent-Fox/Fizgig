@@ -130,8 +130,17 @@ class FamilyLoRA:
         """(down key, up key, alpha key) of any wrapped module, in the family's file format. Built from the module
         path alone, so modules outside the blocks never need a block id."""
         f = self.desc.lora
-        stem = f"{f.file_prefix}{full}"
+        stem = self._stem(full)
         return f"{stem}.{f.down}.weight", f"{stem}.{f.up}.weight", f.alpha_key.format(prefix=stem)
+
+    def _stem(self, full, lokr=False):
+        """A module's key stem in the family's format: '<file_prefix><dotted path>', or for a kohya family
+        'lora_unet_<path with dots as underscores>' (a LoKR there uses the LyCORIS standard 'diffusion_model.<path>',
+        as Fizgig's Krea 2 always saved it)."""
+        f = self.desc.lora
+        if f.kohya:
+            return f"diffusion_model.{full}" if lokr else f"lora_unet_{full.replace('.', '_')}"
+        return f"{f.file_prefix}{full}"
 
     def _wrap(self, full):
         """Wrap one Linear by dotted name (targets at init; frozen files may reach beyond them, e.g. a speed LoRA
@@ -355,7 +364,7 @@ class FamilyLoRA:
             if len(live) == 1 and isinstance(w.adapters[live[0][0]], LoKR):
                 # a lone LoKR stays a LoKR: the scale folds into w2 (alpha 1, full matrices -> scale 1 everywhere)
                 ad, s1 = w.adapters[live[0][0]], live[0][1]
-                stem = f"{self.desc.lora.file_prefix}{full}"
+                stem = self._stem(full, lokr=True)
                 sd[f"{stem}.lokr_w1"] = ad.lokr_w1.detach().to("cpu", dtype).contiguous()
                 sd[f"{stem}.lokr_w2"] = (ad.lokr_w2.detach().float() * s1).to("cpu", dtype).contiguous()
                 sd[f"{stem}.alpha"] = torch.tensor(1.0)
@@ -388,7 +397,7 @@ class FamilyLoRA:
         for full, w in self.wrapped.items():
             if TRAINABLE in w.adapters and isinstance(w.adapters[TRAINABLE], LoKR):
                 ad = w.adapters[TRAINABLE]
-                stem = f"{self.desc.lora.file_prefix}{full}"
+                stem = self._stem(full, lokr=True)
                 sd[f"{stem}.lokr_w1"] = ad.lokr_w1.detach().to("cpu", dtype).contiguous()
                 sd[f"{stem}.lokr_w2"] = ad.lokr_w2.detach().to("cpu", dtype).contiguous()
                 sd[f"{stem}.alpha"] = torch.tensor(1.0)     # full matrices: LyCORIS scale = alpha = 1
@@ -415,7 +424,7 @@ class FamilyLoRA:
                 continue                # frozen-only wraps (training adapter, speed LoRA extras) hold nothing to load
             ad = w.adapters[TRAINABLE]
             if isinstance(ad, LoKR):
-                stem = f"{self.desc.lora.file_prefix}{full}"
+                stem = self._stem(full, lokr=True)
                 if f"{stem}.lokr_w1" in sd:
                     ad.lokr_w1.copy_(sd[f"{stem}.lokr_w1"].to(ad.lokr_w1.dtype))
                     ad.lokr_w2.copy_(sd[f"{stem}.lokr_w2"].to(ad.lokr_w2.dtype))

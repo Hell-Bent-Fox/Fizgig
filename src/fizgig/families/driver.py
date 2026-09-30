@@ -158,6 +158,11 @@ class FamilyDriver:
         """Dotted module names (relative to dit) of the Linears a LoRA wraps: every module in the block map."""
         return [m for g in self.block_map(dit) for b in g.blocks for m in b.modules]
 
+    def quant_target_names(self, dit) -> list:
+        """The Linears an INT8 / NF4 base quantises (families/quant.py). Default: the LoRA targets. A family whose
+        LoRA reaches layers that must stay bf16 (Krea 2's text fusion and I/O layers) narrows it."""
+        return self.lora_target_names(dit)
+
     def block_of(self, module_name: str) -> Optional[str]:
         """The block id a module belongs to, or None for modules outside the map (e.g. a speed LoRA's extras)."""
         idx = getattr(self, "_block_index", None)
