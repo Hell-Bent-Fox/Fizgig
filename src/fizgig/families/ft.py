@@ -21,7 +21,7 @@ import gc
 import logging
 import os
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -45,7 +45,11 @@ class FTSpec:
     overhead_gb: VRAM with the NF4 trunk resident plus activations and margin - the planner's base. None = the
         measured NF4 trunk + 3.5 GB.
     trunk_gb_per_block: NF4 trunk share per block (what streaming a block reclaims). None = measured.
-    file_key: module weight name ("blocks.3.attn.wq.weight") -> the key in the model file, when the loader renames.
+    file_layout: where a weight lives in the model file when the loader renames or splits it:
+        ((module suffix, file suffix, part, parts), ...) - e.g. ("img_mlp.gate_layer.weight", "img_mlp.gate_up.weight",
+        0, 2): the Linear's weight is the first of 2 equal row-chunks of the file's gate_up tensor. The master reads
+        that slice and the checkpoint writes the parts back as the file had them. A "diffusion_model." prefix in the
+        file is found on its own.
     """
     blocks: str = "blocks"
     components: tuple = ()
@@ -53,7 +57,31 @@ class FTSpec:
     overhead_gb: Optional[float] = None
     trunk_gb_per_block: Optional[float] = None
     slots_gb: float = 1.5
-    file_key: Optional[Callable[[str], str]] = None
+    file_layout: tuple = ()
+
+
+_PREFIX = "diffusion_model."
+
+
+def _file_loc(spec: FTSpec, mkey: str, have) -> Optional[tuple]:
+    """(file key, part, parts) of a model weight in a file whose keys are `have`, or None."""
+    fkey, part, parts = mkey, 0, 1
+    for msuf, fsuf, pt, n in spec.file_layout:
+        if mkey.endswith(msuf):
+            fkey, part, parts = mkey[:-len(msuf)] + fsuf, int(pt), int(n)
+            break
+    for k in (fkey, _PREFIX + fkey):
+        if k in have:
+            return k, part, parts
+    return None
+
+
+def _read(src, loc):
+    fkey, part, parts = loc
+    t = src.get_tensor(fkey)
+    if parts > 1:
+        t = t.chunk(parts, dim=0)[part]
+    return t.to(torch.bfloat16)
 
 
 def source_unfit_reason(path: str) -> Optional[str]:
@@ -79,14 +107,19 @@ class DiskMaster:
     coarse - one window read in and written back per boundary - which sequential files serve far better than
     letting the OS page a RAM master. Dict surface: get / [] / []= / in / keys."""
 
-    def __init__(self, src_path: str, keys, scratch_dir: str):
+    def __init__(self, src_path: str, loc: dict, scratch_dir: str):
         from fizgig.krea2.safetensors_utils import MemoryEfficientSafeOpen
         import json
         import shutil
-        self.src, self.dir, self._keys = src_path, scratch_dir, list(keys)
+        self.src, self.dir, self._loc = src_path, scratch_dir, dict(loc)
+        self._keys = list(self._loc)
         os.makedirs(scratch_dir, exist_ok=True)
         self._f = MemoryEfficientSafeOpen(src_path)
-        self._shape = {k: tuple(self._f.header[k]["shape"]) for k in self._keys}
+        self._shape = {}
+        for k, (fk, part, parts) in self._loc.items():
+            sh = list(self._f.header[fk]["shape"])
+            sh[0] //= parts
+            self._shape[k] = tuple(sh)
         need = sum(2 * int(torch.Size(s).numel()) for s in self._shape.values())
         self.est_gb = need / 1e9
         free = shutil.disk_usage(scratch_dir).free
@@ -124,7 +157,7 @@ class DiskMaster:
             arr = np.fromfile(os.path.join(self.dir, rec), dtype=np.uint16)
             return torch.from_numpy(arr).view(torch.bfloat16).reshape(self._shape[key])
         if key in self._shape:
-            return self._f.get_tensor(key).to(torch.bfloat16)
+            return _read(self._f, self._loc[key])
         return default
 
     def __getitem__(self, key):
@@ -159,26 +192,44 @@ class DiskMaster:
 
 
 class _TrainedView:
-    """The checkpoint's trained tensors, produced one at a time as the save writes them: the master (RAM or disk)
-    with the live GPU weights (active window, always-on) laid over it - never the whole master in RAM at once."""
+    """The checkpoint's trained tensors BY FILE KEY, produced one at a time as the save writes them: the master (RAM
+    or disk) with the live GPU weights (active window, always-on) laid over it - never the whole master in RAM at
+    once - and a file tensor the model splits (e.g. a fused gate_up) put back together from its parts."""
 
-    def __init__(self, master, live):
-        self._m, self._live = master, live          # live: key -> Linear whose .weight is current
+    def __init__(self, master, live, loc, src_path):
+        self._m, self._live, self._src = master, live, src_path     # live: model key -> Linear with a current .weight
+        self._parts = {}                                             # file key -> {part: model key}, and its count
+        for mk, (fk, part, parts) in loc.items():
+            self._parts.setdefault(fk, [parts, {}])[1][part] = mk
 
     def keys(self):
-        return list(dict.fromkeys(list(self._m.keys()) + list(self._live)))
+        return list(self._parts)
 
     def __iter__(self):
-        return iter(self.keys())
+        return iter(self._parts)
 
     def __contains__(self, key):
-        return key in self._live or key in self._m
+        return key in self._parts
 
-    def __getitem__(self, key):
-        lin = self._live.get(key)
+    def _value(self, mk):
+        lin = self._live.get(mk)
         if lin is not None:
             return lin.weight.detach().to("cpu", dtype=torch.bfloat16)
-        return self._m[key]
+        return self._m[mk]
+
+    def __getitem__(self, fkey):
+        parts, have = self._parts[fkey]
+        if parts == 1:
+            return self._value(have[0])
+        out = []
+        for i in range(parts):
+            if i in have:
+                out.append(self._value(have[i]))
+            else:                                   # a part nothing trains: the file's own slice
+                from fizgig.krea2.safetensors_utils import MemoryEfficientSafeOpen
+                with MemoryEfficientSafeOpen(self._src) as f:
+                    out.append(_read(f, (fkey, i, parts)))
+        return torch.cat(out, dim=0)
 
 
 def _unwrapped(name: str) -> str:
@@ -207,8 +258,7 @@ class Rotator:
         self.spec = spec
         self.device = torch.device(device)
         self.blocks = dit.get_submodule(spec.blocks)
-        self.key = spec.file_key or (lambda k: k)
-        # every NF4 Linear in the blocks under a component prefix: (file key, linear, block index, name in block),
+        # every NF4 Linear in the blocks under a component prefix: (model key, linear, block index, name in block),
         # found once while everything is still frozen
         self.targets = []
         for bi, block in enumerate(self.blocks):
@@ -216,16 +266,18 @@ class Rotator:
                 if not getattr(m, "_is_nf4", False):
                     continue
                 if any(lname.startswith(p) for p in spec.components):
-                    self.targets.append((self.key(f"{spec.blocks}.{bi}.{lname}.weight"), m, bi, lname))
-        self.always = []                      # (file key, linear): dense bf16, trainable all run
+                    self.targets.append((f"{spec.blocks}.{bi}.{lname}.weight", m, bi, lname))
+        self.always = []                      # (model key, linear): dense bf16, trainable all run
         for mod_name in spec.always_on:
             mod = dit.get_submodule(mod_name)
             for lname, m in model_linears(mod):
                 if getattr(m, "_is_nf4", False) or getattr(m, "_is_int8", False):
                     raise RuntimeError(f"[finetune] always-on module {mod_name}.{lname} is quantised - always-on "
                                        f"modules must stay bf16 (outside the family's quant targets)")
-                self.always.append((self.key(f"{mod_name}.{lname}.weight"), m))
+                self.always.append((f"{mod_name}.{lname}.weight", m))
         self.master: Dict[str, torch.Tensor] = {}
+        self.loc: Dict[str, tuple] = {}       # model key -> (file key, part, parts)
+        self.src = None
         self.active: List = []
         self._forward = {}
 
@@ -236,13 +288,21 @@ class Rotator:
         (DiskMaster in scratch_dir), or "auto" - disk when the master would take more than 40% of the free system
         memory. Returns (GB, "ram" | "disk")."""
         from fizgig.krea2.safetensors_utils import MemoryEfficientSafeOpen
+        self.src = path
         with MemoryEfficientSafeOpen(path) as src:
             have = set(src.keys())
-            gb = sum(2 * int(torch.Size(src.header[k]["shape"]).numel()) for k, *_ in self.targets if k in have) / 1e9
-        missing = [k for k, *_ in self.targets if k not in have]
+            missing = []
+            for k in [k for k, *_ in self.targets] + [k for k, _ in self.always]:
+                loc = _file_loc(self.spec, k, have)
+                if loc is None:
+                    missing.append(k)
+                else:
+                    self.loc[k] = loc
+            gb = sum(2 * int(torch.Size(src.header[fk]["shape"]).numel()) // n
+                     for k, (fk, _p, n) in self.loc.items() if k in {t[0] for t in self.targets}) / 1e9
         if missing:
             raise RuntimeError(f"[finetune] {len(missing)} weights are not in {os.path.basename(path)} under the "
-                               f"expected names, e.g. {missing[:3]} (the driver's FTSpec.file_key maps them)")
+                               f"expected names, e.g. {missing[:3]} (the driver's FTSpec.file_layout maps them)")
         if where == "auto":
             try:
                 import psutil
@@ -250,11 +310,11 @@ class Rotator:
             except Exception:
                 where = "ram"
         if where == "disk":
-            self.master = DiskMaster(path, [k for k, *_ in self.targets], scratch_dir)
+            self.master = DiskMaster(path, {k: self.loc[k] for k, *_ in self.targets}, scratch_dir)
             return gb, "disk"
         with MemoryEfficientSafeOpen(path) as src:
             for key, *_ in self.targets:
-                self.master[key] = src.get_tensor(key).to("cpu", dtype=torch.bfloat16).clone()
+                self.master[key] = _read(src, self.loc[key]).to("cpu").clone()
         gc.collect()
         return gb, "ram"
 
@@ -329,7 +389,8 @@ class Rotator:
     def state_dict(self):
         """Every trained weight, produced as the save writes it: the master with the active window and the
         always-on Linears laid over it."""
-        return _TrainedView(self.master, dict(self._window(self.active)) | {k: lin for k, lin in self.always})
+        return _TrainedView(self.master, dict(self._window(self.active)) | {k: lin for k, lin in self.always},
+                            self.loc, self.src)
 
 
 def _plan(comp_gb, n_blocks, trunk, spec: FTSpec, usable, allow_stream=True):
@@ -368,8 +429,8 @@ def plan_from_file(path: str, spec: FTSpec, free_gb: float):
     from fizgig.krea2.safetensors_utils import MemoryEfficientSafeOpen
     import re
     with MemoryEfficientSafeOpen(path) as f:
-        hdr = {k: f.header[k] for k in f.keys()}
-    pat = re.compile(rf"^{re.escape(spec.blocks)}\.(\d+)\.(.+)\.weight$")
+        hdr = {(k[len(_PREFIX):] if k.startswith(_PREFIX) else k): f.header[k] for k in f.keys()}
+    pat = re.compile(rf"^{re.escape(spec.blocks)}\.(\d+)\.(.+)$")
     blocks, comp_gb, block0_params, nonblock = set(), {p: 0.0 for p in spec.components}, 0, 0.0
     for k, info in hdr.items():
         shape = info.get("shape") or []
@@ -381,13 +442,17 @@ def plan_from_file(path: str, spec: FTSpec, free_gb: float):
             nonblock += numel * 2 / 1e9
             continue
         blocks.add(int(m.group(1)))
-        if m.group(1) != "0" or len(shape) != 2:
+        if m.group(1) != "0" or len(shape) != 2 or not k.endswith(".weight"):
             continue
         block0_params += numel
-        for p in spec.components:
-            if m.group(2).startswith(p):
-                comp_gb[p] += numel * 2 / 1e9
-                break
+        rest = m.group(2)
+        names = [(rest[:-len(fsuf)] + msuf, numel / n) for msuf, fsuf, _pt, n in spec.file_layout
+                 if rest.endswith(fsuf)] or [(rest, numel)]
+        for name, n_el in names:
+            for p in spec.components:
+                if name.startswith(p):
+                    comp_gb[p] += n_el * 2 / 1e9
+                    break
     if not blocks or not all(comp_gb.values()):
         return None
     n = len(blocks)

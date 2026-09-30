@@ -114,6 +114,7 @@ QWEN_IMAGE_21 = FamilyDescription(
     network_types=("lora", "lokr"),
     edit_training=True,             # one checkpoint for text-to-image and edits (up to 10 references)
     slider_training=True,
+    finetune=True,                  # the driver's ft_spec (families/ft.py)
     # measured 28 Sep 2026: 40-48 pairs learned a grade on held-out photos in 6-8 epochs at 0.5 MP
     edit_note=("About 40 pairs (20 at least; more if your photos vary a lot). Each photo 1 MP or larger, e.g. "
                "1200x800; bigger is fine, Fizgig resizes them. An original and its edited version must have the "

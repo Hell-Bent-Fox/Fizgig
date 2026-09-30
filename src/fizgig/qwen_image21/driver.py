@@ -39,6 +39,14 @@ class QwenImage21Driver(FamilyDriver):
         else:
             dit.switch_block_swap_for_training()
 
+    def ft_spec(self, dit):
+        # four balanced windows per block (attention ~0.13 GB, each MLP matrix ~0.10); the file fuses the MLP's gate
+        # and projection into one gate_up tensor, [gate_layer; proj]
+        from fizgig.families.ft import FTSpec
+        return FTSpec(blocks="transformer_blocks", components=("attn", "img_mlp.gate_layer", "img_mlp.proj", "img_mlp.out"),
+                      file_layout=(("img_mlp.gate_layer.weight", "img_mlp.gate_up.weight", 0, 2),
+                                   ("img_mlp.proj.weight", "img_mlp.gate_up.weight", 1, 2)))
+
     def load_vae(self, path, device):
         from fizgig.qwen_image21.vae import load_qwen21_vae
         return load_qwen21_vae(path, device=device)
