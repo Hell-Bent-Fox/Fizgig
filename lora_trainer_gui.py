@@ -5427,9 +5427,12 @@ class LoRATrainerGUI:
                  "changes, try a narrower word such as \"unsmiling\".", ""),
                 ("FAMILY_SLIDER_GUIDANCE", "4. Push strength",
                  "How hard the ends are pushed apart. Higher gives a stronger dial but changes more than the one "
-                 "thing you asked for (a frown can turn into a different, older man). 2 is a good start.", "2")):
+                 "thing you asked for (a frown can turn into a different, older man). The family's presets set its own "
+                 "start: 3 on Krea 2, 2 on Qwen Image 2.1.", "2")):
             _block(_head, _text)
             _er = _row()
+            if _key == "FAMILY_SLIDER_GUIDANCE" and self._family_desc() is not None:
+                _default = f"{self._family_desc().slider_guidance:g}"     # the family the app opens on
             self.entries[_key] = ttk.Entry(_er, width=60 if _key != "FAMILY_SLIDER_GUIDANCE" else 8)
             self.entries[_key].insert(0, str(self.settings.get(_key, _default) or _default))
             self.entries[_key].pack(side=tk.LEFT)
@@ -7434,6 +7437,10 @@ class LoRATrainerGUI:
         self.entries["FAMILY_EDIT"].set(k == "edit")
         self.entries["FAMILY_SLIDER"].set(k == "slider")
         self.entries["FAMILY_FT"].set(k == "finetune")
+        _desc = self._family_desc()
+        _sg = self.entries.get("FAMILY_SLIDER_GUIDANCE")
+        if k == "slider" and _desc is not None and _sg is not None and not _sg.get().strip():
+            _sg.insert(0, f"{_desc.slider_guidance:g}")      # an empty push strength starts at the family's own
         if k == "finetune" and not was_ft:
             if getattr(self, "adaptive_lr_var", None) is not None and self.adaptive_lr_var.get():
                 self.adaptive_lr_var.set(False)

@@ -419,7 +419,7 @@ def train_command(desc, inputs, plan):
             base = _s(st.get("FAMILY_SLIDER_BASE"))
             cmd += ["--slider_prompts", base, f"{base} {_s(st.get('FAMILY_SLIDER_POS'))}",
                     f"{base} {_s(st.get('FAMILY_SLIDER_NEG'))}",       # the user's own comma, if any
-                    "--slider_guidance", str(st.get("FAMILY_SLIDER_GUIDANCE") or "2")]
+                    "--slider_guidance", _s(st.get("FAMILY_SLIDER_GUIDANCE")) or f"{desc.slider_guidance:g}"]
             try:        # the practice pictures (and so the training) at Target Megapixels, a square on the 16 px grid
                 side = int((float(st.get("megapixels")) * 1_000_000) ** 0.5) // 16 * 16
                 if side >= 256:

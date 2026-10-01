@@ -161,6 +161,7 @@ class FamilyDescription:
     edit_note: str = ""               # the Edit LoRA section's "What you need" line: pair count and photo size
     slider_training: bool = False     # Slider LoRAs (strength is a dial between two looks); the driver needs
     #                                   training_loss(diff_ref=, diff_weight=) and noise_latents / predict
+    slider_guidance: float = 2.0      # a prompt slider's default push strength (the Training tab box when empty)
 
     # sampling
     sampling: tuple = ()              # SamplingSettings without any speed LoRA (first = default)

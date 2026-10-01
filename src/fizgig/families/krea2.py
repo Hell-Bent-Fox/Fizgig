@@ -23,6 +23,8 @@ def _preset(rank, lr=1e-4, adaptive=None, epochs=30, slider=False, mp="0.25"):
         "FAMILY_PRECISION": "Auto (fits your free VRAM)", "FAMILY_EMA": "0.98 (recommended)",
         "KREA2_LOSS_WATCH": True, "KREA2_PER_IMAGE_LR": True, "KREA2_AUTO_RECAPTION": False,
         "KREA2_WARMUP_LOOK": False,
+        # a prompt slider's push strength: 3 on Krea 2 (Peter's slider tests, 1 Oct 2026; Qwen's is 2)
+        "FAMILY_SLIDER_GUIDANCE": "3",
     }
 
 
@@ -116,7 +118,8 @@ KREA2 = FamilyDescription(
     optimizer_families=(("txtfusion", ("txtfusion.",)), ("attn", (".attn.",)), ("mlp", (".mlp.",))),
     automagic_sign_window=16,
     network_types=("lora", "lokr"),
-    slider_training=True,             # the driver's diff-weighted loss (photo pairs) and noise_latents / predict (prompts)
+    slider_training=True,
+    slider_guidance=3.0,              # Peter's slider tests (1 Oct 2026): 3 on Krea 2, where Qwen's 2 pushes too little             # the driver's diff-weighted loss (photo pairs) and noise_latents / predict (prompts)
 
     sampling=(
         SamplingSettings("RAW", steps=28, cfg=4.5, sampler="euler", scheduler="simple", negative_prompt=True,

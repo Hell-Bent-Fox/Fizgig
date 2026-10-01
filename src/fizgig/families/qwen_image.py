@@ -30,6 +30,7 @@ def _preset(rank, lr=1e-4, adaptive=None, epochs=30, edit=False, slider=False):
         "FAMILY_EMA": "0.98 (recommended)",
         "KREA2_LOSS_WATCH": True, "KREA2_PER_IMAGE_LR": False, "KREA2_AUTO_RECAPTION": False,
         "KREA2_WARMUP_LOOK": False,
+        "FAMILY_SLIDER_GUIDANCE": "2",   # a prompt slider's push strength (Krea 2's is 3)
     }
 
 
