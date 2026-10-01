@@ -79,6 +79,21 @@ class H3Int8H2DOffloader:
         self.n_swap = len(self.sources)
         if self.n_swap == 0:
             raise RuntimeError("H3Int8H2DOffloader: no swapped ConvRot blocks found")
+        # The NF4 / HQQ rings' guard (#175): when available RAM barely covers the stage, start
+        # unpinned rather than asking the OS to page-lock ~n_swap x 0.42 GB from a nearly full
+        # machine at every preview rebuild — on Windows ROCm that request failed with RAM at
+        # 63.6 of 64 GB, and a HIP launch failure followed on the next host-to-device copy.
+        try:
+            import psutil
+            _est = sum(t.numel() * t.element_size()
+                       for _, _, t in self.sources[min(self.sources)]) * self.n_swap
+            if psutil.virtual_memory().available < _est + max(4e9, 0.75 * _est):
+                self._pin_failed = True
+                logger.warning("[h2d] available RAM is tight for ~%.1f GB of pinned staging — "
+                               "staging unpinned instead (copies synchronous, memory stays "
+                               "pageable, steps a little slower).", _est / 1e9)
+        except Exception:
+            pass
         self.ring_size = min(self.ring_size, self.n_swap)
         self.loaded_block = [None] * self.ring_size
         self.free_event = [None] * self.ring_size
@@ -210,7 +225,10 @@ class H3Int8H2DOffloader:
         with torch.cuda.stream(self.stream):
             if gate is not None:
                 self.stream.wait_event(gate)          # never overwrite a slot still computing
-            self.ring_flat[slot].copy_(self.cpu_flat[block_idx], non_blocking=True)
+            # async only from page-locked memory; an unpinned flat copies synchronously, as the
+            # NF4 / HQQ rings do (a pageable non_blocking copy is not something to lean on under HIP)
+            self.ring_flat[slot].copy_(self.cpu_flat[block_idx],
+                                       non_blocking=self.cpu_flat[block_idx].is_pinned())
             done = self.stream.record_event()
 
         # The module points at ring memory immediately; actual compute waits on `done`
