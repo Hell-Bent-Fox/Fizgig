@@ -1,4 +1,4 @@
-# Fizgig v6.8.0
+# Fizgig v6.8.0 (beta)
 
 Krea 2 moves onto Fizgig's driver system and gains slider LoRAs, including a new Ultra mode for much higher strengths. Qwen Image 2.1 gains full fine-tuning, joining Krea 2 and MiniMax H3. Repair Studio gets bigger sliders with nudge buttons, unlimited strengths, and donor saves that look exactly as previewed.
 
