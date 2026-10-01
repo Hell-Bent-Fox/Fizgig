@@ -5428,7 +5428,7 @@ class LoRATrainerGUI:
                 ("FAMILY_SLIDER_GUIDANCE", "4. Push strength",
                  "How hard the ends are pushed apart. Higher gives a stronger dial but changes more than the one "
                  "thing you asked for (a frown can turn into a different, older man). The family's presets set its own "
-                 "start: 3 on Krea 2, 2 on Qwen Image 2.1 (values 2 to 9 tested on both).", "2")):
+                 "start: 3 on Krea 2, 2 on Qwen Image 2.1 (values 2 to 9 tested).", "2")):
             _block(_head, _text)
             _er = _row()
             if _key == "FAMILY_SLIDER_GUIDANCE" and self._family_desc() is not None:
