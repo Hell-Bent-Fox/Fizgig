@@ -33739,11 +33739,13 @@ class LoRATrainerGUI:
         try:
             for entry in os.listdir(out_dir):
                 m = pattern.match(entry)
-                # training_state.json is the save's commit marker (written last) — a dir without
-                # it is a partial save from a crashed write, not a state. Skipping it here means
-                # Resume lands on the previous GOOD state instead of a refusal.
+                # The save's commit marker (written last) — a dir without it is a partial save from
+                # a crashed write, not a state. Skipping it here means Resume lands on the previous
+                # GOOD state instead of a refusal. The native trainers write training_state.json;
+                # Klein saves through accelerate, whose last file is random_states_0.pkl.
                 if (m and os.path.isdir(os.path.join(out_dir, entry))
-                        and os.path.isfile(os.path.join(out_dir, entry, "training_state.json"))):
+                        and any(os.path.isfile(os.path.join(out_dir, entry, marker))
+                                for marker in ("training_state.json", "random_states_0.pkl"))):
                     candidates.append((int(m.group(1)), entry))
         except Exception:
             return None
