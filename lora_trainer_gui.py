@@ -22185,13 +22185,26 @@ class LoRATrainerGUI:
         ("details", "Details"),
     ]
 
-    def _repair_quickset_buttons(self, parent, var, row, col_start, balance_cb=None):
-        """Create [0] [1] [±] [⚖] quick-set buttons for a repair slider.
+    # Repair Studio rows are ~25% taller than the app's default (Peter, 1 Oct): the slider style, text and
+    # buttons below are sized together.
+    _REPAIR_ROW_FONT = 12          # block names
+    _REPAIR_SMALL_FONT = 10        # value readouts, quick-set buttons, tags
+
+    def _repair_scale_style(self):
+        """The Repair Studio slider style: a thicker slider than the app's (clam sizes it from arrowsize)."""
+        if not getattr(self, "_repair_scale_style_done", False):
+            ttk.Style().configure("Repair.Horizontal.TScale", arrowsize=18, sliderlength=36)
+            self._repair_scale_style_done = True
+        return "Repair.Horizontal.TScale"
+
+    def _repair_quickset_buttons(self, parent, var, row, col_start, balance_cb=None, nudge=False):
+        """Create [0] [1] [±] [⚖] quick-set buttons for a repair slider, plus [−] [+] (0.1 steps, hold to repeat,
+        stopping at the slider's ±3) when nudge is set.
 
         Returns a list of button widgets (for greying in _refresh_block_slider_activity).
         balance_cb: optional callback for the balance button (sets complement on the other target).
         """
-        btn_font = (FONT_FAMILY, 8)
+        btn_font = (FONT_FAMILY, self._REPAIR_SMALL_FONT)
         btn_kw = dict(bg=COLORS["bg_deep"], fg=COLORS["text_primary"],
                       activebackground=COLORS["bg_surface"],
                       activeforeground=COLORS["text_primary"],
@@ -22208,6 +22221,19 @@ class LoRATrainerGUI:
             bb = tk.Button(parent, text="\u2696", command=balance_cb, **btn_kw)
             bb.grid(row=row, column=col_start + 3, padx=1, pady=1)
             btns.append(bb)
+        if nudge:
+            def _nudge(step):
+                try:
+                    v = float(var.get())
+                except (TypeError, ValueError, tk.TclError):
+                    v = 0.0
+                var.set(round(max(-3.0, min(3.0, v + step)), 2))
+            col = col_start + (4 if balance_cb is not None else 3)
+            for i, (txt, step) in enumerate((("\u2212", -0.1), ("+", 0.1))):
+                bt = tk.Button(parent, text=txt, command=lambda st=step: _nudge(st),
+                               repeatdelay=400, repeatinterval=90, **btn_kw)
+                bt.grid(row=row, column=col + i, padx=1, pady=1)
+                btns.append(bt)
         return btns
 
     def _build_repair_master_controls(self, parent):
@@ -22251,12 +22277,14 @@ class LoRATrainerGUI:
             color = self._REPAIR_CAT_COLOR[cat]
             tk.Label(parent, text=short, fg=color, bg=COLORS["bg_surface"],
                      width=11, anchor=tk.W,
-                     font=(FONT_FAMILY, 9, "bold")).grid(
+                     font=(FONT_FAMILY, self._REPAIR_ROW_FONT, "bold")).grid(
                 row=r, column=0, sticky=tk.W, padx=(10, 4), pady=1)
             var = self.repair_master_strength_vars[cat]
-            scale = ttk.Scale(parent, from_=-3.0, to=3.0, variable=var, orient=tk.HORIZONTAL)
+            scale = ttk.Scale(parent, from_=-3.0, to=3.0, variable=var, orient=tk.HORIZONTAL,
+                              style=self._repair_scale_style())
             scale.grid(row=r, column=1, sticky=tk.EW, padx=4, pady=1)
-            val_lbl = ttk.Label(parent, text="1.00", width=5, anchor=tk.E)
+            val_lbl = ttk.Label(parent, text="1.00", width=5, anchor=tk.E,
+                                font=(FONT_FAMILY, self._REPAIR_SMALL_FONT))
             val_lbl.grid(row=r, column=2, padx=(4, 4), pady=1)
             self.repair_master_strength_labels[cat] = val_lbl
             self._repair_quickset_buttons(parent, var, r, 3,
@@ -22407,7 +22435,7 @@ class LoRATrainerGUI:
         # Scrollable canvas (vertical) holding two columns: double on left, single on right.
         # Bounded height (500px) so the panel stays compact inside the outer scroll
         # and the user can independently scroll all 32 rows without losing the preview.
-        canvas = tk.Canvas(parent, highlightthickness=0, bg=COLORS["bg_surface"], height=500)
+        canvas = tk.Canvas(parent, highlightthickness=0, bg=COLORS["bg_surface"], height=625)
         scroll = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -22462,7 +22490,7 @@ class LoRATrainerGUI:
         """Standard-layer family: the driver's block map in the model's own names. The first group (the main blocks)
         splits evenly over two columns; any further groups (Krea 2's text fusion, input / output) sit in their own
         two-column section below, so their longer names never widen the block columns."""
-        canvas = tk.Canvas(parent, highlightthickness=0, bg=COLORS["bg_surface"], height=500)
+        canvas = tk.Canvas(parent, highlightthickness=0, bg=COLORS["bg_surface"], height=625)
         scroll = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -22507,7 +22535,7 @@ class LoRATrainerGUI:
         """MiniMax H3 layout: 50 main blocks (0-25 left, 26-49 right) + the 2 token-refiner
         blocks. Generic per-block (no semantic bucket colouring — that map doesn't exist yet;
         these sliders + the weight-only Profiler are the instrument to build it)."""
-        canvas = tk.Canvas(parent, highlightthickness=0, bg=COLORS["bg_surface"], height=500)
+        canvas = tk.Canvas(parent, highlightthickness=0, bg=COLORS["bg_surface"], height=625)
         scroll = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -22572,7 +22600,7 @@ class LoRATrainerGUI:
         lbl_text, color, cat_short = self._repair_block_display(block_id)
 
         rowf = ttk.Frame(parent)
-        rowf.grid(row=row, column=0, sticky=tk.EW, pady=1)
+        rowf.grid(row=row, column=0, sticky=tk.EW, pady=2)      # a 25%-taller row pitch with the larger text (31 px, was 25)
         rowf.columnconfigure(3, weight=1)
 
         # Primary checkbox + label + slider + value
@@ -22586,44 +22614,49 @@ class LoRATrainerGUI:
         chk_p.grid(row=0, column=0, padx=(2, 4))
         # Block label (category-coloured for Klein; neutral for Krea 2)
         lbl = tk.Label(rowf, text=lbl_text, fg=color, bg=COLORS["bg_surface"],
-                       width=max(10, len(lbl_text) + 1), anchor=tk.W, font=(FONT_FAMILY, 9, "bold"))
+                       width=max(10, len(lbl_text) + 1), anchor=tk.W,
+                       font=(FONT_FAMILY, self._REPAIR_ROW_FONT, "bold"))
         # (a long name — Krea 2's text-fusion and input/output rows — widens its own row instead of being cut)
         lbl.grid(row=0, column=1, padx=(0, 2))
         cat_lbl = None
         if cat_short:
             cat_lbl = tk.Label(rowf, text=f"[{cat_short}]", fg=color, bg=COLORS["bg_surface"],
-                               width=11, anchor=tk.W, font=(FONT_FAMILY, 8))
+                               width=11, anchor=tk.W, font=(FONT_FAMILY, self._REPAIR_SMALL_FONT))
             cat_lbl.grid(row=0, column=2, padx=(0, 4))
 
-        scale_p = ttk.Scale(rowf, from_=-3.0, to=3.0, variable=primary_strength, orient=tk.HORIZONTAL)
+        scale_p = ttk.Scale(rowf, from_=-3.0, to=3.0, variable=primary_strength, orient=tk.HORIZONTAL,
+                            style=self._repair_scale_style())
         scale_p.grid(row=0, column=3, sticky=tk.EW, padx=2)
 
-        val_lbl_p = ttk.Label(rowf, text="1.00", width=5, anchor=tk.E)
+        val_lbl_p = ttk.Label(rowf, text="1.00", width=5, anchor=tk.E,
+                              font=(FONT_FAMILY, self._REPAIR_SMALL_FONT))
         val_lbl_p.grid(row=0, column=4, padx=(2, 2))
         btns_p = self._repair_quickset_buttons(rowf, primary_strength, 0, 5,
-            balance_cb=lambda b=block_id: self._repair_balance_block(b, "primary"))
+            balance_cb=lambda b=block_id: self._repair_balance_block(b, "primary"), nudge=True)
         # (The library is banks of five blocks now — its chips sit above the sliders; no
         # per-block dot. `cache_lbl` stays in the row dict as None for older callers.)
         cache_lbl = None
 
         # Donor row (hidden until donor is loaded)
         donor_rowf = ttk.Frame(rowf)
-        donor_rowf.grid(row=1, column=0, columnspan=9, sticky=tk.EW, padx=(20, 0))
+        donor_rowf.grid(row=1, column=0, columnspan=11, sticky=tk.EW, padx=(20, 0))
         donor_rowf.columnconfigure(2, weight=1)
         donor_rowf.grid_remove()
         chk_d = ttk.Checkbutton(donor_rowf, variable=donor_enabled,
                                 command=lambda b=block_id: self._on_block_changed(b))
         chk_d.grid(row=0, column=0, padx=(2, 4))
         donor_tag_lbl = ttk.Label(donor_rowf, text="donor", foreground="#888",
-                                  font=(FONT_FAMILY, 8, "italic"),
+                                  font=(FONT_FAMILY, self._REPAIR_SMALL_FONT, "italic"),
                                   width=11, anchor=tk.W)
         donor_tag_lbl.grid(row=0, column=1, padx=(0, 4))
-        scale_d = ttk.Scale(donor_rowf, from_=-3.0, to=3.0, variable=donor_strength, orient=tk.HORIZONTAL)
+        scale_d = ttk.Scale(donor_rowf, from_=-3.0, to=3.0, variable=donor_strength, orient=tk.HORIZONTAL,
+                            style=self._repair_scale_style())
         scale_d.grid(row=0, column=2, sticky=tk.EW, padx=2)
-        val_lbl_d = ttk.Label(donor_rowf, text="+0.00", width=5, anchor=tk.E)   # donor sliders start at 0
+        val_lbl_d = ttk.Label(donor_rowf, text="+0.00", width=5, anchor=tk.E,
+                              font=(FONT_FAMILY, self._REPAIR_SMALL_FONT))   # donor sliders start at 0
         val_lbl_d.grid(row=0, column=3, padx=(2, 2))
         btns_d = self._repair_quickset_buttons(donor_rowf, donor_strength, 0, 4,
-            balance_cb=lambda b=block_id: self._repair_balance_block(b, "donor"))
+            balance_cb=lambda b=block_id: self._repair_balance_block(b, "donor"), nudge=True)
 
         # Bind variable traces to mirror into self.repair_state and live-update labels
         def _mk_strength_trace(var, lbl, bid, which):
