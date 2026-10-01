@@ -115,6 +115,7 @@ QWEN_IMAGE_21 = FamilyDescription(
     network_types=("lora", "lokr"),
     edit_training=True,             # one checkpoint for text-to-image and edits (up to 10 references)
     slider_training=True,
+    workbench_follows_samples=True,   # Peter, 1 Oct 2026: the workbench previews as the Samples tab says
     # the reference default is CFG 1 (none); community reports find a little CFG helps 2.1 (1.5-3), higher
     # oversaturates (Comfy-Org/Qwen-Image-2.1 discussions, comfyui-wiki, Oct 2026)
     preview_cfg_note="1 = no CFG (the reference default). A little CFG, about 1.5 to 3, gives better previews for "

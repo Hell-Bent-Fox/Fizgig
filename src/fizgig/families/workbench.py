@@ -103,6 +103,10 @@ class WorkbenchEngine:
         self._baseline_key = self._baseline_img = None
         self._turbo_enabled = False         # no activation cache: the speed LoRA already makes previews short
         self._last_frame_latent = None      # Royale's shared workers read it; there is no latent chaining here
+        # description.workbench_follows_samples: the GUI keeps this dict current from the Samples tab - steps, cfg,
+        # negative, turbo (strength; 0 = no speed LoRA). None = the family's fixed preview recipe.
+        self.preview_settings = None
+        self._speed_path = ""
 
     # ---- the block map ------------------------------------------------------------------------------
     def block_groups(self):
@@ -157,6 +161,7 @@ class WorkbenchEngine:
         self.vae = self.driver.load_vae(vae_path, "cpu" if self.lowmem else device)
         self.net = FamilyLoRA(self.dit, self.driver, device=device)
         sp = self.desc.preview_speed()
+        self._speed_path = speed_lora_path or ""
         if speed_lora_path and sp is not None and os.path.exists(speed_lora_path):
             n = self.net.add_file(speed_lora_path, SPEED, sp.strength)
             self.net.move_adapter(SPEED, device)
@@ -350,8 +355,49 @@ class WorkbenchEngine:
     def _cond_to_device(self, cond):
         return {k: (v.to(self.device) if torch.is_tensor(v) else v) for k, v in cond.items()}
 
+    def _follow_speed(self):
+        """Samples-tab mode: the speed LoRA on at the tab's turbo strength (attached on first use), off at 0."""
+        ps = self.preview_settings
+        sp = self.desc.preview_speed()
+        try:
+            strength = float(ps.get("turbo") or 0.0)
+        except (TypeError, ValueError):
+            strength = 0.0
+        on = strength > 0 and sp is not None and bool(self._speed_path) and os.path.exists(self._speed_path)
+        if getattr(self, "_speed_follow", None) == (on, strength):
+            return                          # unchanged: don't re-apply the adapter (its bias deltas included)
+        self._speed_follow = (on, strength)
+        if on:
+            if not self.net.has(SPEED):
+                self.net.add_file(self._speed_path, SPEED, strength)
+                self.net.move_adapter(SPEED, self.device)
+            self.net.set_strength(SPEED, strength)
+            self.net.set_enabled(SPEED, True)
+            self.speed = sp
+        else:
+            if self.net.has(SPEED):
+                self.net.set_enabled(SPEED, False)
+            self.speed = None
+
+    def _settings_key(self):
+        ps = self.preview_settings
+        return None if ps is None else (ps.get("steps"), ps.get("cfg"), ps.get("negative"), ps.get("turbo"))
+
     def sampling(self):
         """(steps, cfg, sigmas, options) previews use."""
+        ps = self.preview_settings
+        if ps is not None and getattr(self, "checkpoint_sampling", None) is None:
+            self._follow_speed()
+            s = self.speed.settings if self.speed is not None else self.desc.default_sampling()
+            try:
+                steps = int(ps.get("steps")) or s.steps
+            except (TypeError, ValueError):
+                steps = s.steps
+            try:
+                cfg = float(ps.get("cfg"))
+            except (TypeError, ValueError):
+                cfg = s.cfg
+            return steps, cfg, s.sigmas, s.options          # the driver drops a schedule made for another step count
         if getattr(self, "checkpoint_sampling", None) is not None:
             s = self.checkpoint_sampling
             return s.steps, s.cfg, s.sigmas, s.options
@@ -362,10 +408,15 @@ class WorkbenchEngine:
         return s.steps, s.cfg, s.sigmas, s.options
 
     @torch.no_grad()
-    def render(self, cond, width, height, seed, *, steps=None, noise=None, refs=None):
-        """One image from conditioning with the adapters as currently set (refs: an edit's reference latents)."""
+    def render(self, cond, width, height, seed, *, steps=None, noise=None, refs=None, neg_cond=None):
+        """One image from conditioning with the adapters as currently set (refs: an edit's reference latents;
+        neg_cond: the negative, used when the CFG is above 1)."""
         d_steps, cfg, sigmas, options = self.sampling()
         steps = int(steps or d_steps)
+        if cfg > 1.0 and neg_cond is not None:
+            neg_cond = self._cond_to_device(neg_cond)
+        else:
+            neg_cond = None
 
         def _step(done, total):
             cb = self.on_step
@@ -379,6 +430,7 @@ class WorkbenchEngine:
 
         lat = self.driver.generate(self.dit, self._cond_to_device(cond), width, height, steps=steps, seed=int(seed),
                                    cfg=cfg, sigmas=sigmas, options=options, noise=noise, on_step=_step,
+                                   **({"neg_cond": neg_cond} if neg_cond is not None else {}),
                                    **({"refs": [r.to(self.device) for r in refs]} if refs else {}))
         if self.lowmem:
             self._park_dit("cpu")
@@ -414,13 +466,23 @@ class WorkbenchEngine:
         if seed_b is not None:
             noise = _slerp(float(travel_t or 0.0), self.driver.initial_noise(seed, width, height),
                            self.driver.initial_noise(seed_b, width, height))
-        return self.render(cond, width, height, seed, steps=steps, noise=noise, refs=refs)
+        neg = None
+        ps = self.preview_settings
+        try:
+            if ps is not None and float(ps.get("cfg") or 1.0) > 1.0:
+                # the Samples tab's negative, seen the same way as the prompt (an edit's reference included)
+                neg = self.encode([str(ps.get("negative") or "")], ref=("" if override_ctx is not None else ref),
+                                  ref_mp=ref_mp, size=(width, height))[0]
+        except (TypeError, ValueError):
+            neg = None
+        return self.render(cond, width, height, seed, steps=steps, noise=noise, refs=refs, neg_cond=neg)
 
     def generate_baseline(self, state):
         """The primary with every slider at 1.0 (at its load strength), donor off. Cached until the prompt, seed,
         size or load strength changes."""
         key = (self.primary_path, state.seed, state.prompt, state.preview_width, state.preview_height,
-               round(float(getattr(state, "primary_scale", 1.0)), 4), self._state_reference(state))
+               round(float(getattr(state, "primary_scale", 1.0)), 4), self._state_reference(state),
+               self._settings_key())
         if self._baseline_key == key and self._baseline_img is not None:
             return self._baseline_img
         base = self.default_state(state.preview_width, state.preview_height)
@@ -535,6 +597,8 @@ class WorkbenchEngine:
         self.dit = self.vae = self.net = None
         self.pipeline = None
         self.speed = None
+        self._speed_follow = None
+        self._speed_path = ""
         self.primary_network = self.donor_network = None
         self.primary_path = self.donor_path = None
         self.primary_block_ids, self.donor_block_ids = set(), set()

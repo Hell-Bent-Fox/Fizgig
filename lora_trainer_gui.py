@@ -13106,6 +13106,10 @@ class LoRATrainerGUI:
         self.entries["SAMPLE_FRAMES"] = self.sample_frames_combo
         self.entries["MINIMAX_TURBO_STEPS"] = self.turbo_steps_entry
         self.entries["MINIMAX_TURBO_STRENGTH"] = self.turbo_strength_entry
+        # a workbench that follows the Samples tab (Qwen) picks up every edit here
+        for _v in (self.sample_steps_var, self.sample_cfg_scale_var, self.sample_negative_var):
+            _v.trace_add("write", self._push_samples_to_workbench)
+        self.entries["FAMILY_TURBO_STRENGTH"].bind("<KeyRelease>", self._push_samples_to_workbench, add="+")
 
         # Initial UI state based on current architecture
         self.update_samples_ui_for_architecture()
@@ -16993,6 +16997,8 @@ class LoRATrainerGUI:
         )
         _xf = tk.Frame(xfam_card, bg=COLORS["bg_surface"])
         _xf.pack(anchor=tk.W)
+        self._explorer_samples_note = ttk.Label(xfam_card, text=self._WORKBENCH_SAMPLES_NOTE,
+                                                foreground=COLORS["text_explain"], font=HINT_FONT)
         ttk.Radiobutton(_xf, text="Klein 9B", variable=self.explorer_family_var, value="klein",
                         command=self._on_explorer_family_changed).pack(side=tk.LEFT, padx=(0, 20))
         ttk.Radiobutton(_xf, text="MiniMax H3", variable=self.explorer_family_var, value="minimax",
@@ -17397,6 +17403,7 @@ class LoRATrainerGUI:
         # a described family: the reference row only where the family takes one; an edit reference is fitted to
         # the preview size, so the MP cap has nothing to set
         desc = self._explorer_desc()
+        self._show_samples_note(getattr(self, "_explorer_samples_note", None), desc)
         frame = getattr(self, "_explorer_ref_frame", None)
         if frame is not None:
             if desc is not None and not desc.reference_kind:
@@ -17474,6 +17481,8 @@ class LoRATrainerGUI:
         if self._explorer_engine is None or not isinstance(self._explorer_engine, WorkbenchEngine) \
                 or self._explorer_engine.desc.key != desc.key:
             self._explorer_engine = WorkbenchEngine(desc)
+        if desc.workbench_follows_samples:
+            self._explorer_engine.preview_settings = self._samples_settings_for(desc)
         try:
             self.explorer_status_var.set(f"Loading {desc.display_name}...")
             self.master.update_idletasks()
@@ -21247,13 +21256,19 @@ class LoRATrainerGUI:
             # sampling. Radio values stay distilled / base so the rest of the tab reads them unchanged.
             sp, ds = desc.preview_speed(), desc.default_sampling()
             _ck = desc.preview_checkpoint()
-            self._repair_dit_radio_a.configure(
-                text=(f"{_ck[1].name} ({_ck[1].steps}-step, default)" if _ck else
-                      f"{sp.name.split(' (')[0]} ({sp.settings.steps}-step, default)" if sp else "Default"),
-                state="normal" if (sp or _ck) else "disabled")
-            self._repair_dit_radio_b.configure(text=f"Full ({ds.steps}-step, slow)", state="normal")
-            if not self._repair_dit_radio_b.winfo_manager():
-                self._repair_dit_radio_b.pack(side=tk.LEFT)
+            if desc.workbench_follows_samples:
+                # one line in place of the choice: the Samples tab sets these previews
+                self.repair_dit_choice_var.set("distilled")
+                self._repair_dit_radio_a.configure(text=self._WORKBENCH_SAMPLES_NOTE, state="disabled")
+                self._repair_dit_radio_b.pack_forget()
+            else:
+                self._repair_dit_radio_a.configure(
+                    text=(f"{_ck[1].name} ({_ck[1].steps}-step, default)" if _ck else
+                          f"{sp.name.split(' (')[0]} ({sp.settings.steps}-step, default)" if sp else "Default"),
+                    state="normal" if (sp or _ck) else "disabled")
+                self._repair_dit_radio_b.configure(text=f"Full ({ds.steps}-step, slow)", state="normal")
+                if not self._repair_dit_radio_b.winfo_manager():
+                    self._repair_dit_radio_b.pack(side=tk.LEFT)
         elif fam == "minimax":
             # H3 has no DiT choice: base precision is auto-planned from free VRAM and the
             # Turbo LoRA (6-step) applies whenever it's set in Preferences.
@@ -22972,18 +22987,61 @@ class LoRATrainerGUI:
                 messagebox.showerror("Error", f"{labels.get(role, role)} path not set or not found.\n"
                                               "Configure on Preferences tab.")
                 return False
-        dit, speed_path, ck = self._workbench_preview_model(desc, self.repair_dit_choice_var.get() != "base")
+        follow = desc.workbench_follows_samples
+        dit, speed_path, ck = self._workbench_preview_model(desc, follow or self.repair_dit_choice_var.get() != "base")
         from fizgig.families.workbench import WorkbenchEngine
         if self.repair_engine is None or not isinstance(self.repair_engine, WorkbenchEngine) \
                 or self.repair_engine.desc.key != desc.key:
             self.repair_engine = WorkbenchEngine(desc)
         sp = desc.preview_speed()
         steps = ck.steps if ck else (sp.settings.steps if speed_path else desc.default_sampling().steps)
+        if follow:
+            self.repair_engine.preview_settings = self._samples_settings_for(desc)
+            steps = self.repair_engine.preview_settings["steps"]
         self.repair_status_var.set(f"Loading {desc.display_name} "
                                    f"({ck.name + ', ' if ck else ''}{steps}-step previews)…")
         return dict(dit_path=dit, vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
                     speed_lora_path=speed_path, preview_sampling=ck, device="cuda",
                     **self._family_inference_memory())
+
+    _WORKBENCH_SAMPLES_NOTE = "Steps, CFG, negative prompt and Turbo strength come from the Samples tab."
+
+    def _samples_settings_for(self, desc):
+        """The Samples tab's preview settings for a family whose workbench follows them (description.
+        workbench_follows_samples): the live boxes when the Training tab is on that family, else what the tab last
+        held for it (its per-family stash), else the family's defaults."""
+        cur = self._family_desc()
+        sp_def = desc.preview_speed_defaults() or (None, None)
+        if cur is not None and cur.key == desc.key:
+            steps, cfg = self.sample_steps_var.get().strip(), self.sample_cfg_scale_var.get().strip()
+            turbo = self.entries["FAMILY_TURBO_STRENGTH"].get().strip() if "FAMILY_TURBO_STRENGTH" in self.entries \
+                else ""
+        else:
+            stash = getattr(self, "_arch_sample_stash", {}).get(desc.gui_label) or {}
+            steps, cfg = stash.get("steps") or str(desc.preview_steps), stash.get("cfg") or f"{desc.preview_cfg:g}"
+            turbo = self.last_used.get("turbo_strengths", {}).get(desc.key) or ""
+        if not turbo and sp_def[1] is not None:
+            turbo = f"{sp_def[1]:g}"
+        return {"steps": steps, "cfg": cfg, "turbo": turbo or "0",
+                "negative": self.sample_negative_var.get().strip() if getattr(self, "sample_negative_var", None)
+                else ""}
+
+    def _push_samples_to_workbench(self, *_):
+        """Hand the current Samples-tab settings to every loaded workbench engine that follows them."""
+        from fizgig.families.workbench import WorkbenchEngine
+        for eng in (getattr(self, "repair_engine", None), getattr(self, "_explorer_engine", None),
+                    getattr(self, "royale_engine", None)):
+            if isinstance(eng, WorkbenchEngine) and eng.desc.workbench_follows_samples:
+                eng.preview_settings = self._samples_settings_for(eng.desc)
+
+    def _show_samples_note(self, label, desc):
+        if label is None:
+            return
+        if desc is not None and desc.workbench_follows_samples:
+            if not label.winfo_manager():
+                label.pack(anchor=tk.W, pady=(6, 0))
+        else:
+            label.pack_forget()
 
     def _workbench_preview_model(self, desc, fast=True):
         """(DiT path, speed LoRA path, checkpoint sampling) a standard-layer workbench engine previews with. Fast: the
@@ -23087,6 +23145,8 @@ class LoRATrainerGUI:
             "them; the travel modes are Klein's, Krea 2's and Qwen's.")
         _rf = tk.Frame(rfam_card, bg=COLORS["bg_surface"])
         _rf.pack(anchor=tk.W)
+        self._royale_samples_note = ttk.Label(rfam_card, text=self._WORKBENCH_SAMPLES_NOTE,
+                                              foreground=COLORS["text_explain"], font=HINT_FONT)
         ttk.Radiobutton(_rf, text="Klein 9B", variable=self.royale_family_var, value="klein",
                         command=self._on_royale_family_changed).pack(side=tk.LEFT, padx=(0, 20))
         ttk.Radiobutton(_rf, text="MiniMax H3", variable=self.royale_family_var, value="minimax",
@@ -24323,6 +24383,7 @@ class LoRATrainerGUI:
                 if anchor is not None and anchor.winfo_manager() != "":
                     kw["before"] = anchor
                 w.pack(**kw)
+        self._show_samples_note(getattr(self, "_royale_samples_note", None), self._royale_desc())
         _rows = getattr(self, "_royale_ref_rows", None)
         if _rows is not None:
             _rd = self._royale_desc()
@@ -24405,6 +24466,8 @@ class LoRATrainerGUI:
         from fizgig.families.workbench import WorkbenchEngine
         if not isinstance(self.royale_engine, WorkbenchEngine) or self.royale_engine.desc.key != desc.key:
             self.royale_engine = WorkbenchEngine(desc)
+        if desc.workbench_follows_samples:
+            self.royale_engine.preview_settings = self._samples_settings_for(desc)
         self._royale_pipeline_kwargs = dict(
             dit_path=dit, vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
             speed_lora_path=speed, preview_sampling=ck, device="cuda", **self._family_inference_memory())

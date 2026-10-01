@@ -170,6 +170,8 @@ class FamilyDescription:
     speed_loras: tuple = ()           # SpeedLoRA entries
     preview_steps: int = 20
     preview_cfg_note: str = ""         # the Samples tab's line under CFG Scale ("" = a plain default line)
+    workbench_follows_samples: bool = False   # Repair Studio / Explorer / Royale previews take the Samples tab's steps,
+    #                                   CFG, negative prompt and turbo strength (else the family's fixed preview recipe)
     preview_cfg: float = 1.0
     preview_width: int = 1024
     preview_height: int = 1024
