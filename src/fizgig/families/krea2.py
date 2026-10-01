@@ -119,7 +119,10 @@ KREA2 = FamilyDescription(
     automagic_sign_window=16,
     network_types=("lora", "lokr"),
     slider_training=True,
-    slider_guidance=3.0,              # Peter's slider tests (1 Oct 2026): 3 on Krea 2, where Qwen's 2 pushes too little             # the driver's diff-weighted loss (photo pairs) and noise_latents / predict (prompts)
+    slider_guidance=3.0,              # Peter's slider tests (1 Oct 2026): 3 on Krea 2, where Qwen's 2 pushes too little
+    # Ultra mode (Peter, 1 Oct 2026): blocks 0-7 + the four text-fusion blocks. His Repair Studio surgery on slider LoRAs
+    # (detail blocks and the I/O layers off) held up at strength 20 without distortion
+    slider_ultra_blocks=tuple(f"block_{i}" for i in range(8)) + ("txt_lw_0", "txt_lw_1", "txt_rf_0", "txt_rf_1"),
 
     sampling=(
         SamplingSettings("RAW", steps=28, cfg=4.5, sampler="euler", scheduler="simple", negative_prompt=True,

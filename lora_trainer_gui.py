@@ -5408,6 +5408,18 @@ class LoRATrainerGUI:
         ttk.Button(_cr, text="Write captions",
                    command=lambda: self._family_edit_write_captions(self.entries["FAMILY_SLIDER_CAPTION"])).pack(
             side=tk.LEFT, padx=(6, 0))
+        # Ultra mode: below both halves, shown only for a family whose description names its blocks
+        self._family_slider_ultra = ttk.Frame(self._family_slider_frame)
+        self._family_slider_ultra.grid(row=100, column=0, sticky=tk.W, pady=(10, 0))
+        self.entries["FAMILY_SLIDER_ULTRA"] = tk.BooleanVar(
+            value=bool(self.settings.get("FAMILY_SLIDER_ULTRA", False)))
+        ttk.Checkbutton(self._family_slider_ultra, text="Ultra mode",
+                        variable=self.entries["FAMILY_SLIDER_ULTRA"]).grid(row=0, column=0, sticky=tk.W)
+        self._family_slider_ultra_hint = ttk.Label(
+            self._family_slider_ultra, foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT,
+            wraplength=690,
+            text="Allows use at a much higher range of strengths. Affects fine detail less than a regular slider LoRA.")
+        self._family_slider_ultra_hint.grid(row=1, column=0, sticky=tk.W, pady=(1, 2))
         _f = self._family_slider_prompts
         _r[0] = 0
         for _key, _head, _text, _default in (
@@ -7409,7 +7421,7 @@ class LoRATrainerGUI:
                                     "FAMILY_EDIT_CAPTION", "FAMILY_SLIDER", "FAMILY_SLIDER_SOURCE",
                                     "FAMILY_SLIDER_DIR", "FAMILY_SLIDER_CAPTION", "FAMILY_SLIDER_BASE",
                                     "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG", "FAMILY_SLIDER_GUIDANCE",
-                                    "FAMILY_FT", "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY",
+                                    "FAMILY_SLIDER_ULTRA", "FAMILY_FT", "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY",
                                     "FAMILY_FT_ROTATE_EVERY", "FAMILY_FT_FUSED", "FAMILY_FT_REG_DIR",
                                     "FAMILY_FT_REG_MULT"})
     from fizgig.families.launch import PRECISION_LABELS as _FAMILY_PRECISION_LABELS
@@ -7551,6 +7563,8 @@ class LoRATrainerGUI:
             self._family_edit_hint.configure(text=self._KIND_HINTS[kind])
             slider_on = kind == "slider"
             self._set_widget_visible(self._family_slider_frame, slider_on)
+            self._set_widget_visible(self._family_slider_ultra,
+                                     slider_on and bool(desc is not None and desc.slider_ultra_blocks))
             if getattr(self, "_family_slider_push_hint", None) is not None and desc is not None:
                 self._family_slider_push_hint.configure(       # the open family's own start
                     text=f"{self._family_slider_push_text} Start on {desc.slider_guidance:g} "
@@ -7638,6 +7652,7 @@ class LoRATrainerGUI:
         _fr = self._ft_resume_active() if self._family_ft_on(desc) else None
         d.update(FAMILY_EDIT=self._family_edit_on(desc), FAMILY_SLIDER=self._family_slider_on(desc),
                  FAMILY_FT=self._family_ft_on(desc), FAMILY_FT_FUSED=bool(self.entries["FAMILY_FT_FUSED"].get()),
+                 FAMILY_SLIDER_ULTRA=bool(self.entries["FAMILY_SLIDER_ULTRA"].get()),
                  **{k: str(self.entries[k].get()).strip() for k in (
                      "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY", "FAMILY_FT_ROTATE_EVERY", "FAMILY_FT_REG_DIR",
                      "FAMILY_FT_REG_MULT")},
@@ -32457,6 +32472,7 @@ class LoRATrainerGUI:
                 "FAMILY_EDIT_CAPTION": self.entries["FAMILY_EDIT_CAPTION"].get().strip(),
                 "FAMILY_SLIDER": self._family_slider_on(),
                 "FAMILY_FT": self._family_ft_on(), "FAMILY_FT_FUSED": bool(self.entries["FAMILY_FT_FUSED"].get()),
+                "FAMILY_SLIDER_ULTRA": bool(self.entries["FAMILY_SLIDER_ULTRA"].get()),
                 **{k: self.entries[k].get().strip() for k in (
                     "FAMILY_SLIDER_SOURCE", "FAMILY_SLIDER_DIR", "FAMILY_SLIDER_CAPTION", "FAMILY_SLIDER_BASE",
                     "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG", "FAMILY_SLIDER_GUIDANCE",

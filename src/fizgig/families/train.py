@@ -541,6 +541,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  sample_height=None, sample_steps=None, sample_cfg_scale=None, sample_negative=None,
                  sample_at_first=False, sample_seed=42, sample_reference=None, sample_image=None,
                  slider_pairs=False, slider_diff_weight=1.0, slider_prompts=None, slider_guidance=3.0,
+                 train_blocks=None,
                  slider_bank=16, slider_bank_res=768,
                  metadata_title=None, metadata_author=None, metadata_description=None, metadata_license=None,
                  metadata_tags=None, metadata_trigger_phrase=None, metadata_thumbnail=None,
@@ -821,7 +822,15 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         if ftr.streamer is not None:
             swapped = 1          # blocks stream: previews and caption re-encodes must not park + restore the whole DiT
     else:
-        net.add_trainable(network_dim, network_alpha, kind=network_type, factor=lokr_factor)
+        blocks = None
+        if train_blocks:
+            known = {b.id for g in driver.block_map(dit) for b in g.blocks}
+            unknown = sorted(set(train_blocks) - known)
+            if unknown:
+                raise RuntimeError(f"--train_blocks: {', '.join(unknown)} are not {desc.display_name} blocks")
+            blocks = set(train_blocks)
+            logger.info(f"[blocks] the LoRA trains {len(blocks)} of {len(known)} blocks only: {', '.join(train_blocks)}")
+        net.add_trainable(network_dim, network_alpha, blocks=blocks, kind=network_type, factor=lokr_factor)
     if slider_prompts:
         # the practice bank: the base model's own renders of the neutral prompt (adapter at 0, training adapter
         # off, the speed LoRA on when it is loaded), decoded and re-encoded into training latents
@@ -968,6 +977,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                            "ss_slider_guidance": f"{float(slider_guidance):g}"})
             else:
                 md.update({"ss_slider_diff_weight": f"{float(slider_diff_weight):g}"})
+        if train_blocks:
+            md.update({"ss_train_blocks": ",".join(train_blocks)})
         return md
 
     def save_lora(path, epoch):
@@ -1248,6 +1259,8 @@ def setup_parser():
                    help="Slider from three prompts, no images (needs --text_encoder and --vae)")
     p.add_argument("--slider_guidance", type=float, default=3.0, help="Prompt-pair slider: how hard to push")
     p.add_argument("--slider_bank", type=int, default=16, help="Prompt-pair slider: practice images to render")
+    p.add_argument("--train_blocks", default="",
+                   help="Comma-separated block ids (the driver's block map) to train; empty = every block")
     p.add_argument("--slider_bank_res", type=int, default=768, help="Prompt-pair slider: practice image size")
     for k in ("title", "author", "description", "license", "tags", "trigger_phrase", "thumbnail"):
         p.add_argument(f"--metadata_{k}", default=None)
@@ -1320,6 +1333,7 @@ def main():
         sample_reference=[a.sample_reference] if a.sample_reference else None, sample_image=a.sample_image,
         slider_pairs=a.slider_pairs, slider_diff_weight=a.slider_diff_weight, slider_prompts=a.slider_prompts,
         slider_guidance=a.slider_guidance, slider_bank=a.slider_bank, slider_bank_res=a.slider_bank_res,
+        train_blocks=[b.strip() for b in a.train_blocks.split(",") if b.strip()] or None,
         metadata_title=a.metadata_title, metadata_author=a.metadata_author,
         metadata_description=a.metadata_description, metadata_license=a.metadata_license,
         metadata_tags=a.metadata_tags, metadata_trigger_phrase=a.metadata_trigger_phrase or a.trigger_word,

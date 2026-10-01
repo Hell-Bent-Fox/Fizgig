@@ -415,6 +415,8 @@ def train_command(desc, inputs, plan):
         cmd += ["--metadata_trigger_phrase", trig]
     cmd += _preview_flags(desc, st, plan, cmd)
     if slider_on(desc, st):
+        if desc.slider_ultra_blocks and st.get("FAMILY_SLIDER_ULTRA"):
+            cmd += ["--train_blocks", ",".join(desc.slider_ultra_blocks)]
         if slider_on(desc, st, "prompts"):
             base = _s(st.get("FAMILY_SLIDER_BASE"))
             cmd += ["--slider_prompts", base, f"{base} {_s(st.get('FAMILY_SLIDER_POS'))}",

@@ -162,6 +162,8 @@ class FamilyDescription:
     slider_training: bool = False     # Slider LoRAs (strength is a dial between two looks); the driver needs
     #                                   training_loss(diff_ref=, diff_weight=) and noise_latents / predict
     slider_guidance: float = 2.0      # a prompt slider's default push strength (the Training tab box when empty)
+    slider_ultra_blocks: tuple = ()   # block ids (driver.block_map) an "Ultra mode" slider trains, () = no Ultra mode:
+    #                                   the composition blocks only, so the slider holds up at far higher strengths
 
     # sampling
     sampling: tuple = ()              # SamplingSettings without any speed LoRA (first = default)
