@@ -22459,8 +22459,9 @@ class LoRATrainerGUI:
             r += 1
 
     def _build_repair_slider_panel_family(self, parent, desc):
-        """Standard-layer family: the driver's block map in the model's own names, groups in order, split over two
-        columns at a group or block boundary nearest the middle."""
+        """Standard-layer family: the driver's block map in the model's own names. The first group (the main blocks)
+        splits evenly over two columns; any further groups (Krea 2's text fusion, input / output) sit in their own
+        two-column section below, so their longer names never widen the block columns."""
         canvas = tk.Canvas(parent, highlightthickness=0, bg=COLORS["bg_surface"], height=500)
         scroll = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scroll.set)
@@ -22470,32 +22471,37 @@ class LoRATrainerGUI:
         inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
         inner.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind("<Configure>", lambda e: canvas.itemconfigure(inner_id, width=e.width))
-        inner.columnconfigure(0, weight=1)
-        inner.columnconfigure(1, weight=1)
-        cols = [ttk.Frame(inner), ttk.Frame(inner)]
-        for i, c in enumerate(cols):
-            c.grid(row=0, column=i, sticky=tk.NSEW, padx=4)
         groups = self._repair_block_groups(desc)
         self._repair_family_labels = {b.id: b.label for g in groups for b in g.blocks}
-        half = (sum(len(g.blocks) for g in groups) + 1) // 2
-        rows, col, placed = [0, 0], 0, 0
-        for g in groups:
-            chunks = [g.blocks]
-            if col == 0 and placed < half < placed + len(g.blocks):
-                cut = half - placed                     # a group longer than what is left of the left column
-                chunks = [g.blocks[:cut], g.blocks[cut:]]
-            for ci, blocks in enumerate(chunks):
-                if ci == 1 or (col == 0 and placed >= half):
-                    col = 1
-                first, last = blocks[0].label, blocks[-1].label
-                title = g.label if len(chunks) == 1 else f"{g.label}: {first}–{last}"
-                ttk.Label(cols[col], text=title, font=(FONT_FAMILY, 10, "bold")).grid(
-                    row=rows[col], column=0, padx=0, pady=(8 if rows[col] else 2, 4), sticky=tk.W)
-                rows[col] += 1
-                for b in blocks:
-                    self._build_repair_block_row(cols[col], b.id, rows[col])
-                    rows[col] += 1
-                    placed += 1
+
+        def _two_columns(frame, row):
+            sec = ttk.Frame(frame)
+            sec.grid(row=row, column=0, sticky=tk.NSEW)
+            sec.columnconfigure(0, weight=1, uniform="repair_cols")
+            sec.columnconfigure(1, weight=1, uniform="repair_cols")
+            cols = [ttk.Frame(sec), ttk.Frame(sec)]
+            for i, c in enumerate(cols):
+                c.grid(row=0, column=i, sticky=tk.NSEW, padx=4)
+            return cols
+
+        def _place(cols, group, pad_top):
+            cut = (len(group.blocks) + 1) // 2
+            for ci, blocks in enumerate((group.blocks[:cut], group.blocks[cut:])):
+                if not blocks:
+                    continue
+                if pad_top > 2:                     # a lower section: one plain title, the right column level
+                    title = group.label if ci == 0 else " "
+                else:
+                    title = (group.label if len(blocks) == len(group.blocks)
+                             else f"{group.label}: {blocks[0].label}–{blocks[-1].label}")
+                ttk.Label(cols[ci], text=title, font=(FONT_FAMILY, 10, "bold")).grid(
+                    row=0, column=0, padx=0, pady=(pad_top, 4), sticky=tk.W)
+                for r, b in enumerate(blocks, start=1):
+                    self._build_repair_block_row(cols[ci], b.id, r)
+
+        inner.columnconfigure(0, weight=1)
+        for gi, g in enumerate(groups):
+            _place(_two_columns(inner, gi), g, 2 if gi == 0 else 10)
 
     def _build_repair_slider_panel_h3(self, parent):
         """MiniMax H3 layout: 50 main blocks (0-25 left, 26-49 right) + the 2 token-refiner
