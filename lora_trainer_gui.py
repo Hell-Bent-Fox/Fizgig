@@ -833,8 +833,8 @@ BUILT_IN_PRESETS = {
         "TARGET_LAYERS": "Full Model", "MIN_TIMESTEP": "", "MAX_TIMESTEP": "",
         "OPTIMIZER_TYPE": "adamw8bit",
     },
-    "✨ Identity (rank 4, single subject)": {
-        "NETWORK_DIM": 4, "NETWORK_ALPHA": 4, "LEARNING_RATE": 4e-4,
+    "✨ Identity (rank 8, single subject)": {
+        "NETWORK_DIM": 8, "NETWORK_ALPHA": 8, "LEARNING_RATE": 4e-4,
         "MAX_TRAIN_EPOCHS": 15, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42,
         "ADAPTIVE_LR": True, "ADAPTIVE_LR_MIN": "2e-4", "ADAPTIVE_LR_MAX": "4e-4",
         "TARGET_LAYERS": "Identity", "MIN_TIMESTEP": "", "MAX_TIMESTEP": "",
