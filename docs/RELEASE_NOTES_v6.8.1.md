@@ -29,6 +29,8 @@ Qwen Image 2.1 can now fine-tune the whole base model, so Fizgig fine-tunes thre
 
 A fine-tune takes longer than a LoRA, but far less than people expect. It trains one part of the model at a time, so it fits a single consumer GPU, and a full rotation through every part takes several epochs: four on a 24 or 32 GB card. With the defaults (10 rotations, 1 epoch per part) that's 40 epochs, at about 0.85 seconds a step on Krea 2 at 0.25 MP against about 0.6 for a LoRA. In total that's about as long as the 64-epoch Standard Krea 2 LoRA preset, and about twice the 30-epoch Ultra Fast one. A 16 GB card can fine-tune too, but it splits the model into more parts and streams from system RAM (about 5 seconds a step), so expect a much longer run there.
 
+In practice: a single-character fine-tune at the default settings can be done in as little as 30 minutes on an RTX 5090. Put several characters in the same dataset folder, each with its own unique name or trigger word, and a multi-character fine-tune takes a couple of hours.
+
 When it's done, use the result as a new checkpoint in place of the base, or press **Checkpoint to LoRA** on the fine-tune card to turn the difference between your fine-tune and the base into a LoRA. Concepts come out far better separated than in a LoRA trained directly. See [FINETUNE.md](https://github.com/shootthesound/Fizgig/blob/v6.8.0/docs/FINETUNE.md).
 
 ## Repair Studio
