@@ -29,11 +29,11 @@
 </p>
 
 > ### 📰 Latest news
+> - **Fizgig 6.8 — Krea 2 sliders, Ultra mode and Qwen fine-tuning.** Slider LoRAs on Krea 2, with an Ultra mode that holds up at much higher strengths; full fine-tuning for Qwen Image 2.1 (a single character in as little as 30 minutes on a 5090); Repair Studio with nudge buttons, no strength limit and donor saves that look exactly as previewed; and Krea 2 on Fizgig's new driver system, with Klein and MiniMax H3 next. [Release notes](docs/RELEASE_NOTES_v6.8.1.md)
 > - **Fizgig 6.7 — Qwen slider LoRAs.** A LoRA whose strength is a dial between two looks (sad to happy, cool to warm), trained from a few photo pairs or from a few words. [Release notes](docs/RELEASE_NOTES_v6.7.0.md)
 > - **Fizgig 6.6 — Qwen edit LoRAs.** Teach Qwen Image 2.1 your own edit (a grade, a look, a relight) from pairs of original and edited photos, then apply it to any photo. [Release notes](docs/RELEASE_NOTES_v6.6.0.md)
 > - **Fizgig 6.5.1 — Klein on 10 GB cards.** Base precision on the Training tab for Klein, with Auto picking 4-bit on cards under 16 GB; plus Qwen preview fixes. [Release notes](docs/RELEASE_NOTES_v6.5.1.md)
 > - **Fizgig 6.5 — Qwen Image 2.1.** LoRA and LoKR training with Fizgig's own training adapter, turbo previews, the per-image loss watch and every workbench tool, on cards down to 10 GB. [Guide](docs/QWEN_IMAGE.md)
-> - **Fizgig 6.3 — sharper MiniMax H3 photo LoRAs.** Circlestone's training adapter is the H3 default, for better likeness on photo datasets. [Guide](docs/MINIMAX_H3.md)
 >
 > [All releases →](https://github.com/shootthesound/Fizgig/releases)
 
@@ -53,12 +53,12 @@ Memory plans itself: precision, block swap and previews size to your free VRAM, 
 
 ## Supported models
 
-| Model | Trains on | LoRA | LoKR | Full fine-tune | Smallest card | Guide |
-|---|---|---|---|---|---|---|
-| **Flux 2 Klein 9B** | photos | ✅ | — | — | 10 GB | [Klein 9B](docs/KLEIN.md) |
-| **Krea 2** (12.9B) | photos | ✅ | ✅ | ✅ experimental | 8 GB | [Krea 2](docs/KREA2.md) |
-| **MiniMax H3** (33B) | photos, video clips, sound, voice | ✅ | ✅ | ✅ experimental | 16 GB | [MiniMax H3](docs/MINIMAX_H3.md) |
-| **Qwen Image 2.1** | photos | ✅ | ✅ | — | 10 GB | [Qwen Image 2.1](docs/QWEN_IMAGE.md) |
+| Model | Trains on | LoRA | LoKR | Slider / Edit LoRA | Full fine-tune | Smallest card | Guide |
+|---|---|---|---|---|---|---|---|
+| **Flux 2 Klein 9B** | photos | ✅ | — | coming | coming | 10 GB | [Klein 9B](docs/KLEIN.md) |
+| **Krea 2** (12.9B) | photos | ✅ | ✅ | ✅ slider | ✅ experimental | 8 GB | [Krea 2](docs/KREA2.md) |
+| **MiniMax H3** (33B) | photos, video clips, sound, voice | ✅ | ✅ | slider coming | ✅ experimental | 16 GB | [MiniMax H3](docs/MINIMAX_H3.md) |
+| **Qwen Image 2.1** | photos | ✅ | ✅ | ✅ slider + edit | ✅ experimental | 10 GB | [Qwen Image 2.1](docs/QWEN_IMAGE.md) |
 
 Every model gets all five workbench tools. MiniMax H3 also makes **RefMods**, tuned against H3 itself rather than a plain encode ([how do I…?](docs/REFMOD_HOWDOI.md)). Fizgig's Qwen training adapter is [free on Hugging Face](https://huggingface.co/ShootTheSound/Fizgig-Qwen-Image-2.1-Training-Adapter) for any trainer. Full fine-tuning has [its own guide](docs/FINETUNE.md).
 
@@ -75,6 +75,8 @@ Each tool works on your own runs **or any LoRA you've downloaded**, and they han
 ## Training features
 
 - **Presets per model**: pick a ✨ preset on the Training tab and go.
+- **Slider LoRAs** (Krea 2, Qwen Image 2.1): a LoRA whose strength is a dial between two looks, from photo pairs or three prompts. Krea 2's **Ultra mode** trains the composition blocks only, so the dial holds up at much higher strengths.
+- **Edit LoRAs** (Qwen Image 2.1): teach an edit from pairs of original and edited photos, then apply it to any photo.
 - **Adaptive LR**: a plateau tracker that raises or lowers the rate within your Min/Max, with rollback on instability.
 - **Weight averaging (EMA)**, on by default where it's measured to help.
 - **Context LoRA**: train on top of a frozen, active LoRA so the two coexist (a face on a style, an outfit on a character). No other trainer does this.
