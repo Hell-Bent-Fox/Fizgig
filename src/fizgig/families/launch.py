@@ -311,7 +311,7 @@ def train_command(desc, inputs, plan):
     if desc.training_adapter and st.get("FAMILY_TRAINING_ADAPTER", True):
         cmd += ["--training_adapter", (st.get("models") or {}).get(desc.training_adapter, "")]
     ctx = _s(st.get("CONTEXT_LORA_PATH"))
-    if ctx:
+    if ctx and not ft_on(desc, st):         # a fine-tune trains the base itself: there is no LoRA to stack on
         cmd += ["--context_lora_path", ctx,
                 "--context_lora_strength", _s(st.get("CONTEXT_LORA_STRENGTH") or "1.0") or "1.0"]
     if st.get("ADAPTIVE_LR"):

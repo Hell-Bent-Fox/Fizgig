@@ -7582,6 +7582,9 @@ class LoRATrainerGUI:
                         pass
             if kind == "finetune":
                 self._family_ft_plan_refresh()
+            # a fine-tune trains the base itself, so there is no LoRA for a Context LoRA to sit under
+            for w in (self._contextlora_label, self._contextlora_frame, self._contextlora_desc_label):
+                self._set_widget_visible(w, kind != "finetune")
         can = can_edit or can_slider or can_ft
         if can_edit:
             self._family_edit_need.configure(text=desc.edit_note or "An original and its edited version must have "

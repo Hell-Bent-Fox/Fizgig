@@ -558,6 +558,9 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     if desc is None or not desc.training_ready:
         raise RuntimeError(f"unknown or untrainable family {family!r}")
     validate_output_name(output_name)          # before any model loads, not at the first save an epoch in (#70)
+    if context_lora_path and finetune:
+        raise RuntimeError("A Context LoRA trains a LoRA on top of another one; a fine-tune trains the base model "
+                           "itself, so the two don't combine. Drop --context_lora_path.")
     driver = desc.load_driver()
     arch = desc.arch_id
     speed_desc = desc.preview_speed() if speed_lora else None
