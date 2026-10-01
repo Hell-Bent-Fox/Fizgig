@@ -21,7 +21,7 @@ The slider LoRAs from 6.7.0 now train on Krea 2: a LoRA whose strength is a dial
 
 ### Ultra mode
 
-A new tick box at the bottom of the Krea 2 slider section. Ultra mode trains the slider on the composition blocks (0 to 7) and the text-fusion blocks only, leaving the fine-detail blocks alone. The result holds up at much higher strengths: one test slider ran cleanly at 20 in ComfyUI. How far yours goes depends on what you train and for how long. The file is also much smaller.
+A new tick box at the bottom of the Krea 2 slider section. Ultra mode trains the slider on the composition blocks (0 to 7) and the text-fusion blocks only, leaving the fine-detail blocks alone. The result holds up at much higher strengths: one test slider ran cleanly at 20 in ComfyUI. How far yours goes depends on what you train and for how long. The file is also much smaller. Ultra mode works best for sliders trained from prompts; it can work well with photo pairs too, especially when the change is compositional (pose, framing, layout) rather than fine detail.
 
 ## Fine-tuning for Qwen Image 2.1
 

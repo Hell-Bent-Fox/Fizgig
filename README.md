@@ -75,7 +75,7 @@ Each tool works on your own runs **or any LoRA you've downloaded**, and they han
 ## Training features
 
 - **Presets per model**: pick a ✨ preset on the Training tab and go.
-- **Slider LoRAs** (Krea 2, Qwen Image 2.1): a LoRA whose strength is a dial between two looks, from photo pairs or three prompts. Krea 2's **Ultra mode** trains the composition blocks only, so the dial holds up at much higher strengths.
+- **Slider LoRAs** (Krea 2, Qwen Image 2.1): a LoRA whose strength is a dial between two looks, from photo pairs or three prompts. Krea 2's **Ultra mode** trains the composition blocks only, so the dial holds up at much higher strengths. It works best for sliders trained from prompts, and with photo pairs when the change is compositional.
 - **Edit LoRAs** (Qwen Image 2.1): teach an edit from pairs of original and edited photos, then apply it to any photo.
 - **Adaptive LR**: a plateau tracker that raises or lowers the rate within your Min/Max, with rollback on instability.
 - **Weight averaging (EMA)**, on by default where it's measured to help.

@@ -5418,7 +5418,9 @@ class LoRATrainerGUI:
         self._family_slider_ultra_hint = ttk.Label(
             self._family_slider_ultra, foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT,
             wraplength=690,
-            text="Allows use at a much higher range of strengths. Affects fine detail less than a regular slider LoRA.")
+            text="Allows use at a much higher range of strengths. Affects fine detail less than a regular slider LoRA. "
+                 "Best for sliders from prompts; with photo pairs, best when the change is compositional "
+                 "(pose, framing, layout).")
         self._family_slider_ultra_hint.grid(row=1, column=0, sticky=tk.W, pady=(1, 2))
         _f = self._family_slider_prompts
         _r[0] = 0
