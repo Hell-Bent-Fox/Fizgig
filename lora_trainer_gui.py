@@ -22614,7 +22614,7 @@ class LoRATrainerGUI:
         donor_tag_lbl.grid(row=0, column=1, padx=(0, 4))
         scale_d = ttk.Scale(donor_rowf, from_=-3.0, to=3.0, variable=donor_strength, orient=tk.HORIZONTAL)
         scale_d.grid(row=0, column=2, sticky=tk.EW, padx=2)
-        val_lbl_d = ttk.Label(donor_rowf, text="1.00", width=5, anchor=tk.E)
+        val_lbl_d = ttk.Label(donor_rowf, text="+0.00", width=5, anchor=tk.E)   # donor sliders start at 0
         val_lbl_d.grid(row=0, column=3, padx=(2, 2))
         btns_d = self._repair_quickset_buttons(donor_rowf, donor_strength, 0, 4,
             balance_cb=lambda b=block_id: self._repair_balance_block(b, "donor"))
