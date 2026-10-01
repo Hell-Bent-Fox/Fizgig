@@ -5427,9 +5427,10 @@ class LoRATrainerGUI:
                  "changes, try a narrower word such as \"unsmiling\".", ""),
                 ("FAMILY_SLIDER_GUIDANCE", "4. Push strength",
                  "How hard the ends are pushed apart. Higher gives a stronger dial but changes more than the one "
-                 "thing you asked for (a frown can turn into a different, older man). The family's presets set its own "
-                 "start: 3 on Krea 2, 2 on Qwen Image 2.1 (values 2 to 9 tested).", "2")):
-            _block(_head, _text)
+                 "thing you asked for (a frown can turn into a different, older man).", "2")):
+            _lab = _block(_head, _text)
+            if _key == "FAMILY_SLIDER_GUIDANCE":
+                self._family_slider_push_hint, self._family_slider_push_text = _lab, _text
             _er = _row()
             if _key == "FAMILY_SLIDER_GUIDANCE" and self._family_desc() is not None:
                 _default = f"{self._family_desc().slider_guidance:g}"     # the family the app opens on
@@ -7550,6 +7551,10 @@ class LoRATrainerGUI:
             self._family_edit_hint.configure(text=self._KIND_HINTS[kind])
             slider_on = kind == "slider"
             self._set_widget_visible(self._family_slider_frame, slider_on)
+            if getattr(self, "_family_slider_push_hint", None) is not None and desc is not None:
+                self._family_slider_push_hint.configure(       # the open family's own start
+                    text=f"{self._family_slider_push_text} Start on {desc.slider_guidance:g} "
+                         "(values 2 to 9 tested).")
             prompts = self.entries["FAMILY_SLIDER_SOURCE"].get() == "prompts"
             self._set_widget_visible(self._family_slider_pairs, slider_on and not prompts)
             self._set_widget_visible(self._family_slider_prompts, slider_on and prompts)
