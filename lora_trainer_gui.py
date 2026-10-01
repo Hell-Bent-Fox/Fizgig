@@ -22580,7 +22580,8 @@ class LoRATrainerGUI:
         chk_p.grid(row=0, column=0, padx=(2, 4))
         # Block label (category-coloured for Klein; neutral for Krea 2)
         lbl = tk.Label(rowf, text=lbl_text, fg=color, bg=COLORS["bg_surface"],
-                       width=10, anchor=tk.W, font=(FONT_FAMILY, 9, "bold"))
+                       width=max(10, len(lbl_text) + 1), anchor=tk.W, font=(FONT_FAMILY, 9, "bold"))
+        # (a long name — Krea 2's text-fusion and input/output rows — widens its own row instead of being cut)
         lbl.grid(row=0, column=1, padx=(0, 2))
         cat_lbl = None
         if cat_short:
