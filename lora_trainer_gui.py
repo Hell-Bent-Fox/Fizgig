@@ -3475,7 +3475,7 @@ class LoRATrainerGUI:
         """
         # Used only when help.json is missing or unreadable — point it at the real guide
         # rather than the old joke URL, since that path fires on a genuine error.
-        fallback = "https://www.youtube.com/watch?v=yrz0l6URGGk"
+        fallback = "https://www.youtube.com/watch?v=ihH3EjYYwG8"
         try:
             with open(HELP_FILE, "r", encoding="utf-8") as f:
                 urls = json.load(f).get("youtube_urls", {})
