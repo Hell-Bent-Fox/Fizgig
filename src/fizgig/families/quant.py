@@ -23,13 +23,15 @@ PRECISIONS = ("bf16", "int8", "nf4")
 
 
 def _targets(dit, driver):
-    names = set(driver.lora_target_names(dit))
+    names = set(driver.quant_target_names(dit))
     return [(n, m) for n, m in dit.named_modules() if n in names and isinstance(m, torch.nn.Linear)]
 
 
 @torch.no_grad()
-def quantize(dit, driver, precision, compute_device):
-    """Quantise the block map's Linears in place. Returns the number quantised (0 for bf16)."""
+def quantize(dit, driver, precision, compute_device, store_device=None):
+    """Quantise the block map's Linears in place. Returns the number quantised (0 for bf16). INT8 weights are
+    quantised on `compute_device` and kept on `store_device` when given (the CPU, for a block-swapped base: the swap
+    streams them in, where a fully resident INT8 base would have to fit before swapping could start)."""
     if precision == "bf16":
         return 0
     if precision not in PRECISIONS:
@@ -39,12 +41,15 @@ def quantize(dit, driver, precision, compute_device):
     if precision == "int8":
         from fizgig.modules.int8_train import int8_train_forward
         from fizgig.modules.nf4 import _dequantize_source_weight
+        fp32 = getattr(driver, "int8_fp32_scales", True)
         for _, m in targets:
-            w = _dequantize_source_weight(m).to(compute_device).float()
+            w = _dequantize_source_weight(m).to(compute_device)
+            w = w.float() if fp32 else w.contiguous()         # a driver may keep its original trainer's bf16 scales
             scale = w.abs().amax(dim=-1, keepdim=True).clamp_min(1e-8) / 127.0
             m.weight.requires_grad_(False)
-            m.weight.data = (w / scale).round_().clamp_(-127, 127).to(torch.int8).contiguous()
-            m.register_buffer("_int8_wscale", scale.reshape(1, -1), persistent=False)
+            q = (w / scale).round_().clamp_(-127, 127).to(torch.int8).contiguous()
+            m.weight.data = q if store_device is None else q.to(store_device)
+            m.register_buffer("_int8_wscale", scale.reshape(1, -1).to(torch.float32), persistent=False)
             m._is_int8 = True
             m._int8_grad_mode = "bf16"
             m.forward = int8_train_forward.__get__(m, type(m))
@@ -90,7 +95,7 @@ def load_base(driver, path, device, precision="bf16", blocks_to_swap=0, supports
             logger.info(f"[block swap] {swap} requested, {cap} is the maximum")
             swap = cap
     dit = driver.load_dit(path, "cpu" if (swap or precision != "bf16") else device)
-    quantize(dit, driver, precision, device)
+    quantize(dit, driver, precision, device, store_device="cpu" if swap else None)
     if swap:
         driver.enable_block_swap(dit, swap, device, supports_backward)
         logger.info(f"[block swap] {swap} blocks stream between CPU and GPU")
@@ -126,6 +131,8 @@ def plan(desc, driver, precision="auto", blocks_to_swap=-1, free_gb=None, margin
         free_gb = free_vram_gb()
     mem = {p: (_peak(v, megapixels), v[1]) for p, v in (desc.train_memory or {}).items()}
     offered = [p for p in PRECISIONS if p in desc.precisions]
+    if precision == "auto" and getattr(desc, "auto_precisions", ()):
+        offered = [p for p in desc.auto_precisions if p in desc.precisions]
     cap = driver.max_blocks_to_swap()
     budget = free_gb - margin_gb
 

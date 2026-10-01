@@ -82,6 +82,30 @@ def slider_on(desc, inputs, source=None):
     return on
 
 
+def ft_on(desc, inputs):
+    """A full fine-tune of the base model, for a family whose driver offers one (description.finetune)."""
+    return bool(desc.finetune and inputs.get("FAMILY_FT"))
+
+
+def ft_reg_dir(desc, inputs):
+    """A fine-tune's regularisation folder, when fine-tune is on and one is set (else "")."""
+    return _s(inputs.get("FAMILY_FT_REG_DIR")) if ft_on(desc, inputs) else ""
+
+
+def _ft_reg_mult(inputs):
+    try:
+        return max(0.0, float(str(inputs.get("FAMILY_FT_REG_MULT", "") or 0.2)))
+    except ValueError:
+        return None
+
+
+def _ft_int(inputs, key, default):
+    try:
+        return max(1, int(float(str(inputs.get(key, "") or default))))
+    except ValueError:
+        return None
+
+
 def caches(desc, inputs):
     """Whether the cache stages run: not on a resume (the cache is already built), not for a prompt slider (no
     photos), not with Enable Cache off."""
@@ -161,6 +185,17 @@ def problems(desc, inputs):
     required model file (plus the training adapter while it is on) set and on disk."""
     errors = []
     folder = _s(inputs.get("image_folder"))
+    if ft_on(desc, inputs):
+        for key, label in (("FAMILY_FT_ROTATIONS", "Rotations"), ("FAMILY_FT_SAVE_EVERY", "Save every"),
+                           ("FAMILY_FT_ROTATE_EVERY", "Epochs per window")):
+            if _ft_int(inputs, key, 1) is None:
+                errors.append(f"Fine-tune: {label} must be a whole number of 1 or more")
+        reg = ft_reg_dir(desc, inputs)
+        if reg and not os.path.isdir(reg):
+            errors.append(f"Fine-tune: the regularisation folder {reg} does not exist - clear the box to train "
+                          f"without one")
+        elif reg and _ft_reg_mult(inputs) is None:
+            errors.append("Fine-tune: the regularisation LR multiplier must be a number")
     ext = inputs.get("caption_ext") or ".txt"
     if edit_on(desc, inputs) and slider_on(desc, inputs):
         errors.append("Edit LoRA and Slider are both on - a run is one kind of LoRA: pick Edit or Slider")
@@ -271,7 +306,7 @@ def train_command(desc, inputs, plan):
            "--learning_rate", str(st["LEARNING_RATE"]), "--max_train_epochs", str(st["MAX_TRAIN_EPOCHS"]),
            "--save_every_n_epochs", str(st["SAVE_EVERY_N_EPOCHS"]), "--seed", str(st["SEED"])]
     cmd += _state_flags(st)
-    if _s(st.get("RESUME_TRAINING")):
+    if _s(st.get("RESUME_TRAINING")) and not ft_on(desc, st):
         cmd += ["--resume", _s(st["RESUME_TRAINING"])]
     if desc.training_adapter and st.get("FAMILY_TRAINING_ADAPTER", True):
         cmd += ["--training_adapter", (st.get("models") or {}).get(desc.training_adapter, "")]
@@ -292,6 +327,15 @@ def train_command(desc, inputs, plan):
                 cmd += ["--lr_warmup_steps", str(int(float(st["LR_WARMUP_STEPS"])))]
         except ValueError:
             pass
+    if desc.compiles:
+        cb = str(st.get("COMPILE_BLOCKS", "auto") or "auto").lower()
+        if cb in ("auto", "on", "off", "outside"):
+            cmd += ["--compile_blocks", cb]
+    try:
+        if int(float(str(st.get("GRADIENT_ACCUMULATION", "") or 1))) > 1:
+            cmd += ["--gradient_accumulation_steps", str(int(float(st["GRADIENT_ACCUMULATION"])))]
+    except ValueError:
+        pass
     try:
         if abs(float(str(st.get("MAX_GRAD_NORM", "") or 1.0)) - 1.0) > 1e-9:
             cmd += ["--max_grad_norm", str(float(st["MAX_GRAD_NORM"]))]
@@ -301,6 +345,20 @@ def train_command(desc, inputs, plan):
         lab = str(st.get("FAMILY_PRECISION", "") or "")
         prec = next((k for k, v in PRECISION_LABELS.items() if v == lab), "auto")
         cmd += ["--precision", prec if prec == "auto" or prec in desc.precisions else "auto"]
+    if ft_on(desc, st):
+        # the length and cadence in whole rotations; a continuation starts from the paused run's checkpoint
+        cmd += ["--finetune", "--ft_rotations", str(_ft_int(st, "FAMILY_FT_ROTATIONS", 10)),
+                "--ft_save_every_rotations", str(_ft_int(st, "FAMILY_FT_SAVE_EVERY", 1)),
+                "--ft_rotate_every", str(_ft_int(st, "FAMILY_FT_ROTATE_EVERY", 1))]
+        if st.get("FAMILY_FT_FUSED", True):
+            cmd.append("--ft_fused_backward")
+        if ft_reg_dir(desc, st):
+            cmd += ["--reg_lr_multiplier", f"{_ft_reg_mult(st):g}"]
+        cont = st.get("FAMILY_FT_CONTINUE") or {}
+        if cont.get("checkpoint"):
+            cmd[cmd.index("--dit") + 1] = cont["checkpoint"]
+            cmd += ["--ft_start_window", str(int(cont.get("start_window", 0))),
+                    "--ft_epochs_done", str(int(cont.get("epochs_done", 0)))]
     # per-image loss watch (families/loss_watch.py), batch size 1 only
     try:
         bs1 = int(str(st.get("batch_size", 1)).strip() or 1) <= 1
@@ -357,11 +415,13 @@ def train_command(desc, inputs, plan):
         cmd += ["--metadata_trigger_phrase", trig]
     cmd += _preview_flags(desc, st, plan, cmd)
     if slider_on(desc, st):
+        if desc.slider_ultra_blocks and st.get("FAMILY_SLIDER_ULTRA"):
+            cmd += ["--train_blocks", ",".join(desc.slider_ultra_blocks)]
         if slider_on(desc, st, "prompts"):
             base = _s(st.get("FAMILY_SLIDER_BASE"))
             cmd += ["--slider_prompts", base, f"{base} {_s(st.get('FAMILY_SLIDER_POS'))}",
                     f"{base} {_s(st.get('FAMILY_SLIDER_NEG'))}",       # the user's own comma, if any
-                    "--slider_guidance", str(st.get("FAMILY_SLIDER_GUIDANCE") or "2")]
+                    "--slider_guidance", _s(st.get("FAMILY_SLIDER_GUIDANCE")) or f"{desc.slider_guidance:g}"]
             try:        # the practice pictures (and so the training) at Target Megapixels, a square on the 16 px grid
                 side = int((float(st.get("megapixels")) * 1_000_000) ** 0.5) // 16 * 16
                 if side >= 256:
@@ -418,7 +478,7 @@ def _preview_flags(desc, st, plan, cmd):
             if ln:
                 lines.append(ln)
         plan.dirs.append(samples_dir)            # the sample folder exists either way
-        if lines:
+        if lines or _sample_image(desc, sm):     # a reference alone previews too ('generate from this picture')
             prompts = os.path.join(samples_dir, f"{desc.key}_prompts.txt")
             plan.files.append((prompts, "\n".join(lines) + "\n"))
     every = str(sm.get("every") or "").strip()
@@ -444,6 +504,10 @@ def _preview_flags(desc, st, plan, cmd):
             pass
         if sm.get("at_first"):
             out.append("--sample_at_first")
+        if not edit_on(desc, st) and not slider_on(desc, st) and _sample_image(desc, sm):
+            # the Samples tab's picture: seen through the vision path, or edited by every preview prompt
+            out += ["--sample_image" if desc.reference_kind == "vision" else "--sample_reference",
+                    _sample_image(desc, sm)]
         if edit_on(desc, st):
             ref = _s(st.get("FAMILY_EDIT_REF"))
             if not ref:
@@ -454,6 +518,12 @@ def _preview_flags(desc, st, plan, cmd):
             if ref:
                 out += ["--sample_reference", ref]
     return out
+
+
+def _sample_image(desc, sm):
+    """The Samples tab's reference image, for families whose previews take one (reference_kind), when it exists."""
+    ref = _s(sm.get("reference")) if desc.reference_kind else ""
+    return ref if ref and os.path.isfile(ref) else ""
 
 
 # ---------------------------------------------------------------------------------------------------- dataset
@@ -492,6 +562,12 @@ def dataset_toml(desc, inputs):
     root = _s(inputs.get("cache_root"))
     if root and folder:
         lines.append(f'cache_directory = "{cache_dir_for(root, folder).replace(chr(92), "/")}"')
+    reg = ft_reg_dir(desc, inputs)
+    if reg:                              # a fine-tune's regularisation set: its own block (and cache folder)
+        lines += ["", "[[datasets]]", f'image_directory = "{reg.replace(chr(92), "/")}"']
+        if root:
+            lines.append(f'cache_directory = "{cache_dir_for(root, reg).replace(chr(92), "/")}"')
+        lines.append("is_reg = true")
     return "\n".join(lines) + "\n"
 
 

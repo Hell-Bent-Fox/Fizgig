@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 _BLOCK_KEY_RE = re.compile(r"(?:lora_unet_)?(double_blocks|single_blocks)_(\d+)_")
-# Krea 2 + MiniMax H3 module naming (see repair_studio.krea2_blocks / h3_blocks). txtfusion
+# Krea 2 + MiniMax H3 module naming (see repair_studio.h3_blocks). txtfusion
 # and token_refiner are checked before main blocks. Krea 2 and H3 SHARE the raw
 # `lora_unet_blocks_N_` key shape but use disjoint block-id namespaces (block_N vs h3blk_N),
 # so the mapper is resolved against the STATE's own ids: whichever namespace the state
@@ -203,7 +203,12 @@ def save_repaired_lora(
     donor_path: Optional[str] = None,
 ) -> dict:
     """Bake state into a new .safetensors. Returns a summary dict with
-    dropped_blocks, rescaled_blocks, blended_blocks, keys_in, keys_out."""
+    dropped_blocks, rescaled_blocks, blended_blocks, keys_in, keys_out, use_at.
+
+    Load strengths (state.primary_scale / donor_scale, H3's Strength boxes; 1.0 on Klein): a primary-only file
+    leaves them out and is used at the primary's strength. Once a donor contributes, the two LoRAs share one file,
+    so each is baked at its own strength (on its block modules, as the live preview applies it) and the file is
+    used at 1.0."""
     from fizgig.networks.lora import ensure_kohya_lora_state_dict, detect_lora_format, UnsupportedLoRAFormat
 
     if not os.path.isfile(primary_path):
@@ -257,6 +262,18 @@ def save_repaired_lora(
 
     keys_in = len(sd_p) + (len(sd_d) if sd_d is not None else 0)
 
+    ps = float(getattr(state, "primary_scale", 1.0))
+    ds = float(getattr(state, "donor_scale", 1.0))
+    donor_blocks = {_block_id_from_key(m, state.blocks.keys()) for m in modules_d}
+    fold = any(bs.donor_enabled and abs(float(bs.donor_strength)) > 1e-9 and b in donor_blocks
+               for b, bs in state.blocks.items())
+    bake_state = state
+    if fold and (ps != 1.0 or ds != 1.0):
+        bake_state = state.copy()
+        for bs in bake_state.blocks.values():
+            bs.primary_strength = float(bs.primary_strength) * ps
+            bs.donor_strength = float(bs.donor_strength) * ds
+
     for mod_name in all_modules:
         block_id = _block_id_from_key(mod_name, state.blocks.keys())
         if block_id is None:
@@ -266,7 +283,7 @@ def save_repaired_lora(
                     sd_out[f"{mod_name}.{suffix}"] = tensor
             continue
 
-        bs = state.blocks.get(block_id)
+        bs = bake_state.blocks.get(block_id)
         if bs is None:
             # No slider state for this block — keep primary as-is.
             if mod_name in modules_p:
@@ -414,6 +431,8 @@ def save_repaired_lora(
             {k: v for k, v in sorted(combined_ranks.items())}, separators=(",", ":"))
     if lycoris_converted:
         metadata["ss_repair_studio_lycoris_svd"] = str(lycoris_converted)
+    use_at = 1.0 if fold else ps
+    metadata["ss_repair_studio_use_at"] = f"{use_at:g}"
 
     # safetensors requires contiguous tensors
     sd_out = {k: v.contiguous() if v.is_floating_point() else v for k, v in sd_out.items()}
@@ -432,6 +451,8 @@ def save_repaired_lora(
         "format_out": ("mixed" if (_has_lycoris_out and _has_std_out)
                        else "lycoris" if _has_lycoris_out else "standard"),
         "lycoris_converted": lycoris_converted,
+        "use_at": use_at,
+        "strengths_baked": fold,
     }
     logger.info(
         "save_repaired_lora: primary_in=%d donor_in=%d out=%d dropped=%d rescaled=%d blended=%d → %s",

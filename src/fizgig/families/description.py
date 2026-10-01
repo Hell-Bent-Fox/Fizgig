@@ -25,7 +25,9 @@ class ModelFile:
     size_gb: float = 0.0
     note: str = ""                    # one plain line shown under the row
     local_name: str = ""              # name in models/ when the repo's own is generic (diffusion_pytorch_model...)
-    role: str = ""                    # "dit" | "vae" | "text_encoder" | "training_adapter" | "speed_lora" | ""
+    role: str = ""                    # "dit" | "vae" | "text_encoder" | "training_adapter" | "speed_lora" |
+    #                                   "preview_dit" (a separate model the workbench previews on, e.g. a distilled
+    #                                   checkpoint; see preview_checkpoint_sampling) | ""
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,8 @@ class FamilyDescription:
     model_files: tuple = ()
     text_encoder_label: str = ""
     vae_label: str = ""
+    # a tip under the family's Preferences section (e.g. filling the paths by hand from a ComfyUI install)
+    prefs_note: str = ""
 
     # latent rules
     latent_channels: int = 16
@@ -126,16 +130,40 @@ class FamilyDescription:
     ema_default: str = ""             # default EMA decay for the Training tab ("0.98", "Off"); "" = no EMA control
     implementation: str = ""          # SAI modelspec.implementation (reference repo URL)
     precisions: tuple = ("bf16",)     # base precisions offered for training: any of "bf16", "int8", "nf4"
+    # what Auto may choose, in order ((): every offered precision, most precise first). Krea 2: INT8, then NF4 - its
+    # original trainer's order; bf16 stays a manual choice
+    auto_precisions: tuple = ()
+    # the driver can torch.compile its blocks (FamilyDriver.compile_blocks); the Training tab's Compile Blocks
+    # control shows and the launch sends --compile_blocks
+    compiles: bool = False
+    # previews can take the Samples tab's reference image through the text encoder's vision path ('prompt from a
+    # picture', Krea 2) - conditioning only, not an edit reference (edit_training)
+    preview_image: bool = False
+    # how the workbench samples its preview checkpoint (the model file with role "preview_dit"), which it uses by
+    # default for fast previews when the file is set; None = the family has none
+    preview_checkpoint_sampling: Optional[SamplingSettings] = None
+    # a full fine-tune of the base model is offered (the driver's ft_spec returns its FTSpec, families/ft.py): the
+    # Training tab shows the fine-tune card and the launch sends --finetune. Optional - most families never need it
+    finetune: bool = False
     # measured training memory for the Auto plan: {precision: (peak GB with no block swap, GB saved per swapped
     # block)}; the peak may instead be ((megapixels, GB), ...) points, interpolated for the run's resolution.
     # {} = Auto just takes the first precision
     train_memory: dict = field(default_factory=dict)
     optimizers: tuple = ("adamw8bit", "adamw")
+    # Automagic v3 keeps one learning rate per parameter group: (group name, (substrings of the dotted module
+    # name, ...)) splits the LoRA so each family of modules finds its own rate; the first match wins, the rest form
+    # "other". () = one group
+    optimizer_families: tuple = ()
+    # Automagic v3's sign window for this family when Optimizer Args doesn't set polarity_history (0 = its default)
+    automagic_sign_window: int = 0
     network_types: tuple = ("lora",)
     edit_training: bool = False       # Edit LoRA from before/after pairs (the driver's supports_references)
     edit_note: str = ""               # the Edit LoRA section's "What you need" line: pair count and photo size
     slider_training: bool = False     # Slider LoRAs (strength is a dial between two looks); the driver needs
     #                                   training_loss(diff_ref=, diff_weight=) and noise_latents / predict
+    slider_guidance: float = 2.0      # a prompt slider's default push strength (the Training tab box when empty)
+    slider_ultra_blocks: tuple = ()   # block ids (driver.block_map) an "Ultra mode" slider trains, () = no Ultra mode:
+    #                                   the composition blocks only, so the slider holds up at far higher strengths
 
     # sampling
     sampling: tuple = ()              # SamplingSettings without any speed LoRA (first = default)
@@ -164,6 +192,8 @@ class FamilyDescription:
 
     # workbench tools that support this family ("repair", ...); the generic WorkbenchEngine drives them all
     workbench: tuple = ()
+    # Repair Studio built-ins beyond Reset All: (name, ((block id, strength), ...)) - every other block at 1.0
+    repair_presets: tuple = ()
 
     # things a user or a later session must know, with sources
     notes: tuple = ()
@@ -176,6 +206,17 @@ class FamilyDescription:
     @property
     def training_ready(self) -> bool:
         return bool(self.driver)
+
+    @property
+    def reference_kind(self) -> str:
+        """How a reference picture reaches previews and the workbench: "vision" (the text encoder sees it,
+        preview_image), "edit" (the prompt edits it, edit_training) or "" (none)."""
+        return "vision" if self.preview_image else ("edit" if self.edit_training else "")
+
+    def preview_checkpoint(self):
+        """(ModelFile, SamplingSettings) of the workbench's preview checkpoint, or None."""
+        f = next((m for m in self.model_files if m.role == "preview_dit"), None)
+        return (f, self.preview_checkpoint_sampling) if f is not None and self.preview_checkpoint_sampling else None
 
     def load_driver(self):
         """Instantiate the family's FamilyDriver (imported lazily: the description stays importable without torch)."""

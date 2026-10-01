@@ -130,8 +130,17 @@ class FamilyLoRA:
         """(down key, up key, alpha key) of any wrapped module, in the family's file format. Built from the module
         path alone, so modules outside the blocks never need a block id."""
         f = self.desc.lora
-        stem = f"{f.file_prefix}{full}"
+        stem = self._stem(full)
         return f"{stem}.{f.down}.weight", f"{stem}.{f.up}.weight", f.alpha_key.format(prefix=stem)
+
+    def _stem(self, full, lokr=False):
+        """A module's key stem in the family's format: '<file_prefix><dotted path>', or for a kohya family
+        'lora_unet_<path with dots as underscores>' (a LoKR there uses the LyCORIS standard 'diffusion_model.<path>',
+        as Fizgig's Krea 2 always saved it)."""
+        f = self.desc.lora
+        if f.kohya:
+            return f"diffusion_model.{full}" if lokr else f"lora_unet_{full.replace('.', '_')}"
+        return f"{f.file_prefix}{full}"
 
     def _wrap(self, full):
         """Wrap one Linear by dotted name (targets at init; frozen files may reach beyond them, e.g. a speed LoRA
@@ -252,9 +261,45 @@ class FamilyLoRA:
             ar[full] = scale
             n += 1
         self._frozen[name] = {"alpha_rank": ar, "load": float(strength), "on": True, "block_mult": {},
-                              "block_on": {}, "outside_on": True, "path": path}
+                              "block_on": {}, "outside_on": True, "path": path, "biases": self._read_biases(path),
+                              "bias_saved": []}
         self._apply(name)
         return n
+
+    def _read_biases(self, path):
+        """A file's bias deltas (`<module>.diff_b`, e.g. Krea 2's turbo LoRA on its input, timestep and output
+        layers - a low-rank pair cannot carry them): [(module name, delta on CPU)] for Linears with a matching bias."""
+        from safetensors import safe_open
+        out = []
+        with safe_open(path, framework="pt") as f:
+            for k in f.keys():
+                if not k.endswith(".diff_b"):
+                    continue
+                full = self._module_for(k[:-len(".diff_b")])
+                bias = self._bias(full) if full else None
+                delta = f.get_tensor(k)
+                if bias is not None and tuple(bias.shape) == tuple(delta.shape):
+                    out.append((full, delta.cpu()))
+        return out
+
+    def _bias(self, full):
+        w = self.wrapped.get(full)
+        mod = w.base if w is not None else self.dit.get_submodule(full)
+        return getattr(mod, "bias", None)
+
+    def _apply_biases(self, name):
+        """Put back the biases as they were, then (adapter on) add the deltas at the load strength. Snapshot and
+        restore, not += and -=, which in bf16 does not land back on the same values."""
+        st = self._frozen[name]
+        for bias, snap in st["bias_saved"]:
+            bias.data.copy_(snap)
+        st["bias_saved"] = []
+        if st["on"]:
+            for full, delta in st["biases"]:
+                bias = self._bias(full)
+                st["bias_saved"].append((bias, bias.detach().clone()))
+                d = delta if st["load"] == 1.0 else delta.float() * st["load"]
+                bias.data.add_(d.to(device=bias.device, dtype=bias.dtype))
 
     def has(self, name):
         return name in self._frozen
@@ -266,6 +311,8 @@ class FamilyLoRA:
             on = st["on"] and (st["outside_on"] if b is None else st["block_on"].get(b, True))
             mult = 1.0 if b is None else st["block_mult"].get(b, 1.0)
             self.wrapped[full].scales[name] = ar * st["load"] * mult if on else 0.0
+        if st.get("biases"):
+            self._apply_biases(name)
 
     def set_enabled(self, name, enabled: bool):
         """Switch a frozen adapter on (with its load strength and block settings) or fully off - every module,
@@ -329,6 +376,10 @@ class FamilyLoRA:
 
     def remove(self, name):
         """Drop a frozen adapter's weights entirely."""
+        st = self._frozen.get(name)
+        if st and st.get("bias_saved"):
+            st["on"] = False
+            self._apply_biases(name)
         for w in self.wrapped.values():
             if name in w.adapters:
                 del w.adapters[name]
@@ -355,7 +406,7 @@ class FamilyLoRA:
             if len(live) == 1 and isinstance(w.adapters[live[0][0]], LoKR):
                 # a lone LoKR stays a LoKR: the scale folds into w2 (alpha 1, full matrices -> scale 1 everywhere)
                 ad, s1 = w.adapters[live[0][0]], live[0][1]
-                stem = f"{self.desc.lora.file_prefix}{full}"
+                stem = self._stem(full, lokr=True)
                 sd[f"{stem}.lokr_w1"] = ad.lokr_w1.detach().to("cpu", dtype).contiguous()
                 sd[f"{stem}.lokr_w2"] = (ad.lokr_w2.detach().float() * s1).to("cpu", dtype).contiguous()
                 sd[f"{stem}.alpha"] = torch.tensor(1.0)
@@ -388,7 +439,7 @@ class FamilyLoRA:
         for full, w in self.wrapped.items():
             if TRAINABLE in w.adapters and isinstance(w.adapters[TRAINABLE], LoKR):
                 ad = w.adapters[TRAINABLE]
-                stem = f"{self.desc.lora.file_prefix}{full}"
+                stem = self._stem(full, lokr=True)
                 sd[f"{stem}.lokr_w1"] = ad.lokr_w1.detach().to("cpu", dtype).contiguous()
                 sd[f"{stem}.lokr_w2"] = ad.lokr_w2.detach().to("cpu", dtype).contiguous()
                 sd[f"{stem}.alpha"] = torch.tensor(1.0)     # full matrices: LyCORIS scale = alpha = 1
@@ -415,7 +466,7 @@ class FamilyLoRA:
                 continue                # frozen-only wraps (training adapter, speed LoRA extras) hold nothing to load
             ad = w.adapters[TRAINABLE]
             if isinstance(ad, LoKR):
-                stem = f"{self.desc.lora.file_prefix}{full}"
+                stem = self._stem(full, lokr=True)
                 if f"{stem}.lokr_w1" in sd:
                     ad.lokr_w1.copy_(sd[f"{stem}.lokr_w1"].to(ad.lokr_w1.dtype))
                     ad.lokr_w2.copy_(sd[f"{stem}.lokr_w2"].to(ad.lokr_w2.dtype))

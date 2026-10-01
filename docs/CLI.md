@@ -46,7 +46,7 @@ Every script supports `--help` for the full argument list. This document covers 
 
 ## Model files: where they come from, where they go
 
-Headless, there is no Preferences tab: **model locations are passed as flags on every command** (`--dit`, `--vae`, `--text_encoder`, for Krea 2 previews `--turbo_dit`, for MiniMax H3 `--audio_vae`, `--turbo_lora_path` and `--training_adapter_path`, for Qwen Image 2.1 `--speed_lora` and `--training_adapter`). The CLI does not read the GUI's `prefs.json` — put the paths in a shell script or Makefile once and forget about them. The files themselves are the same ones the GUI's Preferences tab links to:
+Headless, there is no Preferences tab: **model locations are passed as flags on every command** (`--dit`, `--vae`, `--text_encoder`, for MiniMax H3 `--audio_vae`, `--turbo_lora_path` and `--training_adapter_path`, for Krea 2 and Qwen Image 2.1 `--speed_lora`, and for Qwen `--training_adapter`). The CLI does not read the GUI's `prefs.json` — put the paths in a shell script or Makefile once and forget about them. The files themselves are the same ones the GUI's Preferences tab links to:
 
 **Klein 9B:**
 
@@ -65,9 +65,10 @@ Headless, there is no Preferences tab: **model locations are passed as flags on 
 | File | Download | Used for |
 |---|---|---|
 | RAW DiT | [krea2_raw_bf16.safetensors](https://huggingface.co/Comfy-Org/Krea-2/blob/main/diffusion_models/krea2_raw_bf16.safetensors) | training (`--dit`) |
-| fp8 Turbo DiT | [krea2_turbo_fp8_scaled.safetensors](https://huggingface.co/Comfy-Org/Krea-2/blob/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors) | 8-step previews (`--turbo_dit`) |
-| VAE `qwen_image_vae.safetensors` | [Krea-2 → vae](https://huggingface.co/Comfy-Org/Krea-2/blob/main/vae/qwen_image_vae.safetensors) | `--vae` |
-| Text encoder `qwen3vl_4b_bf16.safetensors` | [Krea-2 → text_encoders](https://huggingface.co/Comfy-Org/Krea-2/blob/main/text_encoders/qwen3vl_4b_bf16.safetensors) | `--text_encoder` |
+| Turbo LoRA | [krea2_turbo_lora_rank_64_bf16.safetensors](https://huggingface.co/Comfy-Org/Krea-2/blob/main/loras/krea2_turbo_lora_rank_64_bf16.safetensors) | 8-step previews (`--speed_lora`) |
+| VAE `qwen_image_vae.safetensors` | [Krea-2 → vae](https://huggingface.co/Comfy-Org/Krea-2/blob/main/vae/qwen_image_vae.safetensors) | `--vae` (cache step: `--model`) |
+| Text encoder `qwen3vl_4b_fp8_scaled.safetensors` | [Krea-2 → text_encoders](https://huggingface.co/Comfy-Org/Krea-2/blob/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors) | `--text_encoder` (cache step: `--model`); the bf16 file works too |
+| Turbo DiT (fp8) | [krea2_turbo_fp8_scaled.safetensors](https://huggingface.co/Comfy-Org/Krea-2/blob/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors) | GUI only: the Repair Studio, Explorer and Royale previews |
 
 **MiniMax H3:**
 
@@ -105,17 +106,17 @@ Klein 9B, Krea 2 and Qwen Image 2.1 share the dataset format and most of the wor
 | Adaptive LR (`--adaptive_lr`) | ✅ | ✅ | ✅ |
 | Context LoRA | ✅ | ✅ | ✅ |
 | Pause / resume | ✅ | ✅ | ✅ |
-| NF4 4-bit base (`--quant_4bit` / `--quantize_4bit`; Qwen `--precision nf4`) | ✅ | ✅ | ✅ |
+| NF4 4-bit base (Klein `--quant_4bit`; Krea 2 / Qwen `--precision nf4`) | ✅ | ✅ | ✅ |
 | Per-image loss watch (`--log_per_image_loss`) | ❌ | ✅ | ✅ |
 | Per-image LR (`--per_image_lr`) | ❌ | ✅ | ✅ |
 | Auto-recaption (`--auto_recaption`) | ❌ | ✅ | ✅ |
 | Look-outlier warm-up (`--warmup_look_outliers`) | ❌ | ✅ | ✅ |
 | LR scheduler (cosine, linear, warmup, ...) | ✅ | ✅ | ✅ |
-| Gradient accumulation | ✅ | ✅ | ❌ |
+| Gradient accumulation | ✅ | ✅ | ✅ |
 | Block targeting (`include_patterns`) / Model Area | ✅ Klein only | ❌ (no Krea 2 block map yet) | ❌ |
-| Timestep range (`--min/max_timestep`) | ✅ (0-1000) | ❌ (fixed `krea2_shift` recipe) | ✅ (0-1) |
+| Timestep range (`--min/max_timestep`) | ✅ (0-1000) | ✅ (0-1) | ✅ (0-1) |
 | Optimizer choice (`--optimizer_type`) | ✅ | ✅ | ✅ |
-| INT8 base (`--quant_int8`; Qwen `--precision int8`) | ❌ | ✅ | ✅ |
+| INT8 base (`--precision int8`) | ❌ | ✅ | ✅ |
 | torch.compile speedup | ✅ (`--compile` + flags) | ✅ (`--compile_blocks auto`, on by default when it pays) | ❌ |
 | Weight-only extraction (rank reduction, `--samples 0`) | ✅ | ✅ | GUI (Extract tab) |
 | Profiling | ✅ full activation profile | ✅ weight-only (`--krea2`) | GUI (Profiler tab) |
@@ -142,9 +143,9 @@ python src/fizgig/scripts/train.py         --dataset_config my_dataset.toml ... 
 **Krea 2:**
 
 ```bash
-python src/fizgig/scripts/krea2_cache_latents.py --dataset_config my_dataset.toml --vae /models/qwen_image_vae.safetensors
-python src/fizgig/scripts/krea2_cache_text.py    --dataset_config my_dataset.toml --text_encoder /models/qwen3vl_4b_bf16.safetensors
-python src/fizgig/scripts/krea2_train.py         --dataset_config my_dataset.toml ...   # full example below
+python src/fizgig/families/cache.py --family krea2 --stage latents --dataset_config my_dataset.toml --model /models/qwen_image_vae.safetensors
+python src/fizgig/families/cache.py --family krea2 --stage text    --dataset_config my_dataset.toml --model /models/qwen3vl_4b_fp8_scaled.safetensors
+python src/fizgig/families/train.py --family krea2 --dataset_config my_dataset.toml ...   # full example below
 ```
 
 **MiniMax H3:**
@@ -341,39 +342,39 @@ Both trainers write the same `<name>-NNNNNN-state/` layout, where `NNNNNN` is th
 
 ## Krea 2 training
 
-Krea 2 (12.9B) is the second model family and the home of the intelligent-trainer features: the per-image loss watch, auto-recaptioning, per-image adaptive LR, and look-outlier warm-up started here (Qwen Image 2.1 has them too; see the [family table](#whats-family-specific-at-a-glance)). You need the four Krea 2 files from the [download table](#model-files-where-they-come-from-where-they-go): the RAW DiT for training (fp8-quantized at load, ~14 GB resident), the fp8 Turbo for previews, the Qwen-Image VAE, and the Qwen3-VL-4B text encoder (which doubles as the vision model for auto-recaptioning).
+Krea 2 (12.9B) trains through Fizgig's driver system — the same cache script and trainer as Qwen Image 2.1 (`src/fizgig/families/`), selected with `--family krea2` — and is the home of the intelligent-trainer features: the per-image loss watch, auto-recaptioning, per-image adaptive LR and look-outlier warm-up started here. You need the files from the [download table](#model-files-where-they-come-from-where-they-go): the RAW DiT for training, the Qwen-Image VAE, the Qwen3-VL-4B text encoder (which doubles as the vision model for auto-recaptioning), and the Turbo LoRA for 8-step previews.
 
 ### Full example
 
-Everything on — the self-adapting run: rank 16:16, adaptive LR, all four intelligence toggles, and NF4 4-bit training so it fits low-VRAM cards:
+The GUI's default **Ultra Fast** preset as it builds it — rank 8, Adaptive LR 2e-4 to 4e-4, EMA 0.98, the loss watch with per-image LR, the base precision and block swap planned from free VRAM:
 
 ```bash
-python src/fizgig/scripts/krea2_train.py \
+python src/fizgig/families/train.py \
+  --family krea2 \
   --dataset_config my_dataset.toml \
-  --dit /models/Krea-2-raw.safetensors \
+  --dit /models/krea2_raw_bf16.safetensors \
   --output_dir ./output_loras/my_subject \
   --output_name my_subject \
-  --network_dim 16 --network_alpha 16 \
+  --network_dim 8 --network_alpha 8 \
   --learning_rate 1e-4 \
-  --max_train_epochs 40 \
+  --adaptive_lr --adaptive_lr_min 2e-4 --adaptive_lr_max 4e-4 \
+  --max_train_epochs 30 \
   --save_every_n_epochs 1 \
-  --quantize_4bit \
   --seed 42 \
-  --adaptive_lr --adaptive_lr_min 5e-5 --adaptive_lr_max 4e-4 \
-  --log_per_image_loss \
-  --per_image_lr \
-  --auto_recaption \
-  --warmup_look_outliers \
-  --trigger_word ohwx \
-  --turbo_dit /models/krea2-turbo-fp8.safetensors \
+  --optimizer_type adamw8bit \
+  --precision auto --blocks_to_swap -1 \
+  --ema_decay 0.98 \
+  --log_per_image_loss --per_image_lr \
+  --save_state --save_state_on_train_end --keep_last_n_states 2 \
   --vae /models/qwen_image_vae.safetensors \
-  --text_encoder /models/qwen3vl_4b_bf16.safetensors \
+  --text_encoder /models/qwen3vl_4b_fp8_scaled.safetensors \
+  --speed_lora /models/krea2_turbo_lora_rank_64_bf16.safetensors \
   --sample_prompts sample_prompts.txt \
-  --sample_every_n_epochs 1 \
-  --sample_width 1024 --sample_height 1024
+  --sample_every_n_epochs 1 --sample_at_first \
+  --sample_width 1024 --sample_height 1024 --sample_steps 8 --sample_seed 1234
 ```
 
-(`--quantize_4bit` forces block swap off, so no `--blocks_to_swap` here. On a 24 GB+ card you'd drop `--quantize_4bit` and use the default dynamic fp8 with `--blocks_to_swap` from the [VRAM table](#vram-guidance-block-swap). Drop `--warmup_look_outliers` unless you've run the GUI's Look Filter on the dataset — see below.)
+Add `--auto_recaption --captioner /models/qwen3vl_4b_fp8_scaled.safetensors --trigger_word ohwx` to let stuck images' captions be rewritten, and `--warmup_look_outliers` once you've run the GUI's Look Filter on the dataset (see below).
 
 **Classic-recipe variant** — if you'd rather drive the LR yourself than hand it to the adaptive watcher: a cosine decay with warmup, and an effective batch of 2 via accumulation. Swap these lines into the run above, dropping `--adaptive_lr*` (the watcher and a schedule are mutually exclusive — adaptive wins, and the schedule is ignored with a log line):
 
@@ -386,16 +387,17 @@ python src/fizgig/scripts/krea2_train.py \
 
 Pause/resume continues the cosine curve where it left off rather than restarting it, with or without accumulation.
 
-The Krea 2 parser is small enough to know in full: run `krea2_train.py --help`. The non-obvious flags:
+The non-obvious flags (`--help` lists them all):
 
 **Core**
 
-- `--network_type lokr` + `--lokr_factor N` — train **LoKR** (LyCORIS Kronecker) instead of standard LoRA (the GUI's Network Type dropdown, headless here). One dial: the factor sets the Kronecker split, and dim/alpha are ignored. Lower factor ≈ more capacity and bigger files (factor 8 ≈ 400 MB, 16 ≈ 100 MB); **8 is the validated default, and going above it isn't worth it** — measured head-to-head, higher factors keep LoKR's ~20% step-time cost over standard LoRA while losing the quality edge that justifies it. Want smaller/faster? Use standard LoRA at low rank instead. Output is standard LyCORIS format (`diffusion_model.*.lokr_*`) — loads directly in ComfyUI and back into every Fizgig tool, where Repair Studio and Explorer save it natively (lossless; SVD only on donor-blended blocks). In our validation runs LoKR at factor 8 hit the highest likeness we've ever measured, with noticeably more natural skin than standard LoRA on the same data.
-- `--no_fp8` — train the base in bf16 instead of dynamic fp8 (needs a lot more VRAM; fp8 is the validated default).
-- `--quantize_4bit` — NF4 4-bit frozen base, ~5.6 GB DiT residency, fits 10-12 GB cards (block swap forced off).
-- `--quant_int8 bf16` — INT8 W8A8 frozen base: ~18.6 GB, so it needs a 24 GB card, and in exchange it is both the fastest option measured (0.637 s/it vs NF4's 0.709 on an RTX 5090) and ~7× more accurate than NF4 in forward error, since 8 bits beat 4. `bf16` keeps gradients exact; `int8` quantises the backward too — faster again, lossier. The GUI picks this automatically when there is free VRAM for it; on the CLI it is opt-in. Mutually exclusive with `--quantize_4bit`. Block swap is force-zeroed under INT8 (the staged quantise makes the model fully resident anyway).
+- `--precision auto|int8|nf4|bf16` — the frozen base. `auto` reads free VRAM at launch and your training resolution and picks INT8 where it fits, else NF4, and logs the choice as an `Auto plan` line; bf16 is a manual choice. INT8 is the fastest and ~7× more accurate than NF4 in forward error; NF4 (~5.6 GB base) fits 10-12 GB cards. The CLI default is `bf16`, so pass `auto` to get the GUI's behaviour.
+- `--blocks_to_swap N` — blocks streamed between CPU and GPU; `-1` plans the fewest that fit. **Swapping is the slow path** (4.4× the time, 4× the CPU): Auto quantises first and only swaps when even NF4 will not fit. NF4 cannot swap.
+- `--network_type lokr` + `--lokr_factor N` — train **LoKR** (LyCORIS Kronecker) instead of standard LoRA (the GUI's Network Type dropdown, headless here). One dial: the factor sets the Kronecker split, and dim/alpha are ignored. Lower factor ≈ more capacity and bigger files (factor 8 ≈ 400 MB, 16 ≈ 100 MB); **8 is the validated default, and going above it isn't worth it** — measured head-to-head, higher factors keep LoKR's ~20% step-time cost over standard LoRA while losing the quality edge that justifies it. Want smaller/faster? Use standard LoRA at low rank instead. Output is standard LyCORIS format — loads directly in ComfyUI and back into every Fizgig tool. In our validation runs LoKR at factor 8 hit the highest likeness we've ever measured, with noticeably more natural skin than standard LoRA on the same data.
 - `--compile_blocks auto|on|outside|off` — torch.compile the transformer blocks (`outside` = the high-resolution boundary: checkpoint kept outside the compiled region, eager-level memory, chosen automatically by `auto`/`on` where inside-the-graph would not fit): roughly **2× faster steady-state steps** on the INT8 path after a one-off warm-up (~90 s + a pause on each new latent shape). `auto` (default) weighs the warm-up against the run length and only compiles when it pays. Needs triton (installs with requirements; `triton-windows` on Windows) and, on Windows, the MSVC C++ Build Tools — direct installer: https://aka.ms/vs/17/release/vs_BuildTools.exe ("Desktop development with C++" workload). Missing either → a console note and the run continues uncompiled.
-- `--blocks_to_swap` — see [VRAM guidance](#vram-guidance-block-swap). `--preview_blocks_to_swap` is the separate, forward-only swap for the preview Turbo. **Swapping is the slow path** (4.4× the time, 4× the CPU): quantise first, and only swap when even NF4 will not fit.
+- `--ema_decay 0.98` — weight averaging: checkpoints and previews come from a smoothed average of the weights. `0` (the CLI default) turns it off.
+- `--min_timestep` / `--max_timestep` — restrict training to a noise band, on a 0-1 scale.
+- `--speed_lora FILE` — the Turbo LoRA, attached for 8-step previews on the training model and absent from the saved LoRA; `--speed_lora_strength` defaults to 1.
 
 **The per-image loss watch** (any of these enables the watcher)
 
@@ -422,7 +424,9 @@ Persistent artifacts: exclusions are stored in `<image_directory>/fizgig_exclude
 
 Two warnings worth internalising before you reach for the dropdown. **Learning rates do not transfer between families:** Lion applies the *sign* of the update and wants roughly a tenth of an AdamW LR. Fizgig logs a warning when the LR looks wrong for the family, but it will not override you. And **saving optimizer memory buys you little here** — a LoRA's state is tens of MB against a 13–19 GB base, so the reason to change optimizer is update *behaviour*, not VRAM. If a run fails to construct the optimizer it falls back to plain AdamW and says so in the log; the choice is recorded in the output LoRA as `ss_optimizer`.
 
-**Not in the Krea 2 parser (by design):** timestep sampling (fixed `krea2_shift` recipe), block targeting (no Krea 2 block map yet), gradient checkpointing (always on). What's absent is deliberate, not missing.
+**Fine-tuning the base model** — `--finetune` trains the model's own weights a component at a time instead of a LoRA; see [FINETUNE.md](FINETUNE.md). **Sliders** work as on [Qwen Image 2.1](#qwen-image-21-training) (`--slider_pairs`, `--slider_prompts`).
+
+**Not offered (by design):** block targeting (no Krea 2 block map yet) and turning off gradient checkpointing (always on).
 
 ---
 
@@ -569,7 +573,7 @@ The other two presets change only a few flags. **Standard** is `--network_dim 16
 
 **Edit LoRAs** — add `control_directory = "/data/before"` under `[[datasets]]` in the TOML, beside `image_directory` (the after-images). Before-images match after-images by file name, one each (`photo.png` pairs with `photo.png`). The cache script then stores each before-image's latent and encodes the caption with the before-images, so run both cache stages again after changing the pairs or the resolution. `--sample_reference FILE` makes the previews edits of that photo. Everything else is as above.
 
-**Slider LoRAs** — from photo pairs: put the -1 photos in `control_directory` (same file names as the +1 photos in `image_directory`), run both cache stages with `--slider` (it caches the -1 latents and encodes the captions as plain text), then train with `--slider_pairs`. `--slider_diff_weight` (default 1) concentrates the loss where the two photos of a pair differ; 0 is the plain loss. From prompts: no dataset and no caching, just `--slider_prompts "BASE" "BASE +1 WORDS" "BASE -1 WORDS"` with `--text_encoder` and `--vae`; `--slider_guidance` (default 3, the GUI uses 2) is the push strength, `--slider_bank` (16) and `--slider_bank_res` (768) set the practice pictures. Sliders train a plain LoRA with Adaptive LR, EMA and the per-image watch off; previews render at -1 / 0 / +1.
+**Slider LoRAs** — from photo pairs: put the -1 photos in `control_directory` (same file names as the +1 photos in `image_directory`), run both cache stages with `--slider` (it caches the -1 latents and encodes the captions as plain text), then train with `--slider_pairs`. `--slider_diff_weight` (default 1) concentrates the loss where the two photos of a pair differ; 0 is the plain loss. From prompts: no dataset and no caching, just `--slider_prompts "BASE" "BASE +1 WORDS" "BASE -1 WORDS"` with `--text_encoder` and `--vae`; `--slider_guidance` (default 3; the GUI starts at 3 on Krea 2 and 2 on Qwen Image 2.1, values 2 to 9 tested on both) is the push strength, `--slider_bank` (16) and `--slider_bank_res` (768) set the practice pictures. Sliders train a plain LoRA with Adaptive LR, EMA and the per-image watch off; previews render at -1 / 0 / +1. `--train_blocks` (comma-separated block ids, e.g. `block_0,block_1,txt_lw_0`) limits the LoRA to those blocks; the GUI's Krea 2 **Ultra mode** sends blocks 0-7 and the four text-fusion blocks, so the slider holds up at much higher strengths.
 
 **Other** — `--context_lora_path FILE --context_lora_strength S` trains on top of an existing Qwen LoRA, frozen and active in training and previews. `--metadata_title/author/description/license/tags/trigger_phrase` are recorded in the saved LoRA. The saved file loads in ComfyUI's standard LoRA loader.
 
@@ -591,7 +595,7 @@ Recognized: `--w` width, `--h` height, `--d` seed, `--s` steps, `--g` guidance (
 
 Pass `--sample_dit <distilled>` to render previews on the Distilled model (4-step, fast) instead of the training Base; `--sample_blocks_to_swap` gives the sample model its own swap setting.
 
-**Krea 2** prompt files are plain prompts only; geometry and seed come from `--sample_width` / `--sample_height` / `--sample_seed`, and previews render on the fp8 Turbo (`--turbo_dit`; `--sample_steps`, default 8). `--sample_cfg_scale` above 1 enables CFG on the previews — pair it with `--sample_negative` for a real uncond (with CFG at 1.0 a negative is ignored, with a log note). `--sample_at_first` renders an epoch-0 preview (base + zero-init LoRA) before training, and works even with `--sample_every_n_epochs 0`. `--sample_ref_image` enables the Qwen3-VL vision path (generate driven by a reference picture; works even with an empty prompt file). `--metadata_title/author/description/license/tags` are recorded in the saved LoRA as `modelspec.*` keys.
+**Krea 2** and **Qwen Image 2.1** prompt files are plain prompts only; geometry and seed come from `--sample_width` / `--sample_height` / `--sample_seed`, and previews render on the training model, with the speed LoRA when `--speed_lora` is given (`--sample_steps`: 8 for Krea's Turbo LoRA, 6 for Qwen's). `--sample_cfg_scale` above 1 enables CFG on the previews — pair it with `--sample_negative` for a real uncond. `--sample_at_first` renders an epoch-0 preview (base + zero-init LoRA) before training. A reference picture: Krea 2's `--sample_image FILE` feeds it through the Qwen3-VL vision path (generate driven by a reference picture; works even with an empty prompt file), and Qwen's `--sample_reference FILE` makes every preview an edit of that photo. `--metadata_title/author/description/license/tags` are recorded in the saved LoRA as `modelspec.*` keys.
 
 **MiniMax H3** prompt files are plain prompts too. Previews are clips: `--sample_frames` sets the length on the model's 17n+5 frame grid (1 = a still, 56 ≈ 2.3 s, 124 = the trained minimum of ~5 s; off-grid values snap down), `--sample_audio` with `--audio_vae` decodes the clip's generated sound to a `.wav` beside the `.mp4`, and `--turbo_lora_path` with `--sample_steps 6` renders on the Turbo LoRA at `--turbo_lora_strength 0.75` (20 steps without it, matching ComfyUI's shipped template). `--sample_width/height` default to H3's native 768. The training adapter is switched off for previews; a Context LoRA stays on. Rendering a 56-frame clip every epoch costs more than the epoch's training on a small dataset — set `--sample_every_n_epochs` higher, or preview stills, when speed is the point.
 
@@ -617,9 +621,8 @@ Resume by pointing at the state directory:
 
 ```bash
 python src/fizgig/scripts/train.py       ... --resume ./output_loras/my_subject/my_subject-000012-state
-python src/fizgig/scripts/krea2_train.py ... --resume ./output_loras/my_subject/my_subject-000012-state
 python src/fizgig/scripts/minimax_train.py ... --resume ./output_loras/my_subject/my_subject_mmh3-000012-state
-python src/fizgig/families/train.py --family qwen_image21 ... --resume ./output_loras/my_subject/my_subject-000012-state
+python src/fizgig/families/train.py --family krea2 ... --resume ./output_loras/my_subject/my_subject-000012-state
 ```
 
 The epoch number is parsed from the dir name; optimizer, scheduler, RNG, dataloader state, adaptive-LR scalars, and (Krea 2, Qwen Image 2.1) the full per-image watch history are all restored. Pass the same flags as the original run plus `--resume`.
@@ -628,7 +631,7 @@ The epoch number is parsed from the dir name; optimizer, scheduler, RNG, dataloa
 
 ```bash
 # LoRA finished at 30 epochs; take it to 45
-python src/fizgig/scripts/krea2_train.py ... --max_train_epochs 45 \
+python src/fizgig/families/train.py --family krea2 ... --max_train_epochs 45 \
     --resume ./output_loras/my_subject/my_subject-000030-state
 ```
 
@@ -638,15 +641,15 @@ python src/fizgig/scripts/krea2_train.py ... --max_train_epochs 45 \
 
 `--blocks_to_swap` parks transformer blocks in CPU RAM and streams them over PCIe — slower per step, but fits big models on small cards. What the GUI auto-detects:
 
-| GPU VRAM | Klein `--blocks_to_swap` | Krea 2 `--blocks_to_swap` |
-|---|---|---|
-| 32 GB | 0 | 0 |
-| 24 GB | 0 | 12 |
-| 16 GB | 0 | 20 |
-| 10-14 GB | 12 | 26 |
-| < 10 GB | 16 | *(use `--quantize_4bit` instead)* |
+| GPU VRAM | Klein `--blocks_to_swap` |
+|---|---|
+| 16 GB+ | 0 |
+| 10-14 GB | 12 |
+| < 10 GB | 16 *(or `--quant_4bit`)* |
 
-Klein's fp8 Base is only ~9.6 GB resident, so 16 GB+ cards skip swap entirely (faster — no PCIe transfers). Krea 2's fp8 RAW is ~14 GB resident, hence the more aggressive ladder. `--quantize_4bit` (both trainers) is the below-10 GB escape hatch and forces swap off.
+Klein's fp8 Base is only ~9.6 GB resident, so 16 GB+ cards skip swap entirely (faster — no PCIe transfers). `--quant_4bit` is the below-10 GB escape hatch and forces swap off.
+
+Krea 2 and Qwen Image 2.1 plan for themselves: `--precision auto --blocks_to_swap -1` reads the free VRAM at launch and your training resolution, quantises before it swaps (INT8, then NF4), and logs the plan as an `Auto plan` line. Set either by hand to override.
 
 MiniMax H3 plans for itself: `--base_quant auto --blocks_to_swap auto` reads the free VRAM at launch and picks the base precision (int8 at ~21 GB resident on 32 GB cards, 4-bit at ~11 GB below that) and the swap together, and logs the plan as a `[vram]` line. Set either by hand to override.
 

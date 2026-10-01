@@ -102,7 +102,7 @@ Frame each pair the same way. Handheld shots from the same spot are fine; what m
 
 1. **What the picture is:** the start of the prompt. Each end's words are added after it with a space, so end it with a comma if you want one.
 2. **The +1 end adds** and **The -1 end adds:** e.g. "happy" and "sad".
-3. **Push strength:** how hard the two ends are pushed apart. 2 is a good start; higher gives a stronger dial but can change more than the one thing you asked for.
+3. **Push strength:** how hard the two ends are pushed apart. 2 is a good start (values 2 to 9 tested); higher gives a stronger dial but can change more than the one thing you asked for.
 
 Describe one person in the first line ("a close-up photo of a young woman with short dark hair,") and the dial changes her expression and keeps her the same. Keep it general ("a close-up photo of a person who is") and each practice picture shows a different person, so the dial learns only the change and works on anyone. Words like "sad" can bring more than a face (grey light, rain); if the whole scene changes, try a narrower word such as "unsmiling".
 

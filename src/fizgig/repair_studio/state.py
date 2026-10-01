@@ -75,14 +75,6 @@ class SliderState:
         return cls(blocks={bid: BlockState() for bid in all_block_ids()})
 
     @classmethod
-    def default_krea2(cls) -> "SliderState":
-        """Krea 2 layout: 28 main blocks + 4 txtfusion (see repair_studio.krea2_blocks).
-        Same BlockState model; only the block-id set differs. Preview res 512 (keeps the
-        Turbo Preview activation cache VRAM-feasible alongside the resident Turbo)."""
-        from fizgig.repair_studio.krea2_blocks import all_block_ids_krea2
-        return cls(blocks={bid: BlockState() for bid in all_block_ids_krea2()})
-
-    @classmethod
     def default_h3(cls) -> "SliderState":
         """MiniMax H3 layout: 50 main blocks + 2 token-refiner (see repair_studio.h3_blocks).
         Preview res 768 — H3's native canvas short edge; the engine renders a 22-frame clip

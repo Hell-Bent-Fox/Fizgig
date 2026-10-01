@@ -1,7 +1,7 @@
 """The standard layer's workbench engine: Repair Studio (and later the Explorer and Royale) for any described family.
 
 One engine over a family's driver (model code) and the family LoRA layer (adapters, block controls, bake). It speaks
-the same protocol as the old per-family engines (repair_studio.engine / krea2_engine / h3_engine), so the tabs drive
+the same protocol as the old per-family engines (repair_studio.engine / h3_engine), so the tabs drive
 it unchanged: ensure_pipeline, load_primary / load_donor / unload_donor, swap_primary_weights, apply_state,
 generate_preview, generate_baseline, request_cancel / clear_cancel, reset, plus the primary_* / donor_* attributes.
 
@@ -11,7 +11,8 @@ when a prompt changes, and the DiT parks on CPU while it runs whenever both woul
 DiT also parks for the VAE decode.
 
 A LoRA's load strength (state.primary_scale / donor_scale) scales the whole file and every block slider is relative
-to it; the bake folds the sliders in but never the load strength, so the saved file is used at that strength.
+to it. The bake folds the sliders in; a primary-only file leaves the load strength out (it is used at that strength),
+while a file with a donor in it bakes each LoRA at its own strength and is used at 1.0.
 """
 import gc
 import json
@@ -120,20 +121,32 @@ class WorkbenchEngine:
 
     # ---- models -------------------------------------------------------------------------------------
     def ensure_pipeline(self, dit_path, vae_path, text_encoder_path, speed_lora_path="", device="cuda",
-                        lowmem=None, precision="auto", blocks_to_swap=0, **_ignored):
+                        lowmem=None, precision="auto", blocks_to_swap=0, preview_sampling=None, **_ignored):
         """Load the DiT (resident) and the VAE once; the text encoder loads per new prompt. speed_lora_path: the
         family's speed LoRA file, attached unmerged and used for every preview ("" = default sampling).
-        precision: "auto" = bf16 with 20 GB+ free, else INT8 (when the family offers it); blocks_to_swap streams
-        blocks forward-only (previews never backprop)."""
+        precision: "auto" = bf16 when the model file fits the free VRAM with 6 GB to spare (Qwen 2.1's 14 GB: 20 GB
+        free), else INT8, else NF4 (whichever the family offers); blocks_to_swap streams blocks forward-only
+        (previews never backprop). preview_sampling: dit_path is the family's preview checkpoint (a distilled model,
+        description.preview_checkpoint) sampled this way, with no speed LoRA."""
         if self.pipeline is not None:
             return
+        self.checkpoint_sampling = preview_sampling
+        if preview_sampling is not None:
+            speed_lora_path = ""
         from fizgig.families.train import _small_card_previews
         self.device = device
         self.te_path = text_encoder_path
         self.lowmem = _small_card_previews() if lowmem is None else bool(lowmem)
         from fizgig.families import quant
         if precision == "auto":
-            precision = "int8" if ("int8" in self.desc.precisions and _free_vram_gb() < 20.0) else "bf16"
+            try:
+                need = os.path.getsize(dit_path) / 1e9 + 6.0
+            except OSError:
+                need = 20.0
+            free = _free_vram_gb()
+            precision = ("bf16" if free >= need or not {"int8", "nf4"} & set(self.desc.precisions) else
+                         "int8" if "int8" in self.desc.precisions and free >= need / 2 else
+                         "nf4" if "nf4" in self.desc.precisions else "int8")
         elif precision not in self.desc.precisions:
             precision = "bf16"
         self.dit, self.swapped = quant.load_base(self.driver, dit_path, device, precision, blocks_to_swap,
@@ -255,20 +268,75 @@ class WorkbenchEngine:
                 gc.collect()
                 torch.cuda.empty_cache()
 
-    def encode(self, prompts):
+    @property
+    def reference_kind(self):
+        """How a reference picture reaches this family's previews: "vision", "edit" or "" (the description's)."""
+        return self.desc.reference_kind
+
+    @staticmethod
+    def _state_reference(state):
+        """(path, megapixels) of the state's reference picture, or ("", 1.0) when it has none on disk."""
+        path = (getattr(state, "ref_image_path", "") or "").strip()
+        try:
+            mp = float(getattr(state, "ref_megapixels", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            mp = 1.0
+        return (path, mp) if path and os.path.isfile(path) else ("", 1.0)
+
+    @staticmethod
+    def _fit_reference(path, width, height):
+        """An edit reference as uint8 (H, W, 3), cropped and scaled to the preview's size."""
+        import numpy as np
+        from PIL import Image, ImageOps
+        with Image.open(path) as im:
+            return np.array(ImageOps.fit(im.convert("RGB"), (int(width), int(height)), Image.LANCZOS))
+
+    def _reference_latents(self, path, width, height):
+        """The edit reference's latents (CPU, batch dim), cached per picture and size."""
+        key = ("__ref_latents__", path, int(width), int(height))
+        if key not in self._prompt_cache:
+            if self.lowmem:
+                self._park_dit("cpu")
+                self.vae.to(self.device)
+            try:
+                z = self.driver.encode_images(self.vae, [self._fit_reference(path, width, height)])[0]
+            finally:
+                if self.lowmem:
+                    self.vae.to("cpu")
+                    self._park_dit(self.device)
+            self._prompt_cache[key] = z[None].cpu()
+        return self._prompt_cache[key]
+
+    def encode(self, prompts, ref="", ref_mp=1.0, size=(768, 768)):
         """Conditioning for each prompt (CPU), through the family's text encoder, loaded for the call and freed.
-        The DiT parks on CPU while the encoder runs when both would not fit."""
-        need = [p for p in prompts if (p,) not in self._prompt_cache]
+        With a reference picture (`ref`), the prompt sees it the family's way (reference_kind): through the
+        encoder's vision path at `ref_mp`, or as an edit of the picture at the preview `size`. The DiT parks on CPU
+        while the encoder runs when both would not fit."""
+        kind = self.reference_kind if ref else ""
+        tag = ((ref, round(float(ref_mp), 4)) if kind == "vision" else
+               (ref, int(size[0]), int(size[1])) if kind == "edit" else ())
+        need = [p for p in prompts if (p,) + tag not in self._prompt_cache]
         if need:
             te_gb = os.path.getsize(self.te_path) / 1024 ** 3 if os.path.exists(self.te_path) else 0.0
             park = self.lowmem or _free_vram_gb() < te_gb + 2.0
             if park:
                 self._park_dit("cpu")
             try:
-                te = self.driver.load_text_encoder(self.te_path, self.device)
+                te = (self.driver.load_reference_text_encoder(self.te_path, self.device) if kind == "edit"
+                      else self.driver.load_text_encoder(self.te_path, self.device))
                 try:
-                    for p, c in zip(need, self.driver.encode_text(te, list(need))):
-                        self._prompt_cache[(p,)] = c
+                    if kind == "vision":
+                        from PIL import Image
+                        with Image.open(ref) as im:
+                            conds = self.driver.encode_text_with_image(te, list(need), im.convert("RGB"),
+                                                                       megapixels=ref_mp)
+                    elif kind == "edit":
+                        pic = self._fit_reference(ref, *size)
+                        conds = self.driver.encode_text_with_references(te, list(need), [[pic]] * len(need))
+                    else:
+                        conds = self.driver.encode_text(te, list(need))
+                    for p, c in zip(need, conds):
+                        self._prompt_cache[(p,) + tag] = c
                 finally:
                     self.driver.unload_text_encoder(te)
                     del te
@@ -277,13 +345,16 @@ class WorkbenchEngine:
             finally:
                 if park:
                     self._park_dit(self.device)
-        return [self._prompt_cache[(p,)] for p in prompts]
+        return [self._prompt_cache[(p,) + tag] for p in prompts]
 
     def _cond_to_device(self, cond):
         return {k: (v.to(self.device) if torch.is_tensor(v) else v) for k, v in cond.items()}
 
     def sampling(self):
         """(steps, cfg, sigmas, options) previews use."""
+        if getattr(self, "checkpoint_sampling", None) is not None:
+            s = self.checkpoint_sampling
+            return s.steps, s.cfg, s.sigmas, s.options
         if self.speed is not None:
             s = self.speed.settings
             return s.steps, s.cfg, s.sigmas, s.options
@@ -291,8 +362,8 @@ class WorkbenchEngine:
         return s.steps, s.cfg, s.sigmas, s.options
 
     @torch.no_grad()
-    def render(self, cond, width, height, seed, *, steps=None, noise=None):
-        """One image from conditioning with the adapters as currently set."""
+    def render(self, cond, width, height, seed, *, steps=None, noise=None, refs=None):
+        """One image from conditioning with the adapters as currently set (refs: an edit's reference latents)."""
         d_steps, cfg, sigmas, options = self.sampling()
         steps = int(steps or d_steps)
 
@@ -307,7 +378,8 @@ class WorkbenchEngine:
                 raise RenderCancelled()
 
         lat = self.driver.generate(self.dit, self._cond_to_device(cond), width, height, steps=steps, seed=int(seed),
-                                   cfg=cfg, sigmas=sigmas, options=options, noise=noise, on_step=_step)
+                                   cfg=cfg, sigmas=sigmas, options=options, noise=noise, on_step=_step,
+                                   **({"refs": [r.to(self.device) for r in refs]} if refs else {}))
         if self.lowmem:
             self._park_dit("cpu")
             self.vae.to(self.device)
@@ -323,28 +395,38 @@ class WorkbenchEngine:
                          prev_latent=None, prev_latent_strength=1.0):
         """The tabs' render call (signature shared with the old engines; the Klein-only reference-latent and
         negative arguments are accepted and ignored). seed_b / travel_t: seed travel by noise slerp.
-        override_ctx: precomputed conditioning (prompt travel)."""
+        override_ctx: precomputed conditioning (prompt travel, text only as in the original Krea 2 engine).
+        The state's reference picture (ref_image_path, ref_megapixels) reaches the prompt the family's way."""
         self.apply_state(state)
         seed = state.seed if seed is None else seed
         width = int(width or state.preview_width)
         height = int(height or state.preview_height)
-        cond = override_ctx if override_ctx is not None else self.encode([prompt if prompt is not None
-                                                                          else state.prompt])[0]
+        ref, ref_mp = self._state_reference(state) if self.reference_kind else ("", 1.0)
+        refs = None
+        if override_ctx is not None:
+            cond = override_ctx
+        else:
+            cond = self.encode([prompt if prompt is not None else state.prompt], ref=ref, ref_mp=ref_mp,
+                               size=(width, height))[0]
+            if ref and self.reference_kind == "edit":
+                refs = [self._reference_latents(ref, width, height)]
         noise = None
         if seed_b is not None:
             noise = _slerp(float(travel_t or 0.0), self.driver.initial_noise(seed, width, height),
                            self.driver.initial_noise(seed_b, width, height))
-        return self.render(cond, width, height, seed, steps=steps, noise=noise)
+        return self.render(cond, width, height, seed, steps=steps, noise=noise, refs=refs)
 
     def generate_baseline(self, state):
         """The primary with every slider at 1.0 (at its load strength), donor off. Cached until the prompt, seed,
         size or load strength changes."""
         key = (self.primary_path, state.seed, state.prompt, state.preview_width, state.preview_height,
-               round(float(getattr(state, "primary_scale", 1.0)), 4))
+               round(float(getattr(state, "primary_scale", 1.0)), 4), self._state_reference(state))
         if self._baseline_key == key and self._baseline_img is not None:
             return self._baseline_img
         base = self.default_state(state.preview_width, state.preview_height)
         base.seed, base.prompt = state.seed, state.prompt
+        base.ref_image_path = getattr(state, "ref_image_path", "")
+        base.ref_megapixels = getattr(state, "ref_megapixels", 1.0)
         base.primary_scale = float(getattr(state, "primary_scale", 1.0))
         img = self.generate_preview(base)
         self._baseline_key, self._baseline_img = key, img
@@ -390,14 +472,21 @@ class WorkbenchEngine:
 
     # ---- bake ---------------------------------------------------------------------------------------
     def save_repaired(self, out_path, state, include_donor=True):
-        """Write the primary (and the donor's enabled blocks) as one LoRA in the family's format: block sliders
-        folded in, load strengths NOT (the file is used at them, as previewed). Returns the summary dict the
-        Repair Studio's save dialog reports."""
+        """Write the primary (and the donor's enabled blocks) as one LoRA in the family's format, block sliders
+        folded in. Primary only: the load strength is left out (the file is used at it, as previewed). With a donor
+        contributing, the two share one file, so each is baked at its own load strength and the file is used at
+        1.0. Returns the summary dict the Repair Studio's save dialog reports (use_at = the strength to load it at)."""
         from safetensors import safe_open
         from safetensors.torch import save_file
         use_donor = include_donor and self.net.has(DONOR)
+        blended = set()
+        if use_donor:
+            blended = {b for b, bs in state.blocks.items()
+                       if b in self.donor_block_ids and bs.donor_enabled and bs.donor_strength != 0}
         flat = state.copy()
-        flat.primary_scale = flat.donor_scale = 1.0
+        if not blended:
+            flat.primary_scale = flat.donor_scale = 1.0
+        use_at = 1.0 if blended else float(getattr(state, "primary_scale", 1.0))
         self.apply_state(flat)
         try:
             names = [PRIMARY] + ([DONOR] if use_donor else [])
@@ -415,11 +504,9 @@ class WorkbenchEngine:
             metadata["ss_network_dim"] = str(max(ranks.values()))
             metadata["ss_network_alpha"] = str(float(max(ranks.values())))
         metadata["ss_repair_studio_config"] = json.dumps(state.to_json(), separators=(",", ":"))
-        blended = set()
+        metadata["ss_repair_studio_use_at"] = f"{use_at:g}"
         if use_donor:
             metadata["ss_repair_studio_donor_path"] = os.path.basename(self.donor_path)
-            blended = {b for b, bs in state.blocks.items()
-                       if b in self.donor_block_ids and bs.donor_enabled and bs.donor_strength != 0}
             combined = {m: r for m, r in ranks.items() if self.driver.block_of(m) in blended}
             if combined:
                 metadata["ss_repair_studio_combined_ranks"] = json.dumps(dict(sorted(combined.items())),
@@ -433,7 +520,8 @@ class WorkbenchEngine:
         return {"dropped_blocks": dropped, "rescaled_blocks": rescaled, "blended_blocks": sorted(blended),
                 "keys_in": 3 * len(self.net._frozen[PRIMARY]["alpha_rank"]), "keys_out": len(sd),
                 "donor_path": self.donor_path if use_donor else None, "format_out": "standard",
-                "lycoris_converted": 0}
+                "lycoris_converted": 0, "use_at": use_at,
+                "strengths_baked": bool(blended)}
 
     # ---- teardown -----------------------------------------------------------------------------------
     def reset(self):

@@ -1,23 +1,24 @@
 # Full fine-tuning — "How do I…?"
 
-The extended companion to the README's fine-tuning section, for **Krea 2** and
-**MiniMax H3**. Everything here is measured or field-tested, not aspirational. If you're
+The extended companion to the README's fine-tuning section, for **Krea 2**, **Qwen Image 2.1**
+and **MiniMax H3**. Everything here is measured or field-tested, not aspirational. If you're
 new to fine-tuning and coming from LoRA training, read the first four answers in order —
 they're the ones that save you a wasted overnight run.
 
 > **One idea makes everything else here make sense: an "epoch" trains one slice of the
-> model.** The trainable window rotates each epoch, so it takes a full cycle — typically
-> **4 epochs** — for every part of the model to train once. Rule of thumb: **4 fine-tune
-> epochs ≈ 1 true epoch of the whole model.** That's why the epoch defaults look high,
-> and why saves land on cycle boundaries — each saved checkpoint is a whole, evenly
-> trained model.
+> model.** The trainable window rotates each epoch, so it takes a full cycle — a
+> **rotation**, typically **4 epochs** — for every part of the model to train once. Rule of
+> thumb: **one rotation ≈ 1 true epoch of the whole model.** That's why saves land on
+> rotation boundaries — each saved checkpoint is a whole, evenly trained model. Krea 2 and
+> Qwen count the run in rotations; MiniMax H3 counts it in epochs.
 
 ---
 
 ## How do I start a fine-tune?
 
-Tick **⚗ Fine-tune the BASE MODEL instead of training a LoRA** on the Training tab, leave
-**Window** on **Auto (by VRAM)**, and press Start. That's genuinely it — the planner
+On Krea 2 or Qwen Image 2.1, pick **Fine-tune the whole model** under **Kind of training** on
+the Training tab; on MiniMax H3, tick **⚗ Fine-tune the BASE MODEL instead of training a
+LoRA**. Then press Start. That's genuinely it — the planner
 measures the memory actually free on your card at launch, picks the plan that fits, and
 prints what it chose and why. Everything else on this page is about making the run *good*
 rather than making it *go*.
@@ -52,23 +53,22 @@ The whole recipe, using what the GUI already sets for you:
 That's it — the planner does the VRAM thinking, previews ride the checkpoint saves, and
 every save is a deployable model.
 
-## What's the quickest way to fine-tune Krea 2?
+## What's the quickest way to fine-tune Krea 2 or Qwen Image 2.1?
 
-Even shorter, because ticking the box sets everything that matters:
+Even shorter, because picking Fine-tune sets everything that matters:
 
-1. **Tick ⚗ Fine-tune the BASE MODEL.** The moment you tick it: learning rate → **1e-5**,
-   epochs → **40** (ten full 4-window cycles), Save every → **4** (one per cycle, so
-   checkpoints compare like-for-like), and **Adaptive LR switches off automatically**
-   (rotation boundaries read as instability to it). Any preset you loaded first is fine —
-   the fine-tune recipe overrides the settings that matter.
-2. **Set Max epochs to taste.** Nobody has a canonical number for a diffusion DiT
-   fine-tune yet — the 40-epoch default gives you ten comparable checkpoints to scrub
-   through; find where yours peaks rather than trusting a number.
-3. **Leave the learning rate at 1e-5.** Experimenting higher is allowed (up to 1e-4 — it
-   trains) but the best results are realistically found lower.
+1. **Pick Fine-tune the whole model** under Kind of training. The moment you pick it:
+   learning rate → **1e-5**, and **Adaptive LR switches off** (rotation boundaries read as
+   instability to it). The card starts at **Train for 10 rotations** with a **checkpoint +
+   preview every rotation**, and the line under it says how many windows your card gets.
+2. **Set the rotations to taste.** Nobody has a canonical number for a diffusion DiT
+   fine-tune yet — ten rotations give you ten comparable checkpoints to scrub through;
+   find where yours peaks rather than trusting a number.
+3. **Leave the learning rate at 1e-5.** Experimenting higher is allowed (on Krea 2 up to
+   1e-4 — it trains) but the best results are realistically found lower.
 4. **Optional but recommended for long runs: regularisation images** (a folder of real
-   photos of the broader class) with **LR ×** at the default 0.2.
-5. **Change the Output Directory** to a drive with room (each save is ~26 GB).
+   photos of the broader class) with **LR ×** at the default 0.2, on the same card.
+5. **Change the Output Directory** to a drive with room (each Krea 2 save is ~26 GB).
 6. **Make sure your captions use a trigger token** — an invented word, not a common one.
 7. Press Start. Leave everything else alone.
 
@@ -100,7 +100,7 @@ At the default training resolution:
 | **24 GB** | ✅ | ✅ | ✅ | ✅ up to **2.3 s** | up to **5.2 s** |
 | **32 GB** | ✅ | ✅ | ✅ | ✅ up to **3.8 s** | up to **5.2 s** |
 
-12 GB cards train **LoRAs**, not fine-tunes — 16 GB is the fine-tune floor. Every
+12 GB cards train **LoRAs**, not fine-tunes — 16 GB is the tested fine-tune floor. Every
 confirmed cell comes from a measured run; the expected column is conservative arithmetic
 from the measured constants, with the restriction tickbox on.
 
@@ -114,9 +114,9 @@ at half size while the trainable window runs bf16), and a **CPU-resident bf16 ma
 copy** that is the source of truth, so your saved checkpoint never passes through a
 quantiser regardless of what the card holds.
 
-On 32 GB and 24 GB the full-depth windows stay resident at full speed (~1.0 s/it). On
-16 GB the frozen blocks stream from system RAM — slower steps, same learning. The console
-always prints the plan.
+On 32 GB and 24 GB the full-depth windows stay resident at full speed (~0.85 s/step on
+Krea 2). On 16 GB the frozen blocks stream from system RAM — slower steps, same learning.
+The console always prints the plan.
 
 ## How long should I train?
 
@@ -195,9 +195,9 @@ warmup** all work under a fine-tune — their throttles ride the same per-step l
 the regularisation multiplier uses, and detection judges each image against the rest of
 the dataset at the same epoch, so the rotation's epoch-to-epoch shifts cancel out.
 
-Two exceptions, both deliberate: **(global) Adaptive LR** switches off when you tick
+Two exceptions, both deliberate: **(global) Adaptive LR** switches off when you pick
 Fine-tune — rotation boundaries look like instability to its plateau watcher — and
-**auto-recaption** is hidden under a fine-tune (its between-epoch caption re-encode isn't
+**auto-recaption** is off under a fine-tune (its between-epoch caption re-encode isn't
 fine-tune-safe yet). Caption edits queued from the Problem Images window during a
 fine-tune are held and apply in your next LoRA-mode run on that dataset.
 
@@ -256,12 +256,14 @@ sample the rehearsal of a checkpoint you can actually deploy. You need three thi
 **sample prompts** (Samples tab), a **sample cadence** (Sample every N epochs, or
 sample-at-first), and on Krea 2 the **Turbo LoRA** (the standalone Turbo checkpoint can't
 show fine-tuned weights, so previews render on the training DiT with the Turbo LoRA
-applied fresh). If prompts are set but previews stay off, the console now tells you
+applied fresh). On Krea 2 and Qwen, the card's **checkpoint + preview every K rotations**
+sets the cadence. If prompts are set but previews stay off, the console now tells you
 exactly which ingredient is missing.
 
 ## How do I share a fine-tune? It's 26 GB!
 
-Run **Checkpoint to LoRA** — it lives in your **Fizgig folder as `run_diff_to_lora.bat`**
+Run **Checkpoint to LoRA** — the **Checkpoint to LoRA…** button on the fine-tune card, or your
+**Fizgig folder's `run_diff_to_lora.bat`**
 (double-click it; it opens its own small window, separate from the main app — on Linux
 or a RunPod pod use `./run_diff_to_lora.sh`). It diffs
 your fine-tune against the
@@ -273,12 +275,10 @@ loads anywhere a normal LoRA does, ComfyUI included.
 
 ## NF4 or fp8 Base precision?
 
-**Leave it on the default (NF4).** It's what makes 16 GB fit at all, keeps 24 GB at full
-speed, and its quality is field-proven — your saved checkpoint is written in bf16 from
-the master copy either way, so the choice only affects the frozen context the trainable
-window learns against. Pick **fp8** only if you have the VRAM to spare and want the more
-accurate frozen context: on a 24 GB card it costs you depth-split, streamed windows at
-~3× the step time, and it doesn't fit 16 GB at all.
+On Krea 2 and Qwen the fine-tune base is always **NF4** — there's nothing to pick. It's what
+makes 16 GB fit at all and keeps 24 GB at full speed, and your saved checkpoint is written
+in bf16 from the master copy either way, so it only affects the frozen context the
+trainable window learns against.
 
 ## The trainer refused to start, or I hit CUDA out of memory — now what?
 
@@ -297,17 +297,17 @@ with the GPU nearly empty — close other apps and retry before suspecting VRAM.
 The same training bases you already have — nothing new to download:
 
 - **Krea 2** fine-tunes the **RAW bf16 model** (`krea2_raw_bf16.safetensors`, ~26 GB).
-  The fp8 Turbo is the preview model and can't be fine-tuned.
+  The fp8 Turbo is the workbench preview model and can't be fine-tuned.
+- **Qwen Image 2.1** fine-tunes its **bf16 DiT** (`qwen_image_2.1_bf16.safetensors`).
 - **MiniMax H3** fine-tunes the **pruned int8 checkpoint**
   (`minimax_h3_fl2va_pruned_int8_convrot.safetensors`, ~21 GB) — the same file ComfyUI
   runs. The ~66 GB bf16 file works for LoRA training only; the trainer refuses it for
   fine-tuning with a clear message.
 
-Plus system RAM for the bf16 master copy: ~24 GB on Krea 2, ~23–38 GB on H3. **H3's
-master spills to disk automatically when RAM is tight; Krea 2's does not** — so Krea 2
-fine-tuning realistically wants **48 GB+ of system RAM** for comfort (on less, expect
-paging, and remember the Windows quirk: running out of RAM surfaces as "CUDA error: out
-of memory" with the GPU nearly empty). The trainer warns at launch when RAM looks tight.
+Plus system RAM for the bf16 master copy: ~24 GB on Krea 2, ~23–38 GB on H3. The master
+**spills to disk automatically when RAM is tight** — a 32 GB box fine-tunes Krea 2, more
+slowly (and remember the Windows quirk: running out of RAM surfaces as "CUDA error: out of
+memory" with the GPU nearly empty). The trainer warns at launch when RAM looks tight.
 
 One more honesty note: **fine-tuning is untested on AMD/ROCm** — every measured tier is
 NVIDIA, and the NF4 default depends on bitsandbytes 4-bit, the least-travelled part of
