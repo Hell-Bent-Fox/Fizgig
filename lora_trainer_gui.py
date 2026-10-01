@@ -28719,6 +28719,10 @@ class LoRATrainerGUI:
             elif summary.get('lycoris_converted'):
                 msg += (f"\n\n{summary['lycoris_converted']} blended LyCORIS module(s) were "
                         f"converted to standard LoRA via SVD; everything else stayed native.")
+            if summary.get("use_at") is not None and (self._repair_is_h3() or self._repair_desc() is not None):
+                msg += (f"\n\nUse it at strength {summary['use_at']:g}"
+                        + (" - the primary's and donor's strengths are baked in, so it looks as previewed."
+                           if summary.get('strengths_baked') else " (the primary's strength), and it looks as previewed."))
             messagebox.showinfo("Repaired LoRA saved", msg)
         except UnsupportedLoRAFormat as ex:
             messagebox.showerror("Bake not supported for this LoRA format", str(ex))

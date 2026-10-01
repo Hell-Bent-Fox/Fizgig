@@ -11,7 +11,8 @@ when a prompt changes, and the DiT parks on CPU while it runs whenever both woul
 DiT also parks for the VAE decode.
 
 A LoRA's load strength (state.primary_scale / donor_scale) scales the whole file and every block slider is relative
-to it; the bake folds the sliders in but never the load strength, so the saved file is used at that strength.
+to it. The bake folds the sliders in; a primary-only file leaves the load strength out (it is used at that strength),
+while a file with a donor in it bakes each LoRA at its own strength and is used at 1.0.
 """
 import gc
 import json
@@ -471,14 +472,21 @@ class WorkbenchEngine:
 
     # ---- bake ---------------------------------------------------------------------------------------
     def save_repaired(self, out_path, state, include_donor=True):
-        """Write the primary (and the donor's enabled blocks) as one LoRA in the family's format: block sliders
-        folded in, load strengths NOT (the file is used at them, as previewed). Returns the summary dict the
-        Repair Studio's save dialog reports."""
+        """Write the primary (and the donor's enabled blocks) as one LoRA in the family's format, block sliders
+        folded in. Primary only: the load strength is left out (the file is used at it, as previewed). With a donor
+        contributing, the two share one file, so each is baked at its own load strength and the file is used at
+        1.0. Returns the summary dict the Repair Studio's save dialog reports (use_at = the strength to load it at)."""
         from safetensors import safe_open
         from safetensors.torch import save_file
         use_donor = include_donor and self.net.has(DONOR)
+        blended = set()
+        if use_donor:
+            blended = {b for b, bs in state.blocks.items()
+                       if b in self.donor_block_ids and bs.donor_enabled and bs.donor_strength != 0}
         flat = state.copy()
-        flat.primary_scale = flat.donor_scale = 1.0
+        if not blended:
+            flat.primary_scale = flat.donor_scale = 1.0
+        use_at = 1.0 if blended else float(getattr(state, "primary_scale", 1.0))
         self.apply_state(flat)
         try:
             names = [PRIMARY] + ([DONOR] if use_donor else [])
@@ -496,11 +504,9 @@ class WorkbenchEngine:
             metadata["ss_network_dim"] = str(max(ranks.values()))
             metadata["ss_network_alpha"] = str(float(max(ranks.values())))
         metadata["ss_repair_studio_config"] = json.dumps(state.to_json(), separators=(",", ":"))
-        blended = set()
+        metadata["ss_repair_studio_use_at"] = f"{use_at:g}"
         if use_donor:
             metadata["ss_repair_studio_donor_path"] = os.path.basename(self.donor_path)
-            blended = {b for b, bs in state.blocks.items()
-                       if b in self.donor_block_ids and bs.donor_enabled and bs.donor_strength != 0}
             combined = {m: r for m, r in ranks.items() if self.driver.block_of(m) in blended}
             if combined:
                 metadata["ss_repair_studio_combined_ranks"] = json.dumps(dict(sorted(combined.items())),
@@ -514,7 +520,8 @@ class WorkbenchEngine:
         return {"dropped_blocks": dropped, "rescaled_blocks": rescaled, "blended_blocks": sorted(blended),
                 "keys_in": 3 * len(self.net._frozen[PRIMARY]["alpha_rank"]), "keys_out": len(sd),
                 "donor_path": self.donor_path if use_donor else None, "format_out": "standard",
-                "lycoris_converted": 0}
+                "lycoris_converted": 0, "use_at": use_at,
+                "strengths_baked": bool(blended)}
 
     # ---- teardown -----------------------------------------------------------------------------------
     def reset(self):
