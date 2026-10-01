@@ -13146,7 +13146,11 @@ class LoRATrainerGUI:
                 pass
 
     def _on_distilled_samples_toggled(self):
-        """Grey out fields that Distilled overrides when the checkbox is ticked."""
+        """Grey out fields that Distilled overrides when the checkbox is ticked. Klein only: a described family
+        renders on its own training model, so a tick left over from Klein must not lock its Steps / CFG (and MiniMax
+        H3 sets its own fixed CFG)."""
+        if self._family_desc() is not None or self._is_minimax_arch():
+            return
         use_distilled = self.use_distilled_samples_var.get()
         state = "disabled" if use_distilled else "normal"
         grey = COLORS["text_muted"] if use_distilled else COLORS["text_primary"]
@@ -13423,6 +13427,7 @@ class LoRATrainerGUI:
             # ...then let MiniMax override the wording that is still Klein's. Runs AFTER, so the
             # Klein path above is untouched.
             self._apply_samples_minimax(bool(config.get("is_minimax")))
+            self._on_distilled_samples_toggled()        # Klein's Distilled tick greys its fields; a no-op elsewhere
 
             # Sample length (clip) row — MiniMax only: the other families' preview stacks are
             # image pipelines with no frames axis.
@@ -13490,6 +13495,11 @@ class LoRATrainerGUI:
                     _adv_outer.pack(fill=tk.X, padx=36, pady=(0, 16), before=_anchor)
                 else:
                     _adv_outer.pack(fill=tk.X, padx=36, pady=(0, 16))
+        _d = self._family_desc()
+        if _d is not None and not is_minimax:   # a described family's previews: its own CFG wording, not Klein's
+            _t = dict(_t, flow=f"Not used for {_d.display_name} previews",
+                      neg="Used when CFG Scale is above 1",
+                      cfg=_d.preview_cfg_note or "1 = no CFG. Above 1 the negative prompt applies.")
         for _attr, _key in (("_sample_flow_note", "flow"), ("_sample_neg_note", "neg"),
                             ("_sample_cfg_note", "cfg")):
             _w = getattr(self, _attr, None)

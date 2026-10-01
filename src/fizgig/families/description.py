@@ -169,6 +169,7 @@ class FamilyDescription:
     sampling: tuple = ()              # SamplingSettings without any speed LoRA (first = default)
     speed_loras: tuple = ()           # SpeedLoRA entries
     preview_steps: int = 20
+    preview_cfg_note: str = ""         # the Samples tab's line under CFG Scale ("" = a plain default line)
     preview_cfg: float = 1.0
     preview_width: int = 1024
     preview_height: int = 1024

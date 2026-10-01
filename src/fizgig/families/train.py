@@ -364,7 +364,10 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
                 if m is not None:
                     net.set_trainable_multiplier(m)
                 if speed is not None:
-                    lats.append(driver.generate(dit, cond, width, height, steps=steps, seed=seed + i, cfg=speed.cfg,
+                    # the speed LoRA's own CFG, unless the Samples tab asks for more (then the negative applies too)
+                    _cfg = cfg if cfg and cfg > 1.0 else speed.cfg
+                    lats.append(driver.generate(dit, cond, width, height, steps=steps, seed=seed + i, cfg=_cfg,
+                                                neg_cond=neg if _cfg > 1.0 else None,
                                                 sigmas=speed.sigmas, options=speed.options, **ref_kw))
                 else:
                     lats.append(driver.generate(dit, cond, width, height, steps=steps, seed=seed + i, cfg=cfg,
