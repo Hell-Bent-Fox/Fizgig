@@ -54,8 +54,7 @@ Qwen Image 2.1 is released under the Qwen Research License: non-commercial use o
 
 ## New in 6.8.1
 
-- **Qwen Image 2.1 previews: Steps and CFG can be edited again.** A "Use Distilled model for samples" tick left over from Klein locked the Samples tab's Steps, CFG and Negative boxes on other models. It now only affects Klein.
+- **Qwen Image 2.1 previews: Steps and CFG can be edited again.** A "Use Distilled model for samples" tick left over from Klein locked the Samples tab's Steps, CFG and Negative boxes on other models. It now only affects Klein. For Qwen, Turbo strength 0, 20 steps and CFG 3 work very well; a CFG above 1 slows down training samples and Repair Studio, LoRA the Explorer and LoRA Royale previews somewhat.
 - **CFG works with Turbo previews.** A CFG above 1 on the Samples tab now applies with the Turbo LoRA on too, along with the negative prompt.
 - **Qwen Image 2.1 in Repair Studio, LoRA the Explorer and LoRA Royale** now previews with the Samples tab's steps, CFG, negative prompt and Turbo strength, so one place sets how every Qwen preview looks.
-- **Recommended for Qwen Image 2.1:** Turbo strength 0, 20 steps and CFG 3 work very well. A CFG above 1 slows down training samples and Repair Studio, LoRA the Explorer and LoRA Royale previews somewhat.
 - **A fine-tune no longer picks up a Context LoRA.** On Krea 2 and Qwen, the Context LoRA row hides while Fine-tune is chosen, and a path left in the box is no longer sent to the trainer.
