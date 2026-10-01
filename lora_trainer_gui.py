@@ -17275,12 +17275,13 @@ class LoRATrainerGUI:
         return SliderState.default_h3() if fam == "minimax" else SliderState.default_klein9b()
 
     def _explorer_strength(self) -> float:
-        """The Strength box as a float, clamped to [0, 2] like Repair's (1.0 on anything
-        unparseable)."""
+        """The Strength box as a float, unlimited like Repair's (1.0 on anything unparseable or not
+        finite)."""
         try:
-            return max(0.0, min(2.0, float(str(self.explorer_strength_var.get()).strip() or 1.0)))
+            v = float(str(self.explorer_strength_var.get()).strip() or 1.0)
         except (TypeError, ValueError, AttributeError):
             return 1.0
+        return v if math.isfinite(v) else 1.0
 
     @staticmethod
     def _handoff_family(fam) -> str:
@@ -22808,13 +22809,14 @@ class LoRATrainerGUI:
         self._repair_scale_after = self.master.after(600, _apply)
 
     def _repair_scale(self, which):
-        """The primary / donor load strength as a float (1.0 on anything unparseable)."""
+        """The primary / donor load strength as a float, unlimited (slider LoRAs get tested far past 2;
+        1.0 on anything unparseable or not finite)."""
         var = getattr(self, f"repair_{which}_scale_var", None)
         try:
             v = float(str(var.get()).strip()) if var is not None else 1.0
         except (TypeError, ValueError):
             v = 1.0
-        return max(0.0, min(2.0, v))
+        return v if math.isfinite(v) else 1.0
 
     def _on_repair_scale_changed(self):
         """A load strength edited: the state carries it (slider × scale in the engine), the
