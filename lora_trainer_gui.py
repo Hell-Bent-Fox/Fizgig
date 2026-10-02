@@ -1443,6 +1443,10 @@ DEFAULT_PREFS = {
     # faster matmul. On by default — same VRAM as fp8 (8-bit either way), composes with block swap,
     # and only affects previews (never the saved LoRA). Toggle off in Preferences to use fp8.
     "inference_int8": "1",
+    # Faster training when there's room: driver families (Krea 2, Qwen Image 2.1) switch gradient checkpointing off
+    # when the card has the room (families/train.py measures and decides, and switches back on by itself if a step
+    # runs out). Off keeps checkpointing on, leaving VRAM free for other apps on the same GPU.
+    "train_ckpt_off": "1",
     # Which physical GPU to use, as a bare index ("0", "1", ...). Empty = leave the machine's
     # default alone, which is what every install before this had, so single-GPU users see no
     # change. Applied by exporting CUDA_VISIBLE_DEVICES (see _apply_cuda_device_pref): torch
@@ -7706,6 +7710,7 @@ class LoRATrainerGUI:
             enable_bucket=bool(self.dataset_enable_bucket_var.get()),
             no_upscale=bool(self.dataset_no_upscale_var.get()),
             cache_root=(self.prefs_vars["cache_dir"].get().strip() if "cache_dir" in self.prefs_vars else ""),
+            train_ckpt_off=self._get_train_ckpt_off(),
             blocks_swap=self.entries["BLOCKS_SWAP"].get(),
             enable_cache=bool(self.enable_cache_var.get()),
             resuming=bool(self.settings.get("RESUME_TRAINING", "").strip() or self._ft_resume_active()),
@@ -10016,6 +10021,13 @@ class LoRATrainerGUI:
             return _auto_detect_blocks_to_swap()
         m = _re.match(r'\d+', raw)
         return int(m.group()) if m else 0
+
+    def _get_train_ckpt_off(self) -> bool:
+        """Preferences 'Faster training when there's room' (driver families may switch checkpointing off)."""
+        try:
+            return str(self.prefs_vars["train_ckpt_off"].get()).strip() in ("1", "True", "true")
+        except Exception:
+            return True
 
     def _get_inference_int8(self) -> bool:
         """Resolve the Preferences 'INT8 fast inference' toggle (workbench + previews) to a bool."""
@@ -19915,6 +19927,18 @@ class LoRATrainerGUI:
         tk.Label(inf_card, text="On by default. Same VRAM as fp8, near-identical quality, previews only. Turn off to use fp8.",
                  font=(FONT_FAMILY, 9), fg=COLORS["text_muted"], bg=COLORS["bg_surface"]).grid(
             row=2, column=1, sticky=tk.W, padx=5, pady=(0, 4))
+        # Training: the driver families' gradient checkpointing switch (families/train.py decides per run)
+        ttk.Label(inf_card, text="Faster training when there's room:").grid(row=3, column=0, sticky=tk.W,
+                                                                           padx=(0, 10), pady=(10, 4))
+        ttk.Checkbutton(
+            inf_card, text="Let Krea 2 and Qwen Image 2.1 training switch gradient checkpointing off when it fits "
+                           "(recommended)",
+            variable=self.prefs_vars["train_ckpt_off"], onvalue="1", offvalue="0",
+        ).grid(row=3, column=1, sticky=tk.W, pady=(10, 4))
+        tk.Label(inf_card, text="About 25-45% faster steps, but training then uses most of the card's free memory. "
+                                "Untick to keep checkpointing on and leave VRAM free for other apps on the same GPU.",
+                 font=(FONT_FAMILY, 9), fg=COLORS["text_muted"], bg=COLORS["bg_surface"], wraplength=720,
+                 justify=tk.LEFT).grid(row=4, column=1, sticky=tk.W, padx=5, pady=(0, 4))
 
         # Card 3: Output Directories
         out_card = self._start_section_card(
