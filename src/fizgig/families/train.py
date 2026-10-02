@@ -344,19 +344,24 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
     ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     device = next(iter(dit.parameters())).device
     _preview_vram("preview start", reset_peak=True)
-    net.set_enabled(ADAPTER, False)
-    if speed is not None:
-        net.move_adapter(SPEED, device)
-        net.set_enabled(SPEED, True)
-    if ema is not None:
-        ema.swap_in()
-    was_training = dit.training
-    dit.eval()
-    if swapped:
-        driver.block_swap_mode(dit, inference=True)
     paths = []
-    ref_kw = {"refs": [r.to(device) for r in refs]} if refs else {}
+    was_training = dit.training
+    done = set()           # what this preview has changed, so the finally undoes exactly that, wherever it failed
     try:
+        net.set_enabled(ADAPTER, False)
+        done.add("adapter")
+        if speed is not None:
+            done.add("speed")              # before the move: a move that runs out of memory still gets put back
+            net.move_adapter(SPEED, device)
+            net.set_enabled(SPEED, True)
+        if ema is not None:
+            ema.swap_in()
+            done.add("ema")
+        dit.eval()
+        if swapped:
+            done.add("swap")
+            driver.block_swap_mode(dit, inference=True)
+        ref_kw = {"refs": [r.to(device) for r in refs]} if refs else {}
         lats = []
         mults = SLIDER_PREVIEW_MULTIPLIERS if slider else (None,)
         for i, cond in enumerate(encoded):
@@ -390,14 +395,15 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
         if lowmem and not swapped:
             quant.move(dit, device)
             _preview_vram("after decode, DiT restored")
-        if swapped:
+        if "swap" in done:
             driver.block_swap_mode(dit, inference=False)
-        if ema is not None:
+        if "ema" in done:
             ema.swap_out()
-        if speed is not None:
+        if "speed" in done:
             net.set_enabled(SPEED, False)
             net.move_adapter(SPEED, "cpu")
-        net.set_enabled(ADAPTER, True)
+        if "adapter" in done:
+            net.set_enabled(ADAPTER, True)
         dit.train(was_training)
         torch.cuda.empty_cache()
         _preview_vram("after preview cleanup")
