@@ -298,12 +298,36 @@ def _bar(x, color):
     return f'<div class="bar"><i style="width:{w:.0f}%;background:{color}"></i></div>'
 
 
-def _metric_rows(change, like, bleed):
-    rows = [f'<span class="cc">picture {_pct(change)}</span>' + _bar(change, "#4ea8ff")]
-    if like is not None:
-        rows.append(f'<span class="lc">likeness {_pct(like)}</span>' + _bar(like, "#2ec4b6"))
-    if bleed is not None:
-        rows.append(f'<span class="bc">bleed {_pct(bleed)}</span>' + _bar(bleed, "#ff6b8b"))
+NOISE = 0.1          # shares this close to zero are within seed-to-seed noise
+
+
+def _metric_rows(change, like, bleed, mode):
+    """Each measurement as a plain sentence. mode "alone": what the group gives by itself; mode "lost": what
+    happens to the whole LoRA when the group is switched off."""
+    def line(cls, color, text, x):
+        return f'<span class="{cls}">{text}</span>' + (_bar(x, color) if x is not None and x >= NOISE else "")
+
+    def pc(x):
+        return f"{100 * abs(x):.0f}%"
+    rows = []
+    if mode == "alone":
+        if change is not None:
+            rows.append(line("cc", "#4ea8ff", f"Changes the picture by {pc(change)}", change))
+        if like is not None:
+            rows.append(line("lc", "#2ec4b6", f"Gives {pc(like)} of the likeness" if like >= NOISE
+                             else "Gives almost no likeness", like))
+        if bleed is not None:
+            rows.append(line("bc", "#ff6b8b", f"Gives {pc(bleed)} of the bleed" if bleed >= NOISE
+                             else "Gives almost no bleed", bleed))
+    else:
+        if change is not None:
+            rows.append(line("cc", "#4ea8ff", f"Picture changes by {pc(change)}", change))
+        if like is not None:
+            rows.append(line("lc", "#2ec4b6", f"Likeness drops by {pc(like)}" if like >= NOISE else
+                             f"Likeness rises by {pc(like)}" if like <= -NOISE else "Likeness about the same", like))
+        if bleed is not None:
+            rows.append(line("bc", "#ff6b8b", f"Bleed drops by {pc(bleed)}" if bleed >= NOISE else
+                             f"Bleed rises by {pc(bleed)}" if bleed <= -NOISE else "Bleed about the same", bleed))
     return f'<div class="bars">{"".join(rows)}</div>'
 
 
@@ -381,21 +405,28 @@ def write_report(desc, lora_path, stats, abl, output_html, labels):
             tag, text = vd[w]
             cells.append(f'<div class="cell tag-{tag}">{_img(th["trigger"].get("keep:" + w))}'
                          f'<b>Only {_html.escape(l)}</b>'
-                         + _metric_rows(trig[w]["change"], trig[w]["score"], cls.get(w, {}).get("score"))
+                         + _metric_rows(trig[w]["change"], trig[w]["score"], cls.get(w, {}).get("score"), "alone")
                          + f'<div class="note" style="margin-top:6px">{_html.escape(text)}</div></div>')
-        parts.append('<div class="card"><h2>Each group of blocks on its own</h2><p class="lead">The LoRA with only '
-                     "this group switched on: how much of the whole LoRA's effect the group makes by itself. This is "
-                     "where likeness and bleed come from.</p>"
+        parts.append('<div class="card"><h2>Each group of blocks on its own</h2><p class="lead">Each picture is '
+                     "the LoRA with <b>only this group switched on</b>. The percentages are shares of what the whole "
+                     "LoRA does: <i>Gives 43% of the likeness</i> means these blocks alone get the face 43% of the way "
+                     "to the whole LoRA's likeness; <i>Gives 31% of the bleed</i> means they alone make a prompt "
+                     "without the trigger 31% as like your subject as the whole LoRA does. This section shows where "
+                     "likeness and bleed come from.</p>"
                      f'<div class="grid">{"".join(head + cells)}</div></div>')
         cells = []
         for w, l, bs in abl["windows"]:
             d = lt.get("drop:" + w, {})
             cells.append(f'<div class="cell">{_img(th["trigger"].get("drop:" + w))}<b>Without {_html.escape(l)}</b>'
-                         + _metric_rows(d.get("change"), d.get("score"), lc.get("drop:" + w, {}).get("score"))
+                         + _metric_rows(d.get("change"), d.get("score"), lc.get("drop:" + w, {}).get("score"),
+                                        "lost")
                          + "</div>")
-        parts.append('<div class="card"><h2>Each group left out</h2><p class="lead">The whole LoRA minus this group: '
-                     "how much is lost that the other blocks cannot make up. Small numbers mean the rest covers for "
-                     f'it.</p><div class="grid">{"".join(cells)}</div></div>')
+        parts.append('<div class="card"><h2>Each group left out</h2><p class="lead">Each picture is the whole LoRA '
+                     "with <b>this group switched off</b> and everything else on, compared with the whole LoRA. "
+                     "<i>Likeness drops by 19%</i> means the face loses 19% of what the LoRA added; <i>Bleed drops "
+                     "by 24%</i> means a prompt without the trigger looks 24% less like your subject (the good "
+                     "direction); <i>about the same</i> means the other blocks make up for this group.</p>"
+                     f'<div class="grid">{"".join(cells)}</div></div>')
         offs = [c for c, _ in abl["conds"] if c.startswith("off:")]
         if offs:
             cells = []
@@ -403,25 +434,28 @@ def write_report(desc, lora_path, stats, abl, output_html, labels):
                 b = c[4:]
                 d = lt.get(c, {})
                 cells.append(f'<div class="cell">{_img(th["trigger"].get(c))}<b>Without {_html.escape(lab(b))}</b>'
-                             + _metric_rows(d.get("change"), d.get("score"), lc.get(c, {}).get("score")) + "</div>")
-            parts.append('<div class="card"><h2>Each block left out</h2><p class="lead">The finest view: one block '
-                         "at a time. Likeness rarely shows up here, because the neighbouring blocks cover for any "
-                         f'single one.</p><div class="grid">{"".join(cells)}</div></div>')
+                             + _metric_rows(d.get("change"), d.get("score"), lc.get(c, {}).get("score"), "lost")
+                             + "</div>")
+            parts.append('<div class="card"><h2>Each block left out</h2><p class="lead">As above, one block at a '
+                         "time: the whole LoRA with just this block switched off. Likeness rarely moves here, because "
+                         f'the neighbouring blocks make up for any single one.</p><div class="grid">{"".join(cells)}'
+                         "</div></div>")
         if has_cls:
             cc = [f'<div class="cell">{_img(th["class"]["none"])}<b>Base model</b></div>',
                   f'<div class="cell">{_img(th["class"]["full"])}<b>With the LoRA</b></div>']
             top = sorted((w for w, _, _ in abl["windows"]), key=lambda w: -(cls.get(w, {}).get("score") or 0))[:4]
             wl = {w: l for w, l, _ in abl["windows"]}
             cc += [f'<div class="cell">{_img(th["class"].get("keep:" + w))}<b>Only {_html.escape(wl[w])}</b>'
-                   f'{_metric_rows(cls[w]["change"], None, cls[w]["score"])}</div>' for w in top]
+                   f'{_metric_rows(None, None, cls[w]["score"], "alone")}</div>' for w in top]
             parts.append(f'<div class="card"><h2>Bleed check: “{_html.escape(abl["class_prompt"])}”</h2>'
-                         '<p class="lead">This prompt has no trigger, so with the LoRA it should look like the base '
-                         "model. Any drift toward your subject is bleed. Shown: the groups that cause the most of "
-                         f'it on their own.</p><div class="grid">{"".join(cc)}</div></div>')
+                         '<p class="lead">This prompt has no trigger word, so with the LoRA loaded it should still '
+                         "look like the base model's picture. Any drift toward your subject is bleed. After the base "
+                         "model and the whole LoRA come the groups that cause the most bleed on their own (only that "
+                         f'group switched on).</p><div class="grid">{"".join(cc)}</div></div>')
         parts.append(f'<div class="note" style="margin:-6px 0 18px 4px">Prompt: {_html.escape(abl["prompt"])} · '
-                     f'{len(abl["seeds"])} seed(s) · {abl["size"][0]}×{abl["size"][1]}. Likeness and bleed: face '
-                     "recognition (ArcFace) against your subject photos, as a share of what the whole LoRA adds. "
-                     "Groups interact, so the shares don't add up to 100%; differences under about 10% are within "
+                     f'{len(abl["seeds"])} seed(s) · {abl["size"][0]}×{abl["size"][1]}. Likeness and bleed are measured by '
+                     "face recognition (ArcFace) against your subject photos. Groups overlap in what they do, so "
+                     "the percentages don't add up to 100%; anything under 10% either way is within "
                      "seed-to-seed noise.</div>")
 
     # rank card

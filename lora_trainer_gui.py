@@ -21138,14 +21138,17 @@ class LoRATrainerGUI:
                     if gb is not None:
                         lines.append(f"Bleed into the plain prompt: "
                                      f"{'+%.0f points' % (100 * gb) if gb > 0.03 else 'none measurable'}.\n")
-                    lines.append("\nEach group of blocks on its own:\n")
+                    lines.append("\nEach group of blocks on its own (only that group switched on), as a share "
+                                 "of what the whole LoRA does:\n")
                     cls = abl["alone"].get("class", {})
                     for w, l, _bs in abl["windows"]:
                         a = alone[w]
-                        extra = (f", likeness {100 * a['score']:.0f}%" if a.get("score") is not None else "") + \
-                                (f", bleed {100 * cls[w]['score']:.0f}%" if cls.get(w, {}).get("score") is not None
-                                 else "")
-                        lines.append(f"  {l:<26} picture {100 * a['change']:.0f}%{extra} - {vd[w][1]}\n")
+                        parts = [f"changes the picture by {100 * a['change']:.0f}%"]
+                        if a.get("score") is not None:
+                            parts.append(f"gives {100 * max(a['score'], 0):.0f}% of the likeness")
+                        if cls.get(w, {}).get("score") is not None:
+                            parts.append(f"gives {100 * max(cls[w]['score'], 0):.0f}% of the bleed")
+                        lines.append(f"  {l}: {', '.join(parts)}. {vd[w][1]}.\n")
                     lines.append("\nOpen Report for every render and what to do with it.\n")
 
                 def _done():
