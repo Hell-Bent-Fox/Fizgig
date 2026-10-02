@@ -121,6 +121,15 @@ class DiskMaster:
         import shutil
         self.src, self.dir, self._loc = src_path, scratch_dir, dict(loc)
         self._keys = list(self._loc)
+        # Every run builds its master from the model file. A scratch left here is a crashed run's partly trained
+        # weights (a finished run deletes it once its checkpoint is written, and continuing starts from a checkpoint),
+        # so a new run clears it rather than training on top of it.
+        if os.path.isdir(scratch_dir) and os.listdir(scratch_dir):
+            import logging
+            logging.getLogger(__name__).warning(f"[finetune] clearing an earlier run's on-disk master at {scratch_dir} "
+                                                f"(a run that stopped before its checkpoint) - this run starts from "
+                                                f"{os.path.basename(src_path)}")
+            shutil.rmtree(scratch_dir, ignore_errors=True)
         os.makedirs(scratch_dir, exist_ok=True)
         self._f = MemoryEfficientSafeOpen(src_path)
         self._shape = {}
@@ -137,14 +146,6 @@ class DiskMaster:
                                f"system memory can hold it")
         self._manifest = os.path.join(scratch_dir, "manifest.json")
         self._trained = {}
-        if os.path.exists(self._manifest):
-            try:
-                with open(self._manifest, encoding="utf-8") as f:
-                    m = json.load(f)
-                if m.get("source") == os.path.basename(src_path):
-                    self._trained = m.get("trained", {})
-            except Exception:
-                self._trained = {}
 
     def keys(self):
         return list(self._keys)
