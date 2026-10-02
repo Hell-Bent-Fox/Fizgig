@@ -6,10 +6,11 @@ deliberately absent: the GUI's generic hooks return None for them, so every exis
 from typing import Optional
 
 from fizgig.families.description import FamilyDescription
+from fizgig.families.klein import KLEIN
 from fizgig.families.krea2 import KREA2
 from fizgig.families.qwen_image import QWEN_IMAGE_21
 
-FAMILIES = {d.key: d for d in (QWEN_IMAGE_21, KREA2)}
+FAMILIES = {d.key: d for d in (QWEN_IMAGE_21, KREA2, KLEIN)}
 
 for _d in FAMILIES.values():
     _problems = _d.validate()

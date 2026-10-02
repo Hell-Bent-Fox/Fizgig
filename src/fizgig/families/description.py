@@ -103,6 +103,8 @@ class FamilyDescription:
     model_files: tuple = ()
     text_encoder_label: str = ""
     vae_label: str = ""
+    # an old family already in the Preferences tab whose rows these model files are ("klein"): no section of its own
+    shares_prefs_with: str = ""
     # a tip under the family's Preferences section (e.g. filling the paths by hand from a ComfyUI install)
     prefs_note: str = ""
 

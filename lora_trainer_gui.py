@@ -19805,7 +19805,8 @@ class LoRATrainerGUI:
 
         # Families added through the standard layer: one section each, generated from the description.
         for _desc in DESCRIBED_FAMILIES.values():
-            self._generic_prefs_section(outer, _desc)
+            if not _desc.shares_prefs_with:     # e.g. Klein (driver) reads the Klein rows above
+                self._generic_prefs_section(outer, _desc)
 
         # Card 1b: which GPU. Only when the machine actually has more than one - a chooser with a
         # single entry is noise, and the whole feature is a no-op there.
