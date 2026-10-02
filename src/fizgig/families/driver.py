@@ -190,11 +190,42 @@ class FamilyDriver:
         dit.offloader = streamer
         dit.blocks_to_swap = 1
 
+    def compile_targets(self, dit):
+        """The ModuleList of transformer blocks torch.compile replaces in place (descriptions with compiles=True).
+        The DiT's forward must call a block that has `_handles_checkpointing` directly, without its own checkpoint."""
+        raise NotImplementedError
+
     def compile_blocks(self, dit, boundary: str = "inside", blocks_to_swap: int = 0) -> None:
         """torch.compile the transformer blocks, in place, after every adapter has patched the forwards. `boundary`
-        places the gradient checkpoint inside or outside the compiled region. Only for descriptions with
-        compiles=True; a driver refuses (logs, runs eager) what it cannot compile."""
-        raise NotImplementedError
+        places the gradient checkpoint inside or outside the compiled region. Refuses (logs, runs eager) what it
+        cannot compile: block swap, no triton, no host C compiler."""
+        from fizgig.families.compile import compile_blocks
+        compile_blocks(dit, self.compile_targets(dit), blocks_to_swap, boundary=boundary,
+                       fullgraph=self.description.compile_fullgraph)
+
+    def compile_plan(self, mode: str, total_steps: int, precision: str, blocks_to_swap: int,
+                     mp: float = 0.25) -> tuple:
+        """(False | "inside" | "outside", why) for Compile Blocks `mode` ("auto" / "on" / "outside"). On always
+        compiles, at the description's boundary; Auto compiles once the run is longer than the description's
+        measured payback for this base precision, and never where the machine cannot (compile_blocker)."""
+        d = self.description
+        if mode == "outside":
+            return "outside", ""
+        if mode != "auto":
+            return d.compile_boundary, ""
+        from fizgig.utils.capabilities import compile_blocker
+        blocked = compile_blocker(blocks_to_swap)
+        if blocked:
+            return False, blocked
+        pay = (d.compile_payback_steps or {}).get(precision)
+        if not pay:
+            return False, (f"not measured for the {precision.upper()} base on {d.display_name}; Compile Blocks On "
+                           "still compiles")
+        if total_steps < pay:
+            return False, (f"{total_steps} steps on the {precision.upper()} path — compile pays back after ~{pay}, "
+                           "so this run is quicker uncompiled")
+        return d.compile_boundary, (f"{total_steps} steps on the {precision.upper()} path — compile pays back within "
+                                    f"~{pay} steps and this run is longer")
 
     def quant_target_names(self, dit) -> list:
         """The Linears an INT8 / NF4 base quantises (families/quant.py). Default: the LoRA targets. A family whose

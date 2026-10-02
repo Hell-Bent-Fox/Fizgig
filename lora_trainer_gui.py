@@ -5806,16 +5806,7 @@ class LoRATrainerGUI:
             values=["Auto", "On", "Off"])
         self.compile_blocks_check.grid(row=10, column=1, sticky=tk.W, padx=5, pady=4)
         self._compile_blocks_hint = tk.Label(memory_content,
-                 text="Auto (recommended) turns torch.compile on only when this run is long enough to repay it. "
-                      "It fuses the per-matmul quantise/dequantise work that bounds the INT8 and NF4 paths — "
-                      "2.0× per step on INT8 (0.59 → 0.29 s/step, matching OneTrainer) and 1.28× on "
-                      "NF4 (0.71 → 0.56) — but costs a ~90 s compile pause first, so a short run is SLOWER "
-                      "overall. Break-even is around 600 steps on INT8, 1200 on NF4. NF4 + compile still fits a 16 GB "
-                      "card (verified under a 13.5 GB cap). INT8 + compile fits from ~22 GB free: at high resolution "
-                      "the checkpoint automatically moves outside the compiled region, which keeps memory at eager "
-                      "levels (~18 GB at 1024px, measured ~27% faster than uncompiled). Requires Triton and, on "
-                      "Windows, a C++ compiler (VS Build Tools) — both located automatically. Never used with "
-                      "Blocks Swap, since swapping moves weights and compiled graphs assume they stay put.",
+                 text="",               # the open family's description (compile_hint) fills it
                  font=HINT_FONT, fg=COLORS["text_explain"], bg=COLORS["bg_surface"],
                  wraplength=600, justify=tk.LEFT)
         self._compile_blocks_hint.grid(row=11, column=1, sticky=tk.W, padx=5, pady=(0, 4))
@@ -9040,9 +9031,11 @@ class LoRATrainerGUI:
         # then have to reject.
         self._refresh_optimizer_choices(native)
 
-        # torch.compile: standard-layer families whose driver compiles (Krea 2)
+        # torch.compile: standard-layer families whose driver compiles (Krea 2, Qwen Image 2.1)
         for w in (self._compile_blocks_label, self.compile_blocks_check, self._compile_blocks_hint):
             self._set_widget_visible(w, bool(desc is not None and desc.compiles))
+        if desc is not None and desc.compiles:
+            self._compile_blocks_hint.configure(text=desc.compile_hint)
         # The per-image loss watch runs for standard-layer families (families/loss_watch.py); auto-recaption only where
         # the family's text encoder can caption images.
         for w in (self._krea2_losswatch_frame, self._krea2_perimglr_cb, self._krea2_warmuplook_cb,

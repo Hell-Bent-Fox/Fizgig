@@ -719,24 +719,17 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     do_compile = False
     cb = str(compile_blocks or "off").lower()
     if desc.compiles and cb != "off":
-        from fizgig.utils.capabilities import compile_boundary, should_compile
-        q4, q8 = precision == "nf4", ("int8" if precision == "int8" else "")
         try:
             mp_max = max(w * h / 1e6 for ds in group.datasets for (w, h) in ds.batch_manager.bucket_resos)
         except Exception:
             mp_max = 0.25
+        do_compile, why = driver.compile_plan(cb, group.num_train_items * max_train_epochs, precision,
+                                              max(0, blocks_to_swap) if precision != "nf4" else 0, mp=mp_max)
         if cb == "auto":
-            do_compile, why = should_compile(group.num_train_items * max_train_epochs, q4, q8,
-                                             max(0, blocks_to_swap) if precision != "nf4" else 0, mp=mp_max)
             logger.info("[compile] auto: %s - %s", "ENABLED (checkpoint outside)" if do_compile == "outside"
                         else ("ENABLED" if do_compile else "off"), why)
-        elif cb == "outside":
-            do_compile = "outside"
-        else:
-            do_compile = compile_boundary(q4, q8, mp=mp_max)
-            if do_compile == "outside":
-                logger.info("[compile] on: inside-the-graph won't fit at this token load - compiling with the "
-                            "checkpoint OUTSIDE the region instead.")
+        elif why:
+            logger.info("[compile] %s", why)
 
     # ---- previews: encode prompts once, keep the VAE ---------------------------------------------
     encoded = neg = vae = ref_imgs = ref_latents = None
@@ -1070,6 +1063,10 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             ema.update()                   # after the clipped step, so the average tracks what was applied
         pending = 0
 
+    # Warm-up reassurance: the first two epochs of a run start slowly (first-sight kernel planning, cuBLAS picks,
+    # allocator and cache warm-up, and on a compiled run the blocks compiling for each new shape) - a crawling bar
+    # looks like a hang, so a gentle note repeats every ~30 s while it lasts.
+    warmup_note = [0.0]
     for epoch in range(start_epoch, max_train_epochs):
         shared_epoch.value = epoch + 1
         if ftr is not None and ftr.needs_window(epoch):
@@ -1078,6 +1075,11 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         torch.cuda.reset_peak_memory_stats()
         t0 = time.time()
         for i, batch in enumerate(loader):
+            if epoch - start_epoch < 2 and time.time() - warmup_note[0] > 30.0:
+                warmup_note[0] = time.time()
+                logger.info("[warm-up] Warm-up phase — the first two epochs start slowly while the GPU plans kernels"
+                            + (", compiles the blocks" if do_compile else "")
+                            + " and fills its caches. Nothing is stuck; full speed arrives from epoch 3.")
             if watch.excluded(batch):          # two failed AI recaptions and still stuck: no forward, no loss
                 recorder.drop(step=i)
                 global_step += 1

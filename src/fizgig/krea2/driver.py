@@ -46,10 +46,21 @@ class Krea2Driver(FamilyDriver):
                       stream_base_gb=3.2,      # measured 30 Sep: 2.7 GB worst window (12 GB card) + 0.5 slack
                       calib_mp=0.25, act_gb_per_mp=3.2)   # 0.25 -> 0.98 MP measured +2.2 GB (3.0 GB/MP)
 
-    def compile_blocks(self, dit, boundary="inside", blocks_to_swap=0):
-        # the original's per-block compile, with its guards (block swap, triton, host compiler, fp8 on pre-Ada)
-        from fizgig.krea2.compile import _compile_blocks
-        _compile_blocks(dit, blocks_to_swap, fp8_scaled=False, boundary=boundary)
+    def compile_targets(self, dit):
+        return dit.blocks
+
+    def compile_plan(self, mode, total_steps, precision, blocks_to_swap, mp=0.25):
+        """Krea 2's own measured rule (utils/capabilities: should_compile / compile_boundary) - its compiled-memory
+        figures place the checkpoint inside the graph where it fits and outside where it does not."""
+        from fizgig.utils.capabilities import compile_boundary, should_compile
+        q4, q8 = precision == "nf4", ("int8" if precision == "int8" else "")
+        if mode == "auto":
+            return should_compile(total_steps, q4, q8, blocks_to_swap, mp=mp)
+        if mode == "outside":
+            return "outside", ""
+        b = compile_boundary(q4, q8, mp=mp)
+        return b, ("on: inside-the-graph won't fit at this token load - compiling with the checkpoint OUTSIDE the "
+                   "region instead." if b == "outside" else "")
 
     # ---- models ---------------------------------------------------------------------------------
     def load_dit(self, path, device):

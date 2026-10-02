@@ -90,6 +90,20 @@ QWEN_IMAGE_21 = FamilyDescription(
     # Fast Identity Mode (2 Oct 2026, Sydney, 119 photos, 0.25 MP, 30 epochs, ArcFace vs her photos): blocks 10-14
     # alone 2.90 it/s vs 1.84 for every block (+58%), likeness .507/.587/.620 at epochs 10/20/30 vs .490/.596/.556.
     # One seed per run; Lara (0.5 MP, 15 epochs) matched at epoch 10 and trailed at 15.
+    # torch.compile (2 Oct 2026, 5090, 40 photos, 0.25 MP, rank 8, checkpoint outside the compiled blocks - no extra
+    # memory): INT8 2.00 -> 2.86 it/s (+43%, settled by epoch 2), bf16 2.04 -> 2.33 (+14%, still rising at epoch 3);
+    # epoch 1 ~0.7 it/s while the blocks compile. Payback ~200 / ~400 steps measured, rounded up.
+    compiles=True,
+    compile_boundary="outside",
+    compile_fullgraph=False,
+    compile_payback_steps={"int8": 300, "bf16": 800},
+    compile_hint=("Auto (recommended) turns torch.compile on only when this run is long enough to repay it. On Qwen "
+                  "Image 2.1 it is measured 1.43x per step on the INT8 base (2.00 -> 2.86 it/s) and about 1.15x on "
+                  "bf16 (2.04 -> 2.33), with no extra memory: the gradient checkpoint stays outside the compiled "
+                  "blocks. The first epoch runs slower while the blocks compile, so Auto waits for runs longer than "
+                  "about 300 steps on INT8 and 800 on bf16; NF4 is not compiled by Auto (On still compiles). Requires "
+                  "Triton and, on Windows, a C++ compiler (VS Build Tools) - both located automatically. Never used "
+                  "with Blocks Swap, since swapping moves weights and compiled graphs assume they stay put."),
     identity_blocks=tuple(f"block_{i}" for i in range(10, 15)),
     repair_presets=(
         ("✨Identity only", tuple((f"block_{i}", 1.0 if 10 <= i <= 14 else 0.0) for i in range(32))),

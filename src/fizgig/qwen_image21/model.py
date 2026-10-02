@@ -417,7 +417,9 @@ class QwenImage21DiT(nn.Module):
         for index, block in enumerate(self.transformer_blocks):
             if self.blocks_to_swap:
                 self.offloader.wait_for_block(index)
-            if torch.is_grad_enabled() and self.gradient_checkpointing:
+            if getattr(block, "_handles_checkpointing", False):    # compiled: the wrapper checkpoints itself
+                joint = block(joint, modulation, rotary, mod_mask, segments, key_valid)
+            elif torch.is_grad_enabled() and self.gradient_checkpointing:
                 joint = checkpoint(block, joint, modulation, rotary, mod_mask, segments, key_valid,
                                    use_reentrant=False)
             else:

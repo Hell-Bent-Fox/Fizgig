@@ -690,6 +690,30 @@ def compile_boundary(quant_4bit: bool, quant_int8: str, vram_gb=None, caps=None,
     return "inside"
 
 
+def compile_blocker(blocks_to_swap: int, caps: Optional[Capabilities] = None) -> Optional[str]:
+    """Why Auto must not compile on this machine / run (ROCm, block swap, no or mismatched triton, no host C
+    compiler), or None. Shared by Krea 2's rule (should_compile) and the generic family rule."""
+    caps = caps or detect()
+    if caps.is_rocm:
+        return ("ROCm/HIP PyTorch build — Auto leaves torch.compile off "
+                "(recompiles per bucket shape on HIP; set Compile Blocks to On to override)")
+    if blocks_to_swap:
+        return "block swap is active — swapping moves weights between devices every step, " \
+               "which compiled graphs cannot tolerate"
+    try:
+        import triton  # noqa: F401
+    except Exception:
+        return "triton is not installed (pip install triton-windows on Windows)"
+    _ok, _why = triton_matches_torch()
+    if not _ok:
+        return _why
+    if not has_host_c_compiler():
+        return ("no C compiler on this system — inductor/triton build host-side stubs "
+                "with one at runtime (on Debian/Ubuntu: apt install gcc); "
+                "running uncompiled")
+    return None
+
+
 def should_compile(total_steps: int, quant_4bit: bool, quant_int8: str,
                    blocks_to_swap: int, vram_gb: Optional[float] = None,
                    caps: Optional[Capabilities] = None, mp: float = 0.25,
@@ -704,27 +728,10 @@ def should_compile(total_steps: int, quant_4bit: bool, quant_int8: str,
     which is why only the compile gate needs them at this strength.
     """
     caps = caps or detect()
-    if caps.is_rocm:
-        return False, (
-            "ROCm/HIP PyTorch build — Auto leaves torch.compile off "
-            "(recompiles per bucket shape on HIP; set Compile Blocks to On to override)"
-        )
+    _blocked = compile_blocker(blocks_to_swap, caps)
+    if _blocked:
+        return False, _blocked
     vram = vram_gb if vram_gb is not None else (caps.vram_free_gb or caps.vram_gb)
-
-    if blocks_to_swap:
-        return False, "block swap is active — swapping moves weights between devices every step, " \
-                      "which compiled graphs cannot tolerate"
-    try:
-        import triton  # noqa: F401
-    except Exception:
-        return False, "triton is not installed (pip install triton-windows on Windows)"
-    _ok, _why = triton_matches_torch()
-    if not _ok:
-        return False, _why
-    if not has_host_c_compiler():
-        return False, ("no C compiler on this system — inductor/triton build host-side stubs "
-                       "with one at runtime (on Debian/Ubuntu: apt install gcc); "
-                       "running uncompiled")
 
     kind = "nf4" if quant_4bit else ("int8" if quant_int8 else None)
     if kind is None:

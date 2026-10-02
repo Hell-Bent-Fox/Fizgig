@@ -72,6 +72,9 @@ class QwenImage21Driver(FamilyDriver):
     def unload_text_encoder(self, te):
         te.unload()
 
+    def compile_targets(self, dit):
+        return dit.transformer_blocks
+
     def enable_gradient_checkpointing(self, dit, on=True):
         dit.enable_gradient_checkpointing(on)
 

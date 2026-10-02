@@ -1,5 +1,6 @@
-"""torch.compile for the Krea 2 DiT blocks (the driver's compile_blocks): each block compiled, with gradient
-checkpointing inside the compiled region or around it, after checking a host C compiler and a matching Triton."""
+"""torch.compile for any described family's DiT blocks (FamilyDriver.compile_blocks): each block of the list the
+driver names compiled, with gradient checkpointing inside the compiled region or around it, after checking a host C
+compiler and a matching Triton. Krea 2 measured it first; every family that sets compiles=True runs the same code."""
 import logging
 import os
 import time
@@ -9,7 +10,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 
-class _CheckpointedBlock(torch.nn.Module):
+class CheckpointedBlock(torch.nn.Module):
     """A transformer block that does its own gradient checkpointing.
 
     Exists so torch.compile can capture the checkpoint inside the graph. `_handles_checkpointing`
@@ -23,14 +24,13 @@ class _CheckpointedBlock(torch.nn.Module):
         self.block = block
         self.checkpointing = checkpointing
 
-    def forward(self, x, vec, freqs, attn_params=None):
+    def forward(self, *args):
         if self.checkpointing and self.training and torch.is_grad_enabled():
-            return torch.utils.checkpoint.checkpoint(
-                self.block, x, vec, freqs, attn_params, use_reentrant=False)
-        return self.block(x, vec, freqs, attn_params)
+            return torch.utils.checkpoint.checkpoint(self.block, *args, use_reentrant=False)
+        return self.block(*args)
 
 
-def _find_host_compiler() -> bool:
+def find_host_compiler() -> bool:
     """Make sure a host C/C++ compiler exists before torch.compile runs; never crash the run.
 
     Inductor/triton build small host-side stubs at runtime, so compile without a compiler dies
@@ -101,9 +101,10 @@ def _find_host_compiler() -> bool:
     return False
 
 
-def _compile_blocks(dit, blocks_to_swap: int, fp8_scaled: bool = False,
-                    boundary: str = "inside") -> None:
-    """Compile each transformer block. Opt-in — see the roadmap for what it is and isn't worth.
+def compile_blocks(dit, blocks, blocks_to_swap: int = 0, fp8_scaled: bool = False,
+                   boundary: str = "inside", fullgraph: bool = True) -> None:
+    """Compile each block of `blocks` (the driver's ModuleList, replaced in place). The DiT's forward must call a
+    block that has `_handles_checkpointing` directly, without checkpointing it again.
 
     The win is real on the quantised path (inductor fuses the per-matmul quantise/dequantise
     elementwise work that bounds INT8), and small on dense bf16. It costs compile time on the
@@ -162,7 +163,7 @@ def _compile_blocks(dit, blocks_to_swap: int, fp8_scaled: bool = False,
         # torch.compile (a preview that never comes back, no log) — say so and run eager.
         logger.warning("[compile] ignored — %s. Training continues uncompiled.", _why)
         return
-    if not _find_host_compiler():
+    if not find_host_compiler():
         return
     import torch._dynamo
     # Raises the recompile ceiling (default 8, which a bucketed dataset exhausts immediately —
@@ -188,17 +189,16 @@ def _compile_blocks(dit, blocks_to_swap: int, fp8_scaled: bool = False,
     checkpointing = bool(getattr(dit, "gradient_checkpointing", False))
     n = 0
     if boundary == "outside":
-        for i, block in enumerate(dit.blocks):
-            dit.blocks[i] = _CheckpointedBlock(torch.compile(block, fullgraph=True),
-                                               checkpointing)
+        for i, block in enumerate(blocks):
+            blocks[i] = CheckpointedBlock(torch.compile(block, fullgraph=fullgraph), checkpointing)
             n += 1
-        logger.info("[compile] %d blocks compiled (fullgraph, checkpoint OUTSIDE the "
+        logger.info("[compile] %d blocks compiled (checkpoint OUTSIDE the "
                     "compiled region — recompute reruns the compiled graph, so activation "
-                    "stashes stay at eager level; the high-resolution fit) — the first "
+                    "stashes stay at eager level) — the first "
                     "step of each new shape pauses to compile", n)
         return
-    for i, block in enumerate(dit.blocks):
-        dit.blocks[i] = torch.compile(_CheckpointedBlock(block, checkpointing), fullgraph=True)
+    for i, block in enumerate(blocks):
+        blocks[i] = torch.compile(CheckpointedBlock(block, checkpointing), fullgraph=fullgraph)
         n += 1
-    logger.info("[compile] %d blocks compiled (fullgraph, checkpoint inside the graph, "
+    logger.info("[compile] %d blocks compiled (checkpoint inside the graph, "
                 "cache_size_limit=8192) — the first step of each new shape pauses to compile", n)

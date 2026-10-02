@@ -136,6 +136,16 @@ class FamilyDescription:
     # the driver can torch.compile its blocks (FamilyDriver.compile_blocks); the Training tab's Compile Blocks
     # control shows and the launch sends --compile_blocks
     compiles: bool = False
+    # the generic Auto compile rule (FamilyDriver.compile_plan) for a family whose driver does not bring its own:
+    # {base precision: steps after which compile has paid back its warm-up}, measured; a precision missing here is
+    # not compiled by Auto (On still compiles). compile_boundary: where the gradient checkpoint sits ("inside" the
+    # compiled graph - faster, more memory - or "outside" - eager-level memory); compile_fullgraph: refuse graph
+    # breaks rather than degrade quietly.
+    compile_payback_steps: dict = field(default_factory=dict)
+    compile_boundary: str = "inside"
+    compile_fullgraph: bool = True
+    # the Training tab's hint under Compile Blocks: this family's measured figures
+    compile_hint: str = ""
     # previews can take the Samples tab's reference image through the text encoder's vision path ('prompt from a
     # picture', Krea 2) - conditioning only, not an edit reference (edit_training)
     preview_image: bool = False
