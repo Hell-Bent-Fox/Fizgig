@@ -197,6 +197,9 @@ class FamilyDescription:
     workbench: tuple = ()
     # Repair Studio built-ins beyond Reset All: (name, ((block id, strength), ...)) - every other block at 1.0
     repair_presets: tuple = ()
+    # what each block carries, measured with the Profiler: ((block id, category), ...), category one of
+    # "identity" / "look" / "style_ident_overlap" (Repair Studio's colours). Unlisted blocks stay uncoloured.
+    block_categories: tuple = ()
 
     # things a user or a later session must know, with sources
     notes: tuple = ()

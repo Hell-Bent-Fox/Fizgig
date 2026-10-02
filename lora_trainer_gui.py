@@ -21354,6 +21354,7 @@ class LoRATrainerGUI:
         "identity": "#70AD47",
         "ident_details_overlap": "#B8A547",
         "details": "#ED7D31",
+        "look": "#5B9BD5",          # described families: shapes the picture, not the person
     }
     _REPAIR_CAT_SHORT = {
         "style_composition": "Style+Comp",
@@ -21361,6 +21362,7 @@ class LoRATrainerGUI:
         "identity": "Identity",
         "ident_details_overlap": "ID/Detail",
         "details": "Details",
+        "look": "Look",
     }
 
     @staticmethod
@@ -22923,8 +22925,11 @@ class LoRATrainerGUI:
         category-coloured; Krea 2 (block_N / txt_*) and H3 (h3blk_N / h3_rf_N) ids are
         generic (no semantic bucket map yet) → neutral colour, no category tag."""
         if self._repair_desc() is not None:
-            return (getattr(self, "_repair_family_labels", {}).get(block_id, block_id),
-                    COLORS["text_secondary"], None)
+            label = getattr(self, "_repair_family_labels", {}).get(block_id, block_id)
+            cat = dict(self._repair_desc().block_categories).get(block_id)
+            if cat in self._REPAIR_CAT_COLOR:
+                return label, self._REPAIR_CAT_COLOR[cat], self._REPAIR_CAT_SHORT[cat]
+            return label, COLORS["text_secondary"], None
         if block_id.startswith("h3blk_"):
             return (f"Block {block_id.split('_')[1]}", COLORS["text_secondary"], None)
         if block_id.startswith("h3_rf_"):

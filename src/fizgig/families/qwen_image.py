@@ -77,7 +77,21 @@ QWEN_IMAGE_21 = FamilyDescription(
     n_blocks=32,                      # transformer/config.json num_layers 32, identical single-stream blocks
     block_prefix="transformer_blocks",
     block_note="Modulation is shared across all blocks (one global Linear), so per-block sliders act "
-               "on attention and MLP only. No block map (style / identity) exists yet.",
+               "on attention and MLP only. Identity sits in blocks 10-14 (measured 2 Oct 2026 with the "
+               "Profiler on two character LoRAs: those five alone give 67-89% of the likeness, leaving them "
+               "out removes 82-84%, block 12 the strongest); the rest shape the picture.",
+
+    # Measured, not guessed (2 Oct 2026, Profiler group + single-block switch-offs, jadelyn / lara character LoRAs,
+    # ArcFace vs the subjects' photos): blocks 10-14 carry the identity (alone 67% / 89% of the likeness, left out
+    # -84% / -82%), 5-9 a little on one LoRA (11-15%), everything else shapes the picture. Bleed sits in 10-14 too.
+    # 15-19 alone gave lara 18% (left out: nothing) - the next place to look if 10-14 ever can't carry a face alone.
+    block_categories=tuple((f"block_{i}", "identity" if 10 <= i <= 14 else
+                            "style_ident_overlap" if 5 <= i <= 9 else "look") for i in range(32)),
+    repair_presets=(
+        ("✨Identity only", tuple((f"block_{i}", 1.0 if 10 <= i <= 14 else 0.0) for i in range(32))),
+        ("✨Look only (no identity)", tuple((f"block_{i}", 0.0) for i in range(10, 15))),
+        ("✨Identity ×0.5", tuple((f"block_{i}", 0.5) for i in range(10, 15))),
+    ),
 
     lora=LoRAFormat(
         key_template="transformer.transformer_blocks.{block}.{module}.{ab}.weight",
