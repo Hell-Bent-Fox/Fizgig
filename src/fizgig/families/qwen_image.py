@@ -210,7 +210,7 @@ QWEN_IMAGE_21 = FamilyDescription(
         ("✨ Qwen 2.1 Fast (rank 8, adaptive LR)", _preset(8, adaptive=("2e-4", "4e-4"))),
         # Fast Identity Mode: Fast's recipe on the identity blocks only, at the 0.25 MP it was measured at (Sydney,
         # see identity_blocks above): about 1.5x faster, very close to full-model likeness.
-        ("✨ Qwen 2.1 Fast Identity Mode (rank 8) - very close to full-model likeness, up to 2x faster",
+        ("✨ Qwen 2.1 Fast Identity Mode (rank 8) - very close to full-model likeness, ~1.5x faster",
          {**_preset(8, adaptive=("2e-4", "4e-4")), "DATASET_MEGAPIXELS": "0.25", "FAMILY_FAST_ID": True}),
         # Standard: rank 16 for bigger or mixed datasets. Fast's range at rank 16 overcooked from ~epoch 15 (skin
         # detail 6.4 -> 4.7 by epoch 30), so the range is halved; Peter has run this at rank 16.
