@@ -2961,6 +2961,11 @@ class KleinTrainer:
         if is_main_process:
             ckpt_name = get_last_ckpt_name(args.output_name)
             save_model(ckpt_name, network, global_step, num_train_epochs, force_sync_upload=True)
+            # the last epoch under its number too (#176): a resumed run that extends this one would overwrite the
+            # plain name, and that epoch would be lost
+            import shutil
+            shutil.copyfile(os.path.join(args.output_dir, ckpt_name),
+                            os.path.join(args.output_dir, get_epoch_ckpt_name(args.output_name, num_train_epochs)))
             logger.info("Model saved.")
 
     # ------------------------------------------------------------------

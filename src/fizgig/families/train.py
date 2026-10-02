@@ -1195,6 +1195,10 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         logger.info(f"Fine-tune complete -> {final}")
         return final
     save_lora(final, max_train_epochs)
+    # the last epoch under its number too (#176): a resumed run that extends this one ends on the same plain name, and
+    # without a numbered copy that epoch would be overwritten and lost
+    import shutil
+    shutil.copyfile(final, os.path.join(output_dir, f"{output_name}-{max_train_epochs:06d}.safetensors"))
     if save_state_on_train_end:
         state(max_train_epochs)
     logger.info(f"Training complete -> {final}")
