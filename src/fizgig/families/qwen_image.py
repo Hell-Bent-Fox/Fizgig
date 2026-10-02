@@ -91,6 +91,9 @@ QWEN_IMAGE_21 = FamilyDescription(
     # alone 2.90 it/s vs 1.84 for every block (+58%), likeness .507/.587/.620 at epochs 10/20/30 vs .490/.596/.556.
     # One seed per run; Lara (0.5 MP, 15 epochs) matched at epoch 10 and trailed at 15.
     identity_blocks=tuple(f"block_{i}" for i in range(10, 15)),
+    # checkpointing off (2 Oct 2026, 5090, 40 photos, 0.25 MP, rank 8): bf16 14.5 -> 28.0 GB, 2.00 -> 2.86 it/s;
+    # INT8 8.1 -> 21.8 GB, 1.96 -> 2.63 it/s (0.37 MP INT8: 26.1 GB, fits 32 GB). NF4 not measured: stays on.
+    ckpt_off_gb={"bf16": 13.5, "int8": 13.7},
     repair_presets=(
         ("✨Identity only", tuple((f"block_{i}", 1.0 if 10 <= i <= 14 else 0.0) for i in range(32))),
         ("✨Look only (no identity)", tuple((f"block_{i}", 0.0) for i in range(10, 15))),

@@ -416,7 +416,7 @@ def train_command(desc, inputs, plan):
     cmd += _preview_flags(desc, st, plan, cmd)
     if (desc.identity_blocks and st.get("FAMILY_FAST_ID")
             and not (slider_on(desc, st) or edit_on(desc, st) or ft_on(desc, st))):
-        cmd += ["--train_blocks", ",".join(desc.identity_blocks), "--fast_identity"]
+        cmd += ["--train_blocks", ",".join(desc.identity_blocks)]
     if slider_on(desc, st):
         if desc.slider_ultra_blocks and st.get("FAMILY_SLIDER_ULTRA"):
             cmd += ["--train_blocks", ",".join(desc.slider_ultra_blocks)]

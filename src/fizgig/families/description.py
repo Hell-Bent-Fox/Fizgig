@@ -203,6 +203,12 @@ class FamilyDescription:
     # Fast Identity Mode: the block ids a standard LoRA trains alone when it is on (the measured identity blocks).
     # Everything before the first of them runs forward only, so it is faster. () = no Fast Identity Mode.
     identity_blocks: tuple = ()
+    # Gradient checkpointing off when it fits (families/train.py): {base precision: extra GB at 0.25 MP, batch 1,
+    # when every block trains}, measured as the un-checkpointed minus the checkpointed peak. The trainer scales it by
+    # the run's largest bucket and by the share of blocks the gradient passes through, against the checkpointed peak
+    # it MEASURES on the first step. A precision missing here (NF4: it keeps dequantised weights for backward) never
+    # switches off. {} = never.
+    ckpt_off_gb: dict = field(default_factory=dict)
 
     # things a user or a later session must know, with sources
     notes: tuple = ()
