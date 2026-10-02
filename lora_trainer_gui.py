@@ -5310,6 +5310,15 @@ class LoRATrainerGUI:
             training_content, text="",
             foreground=COLORS["text_explain"], font=HINT_FONT, justify=tk.LEFT, wraplength=720)
         self._family_edit_hint.grid(row=55, column=0, columnspan=2, sticky=tk.W, padx=(26, 5), pady=(0, 4))
+        # Fast Identity Mode: a Standard LoRA trained on the family's measured identity blocks only
+        self._family_fastid = ttk.Frame(training_content)
+        self._family_fastid.grid(row=59, column=0, columnspan=2, sticky=tk.W, padx=(26, 5), pady=(2, 4))
+        self.entries["FAMILY_FAST_ID"] = tk.BooleanVar(value=bool(self.settings.get("FAMILY_FAST_ID", False)))
+        ttk.Checkbutton(self._family_fastid, text="Fast Identity Mode",
+                        variable=self.entries["FAMILY_FAST_ID"]).grid(row=0, column=0, sticky=tk.W)
+        self._family_fastid_hint = ttk.Label(self._family_fastid, foreground=COLORS["text_explain"], font=HINT_FONT,
+                                             justify=tk.LEFT, wraplength=690, text="")
+        self._family_fastid_hint.grid(row=1, column=0, sticky=tk.W, pady=(1, 2))
         self._family_edit_frame = ttk.Frame(training_content)
         self._family_edit_frame.grid(row=56, column=0, columnspan=2, sticky=tk.W, padx=(26, 5), pady=(2, 4))
         _f = self._family_edit_frame
@@ -7423,7 +7432,8 @@ class LoRATrainerGUI:
                                     "FAMILY_EDIT_CAPTION", "FAMILY_SLIDER", "FAMILY_SLIDER_SOURCE",
                                     "FAMILY_SLIDER_DIR", "FAMILY_SLIDER_CAPTION", "FAMILY_SLIDER_BASE",
                                     "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG", "FAMILY_SLIDER_GUIDANCE",
-                                    "FAMILY_SLIDER_ULTRA", "FAMILY_FT", "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY",
+                                    "FAMILY_SLIDER_ULTRA", "FAMILY_FAST_ID", "FAMILY_FT", "FAMILY_FT_ROTATIONS",
+                                    "FAMILY_FT_SAVE_EVERY",
                                     "FAMILY_FT_ROTATE_EVERY", "FAMILY_FT_FUSED", "FAMILY_FT_REG_DIR",
                                     "FAMILY_FT_REG_MULT"})
     from fizgig.families.launch import PRECISION_LABELS as _FAMILY_PRECISION_LABELS
@@ -7564,6 +7574,13 @@ class LoRATrainerGUI:
                 self._family_kind_var.set(kind)
             self._family_edit_hint.configure(text=self._KIND_HINTS[kind])
             slider_on = kind == "slider"
+            _idb = tuple(desc.identity_blocks) if desc is not None else ()
+            self._set_widget_visible(self._family_fastid, kind == "standard" and bool(_idb))
+            if _idb:
+                _n = [b.split("_")[-1] for b in _idb]
+                self._family_fastid_hint.configure(
+                    text=f"Trains only the identity blocks ({_n[0]}-{_n[-1]}): about 1.5x faster, with the same or "
+                         "very close likeness. The base model's composition and styling stay more intact.")
             self._set_widget_visible(self._family_slider_frame, slider_on)
             self._set_widget_visible(self._family_slider_ultra,
                                      slider_on and bool(desc is not None and desc.slider_ultra_blocks))
@@ -7658,6 +7675,7 @@ class LoRATrainerGUI:
         d.update(FAMILY_EDIT=self._family_edit_on(desc), FAMILY_SLIDER=self._family_slider_on(desc),
                  FAMILY_FT=self._family_ft_on(desc), FAMILY_FT_FUSED=bool(self.entries["FAMILY_FT_FUSED"].get()),
                  FAMILY_SLIDER_ULTRA=bool(self.entries["FAMILY_SLIDER_ULTRA"].get()),
+                 FAMILY_FAST_ID=bool(self.entries["FAMILY_FAST_ID"].get()),
                  **{k: str(self.entries[k].get()).strip() for k in (
                      "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY", "FAMILY_FT_ROTATE_EVERY", "FAMILY_FT_REG_DIR",
                      "FAMILY_FT_REG_MULT")},
@@ -32855,6 +32873,7 @@ class LoRATrainerGUI:
                 "FAMILY_SLIDER": self._family_slider_on(),
                 "FAMILY_FT": self._family_ft_on(), "FAMILY_FT_FUSED": bool(self.entries["FAMILY_FT_FUSED"].get()),
                 "FAMILY_SLIDER_ULTRA": bool(self.entries["FAMILY_SLIDER_ULTRA"].get()),
+                "FAMILY_FAST_ID": bool(self.entries["FAMILY_FAST_ID"].get()),
                 **{k: self.entries[k].get().strip() for k in (
                     "FAMILY_SLIDER_SOURCE", "FAMILY_SLIDER_DIR", "FAMILY_SLIDER_CAPTION", "FAMILY_SLIDER_BASE",
                     "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG", "FAMILY_SLIDER_GUIDANCE",

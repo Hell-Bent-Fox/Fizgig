@@ -200,6 +200,9 @@ class FamilyDescription:
     # what each block carries, measured with the Profiler: ((block id, category), ...), category one of
     # "identity" / "look" / "style_ident_overlap" (Repair Studio's colours). Unlisted blocks stay uncoloured.
     block_categories: tuple = ()
+    # Fast Identity Mode: the block ids a standard LoRA trains alone when it is on (the measured identity blocks).
+    # Everything before the first of them runs forward only, so it is faster. () = no Fast Identity Mode.
+    identity_blocks: tuple = ()
 
     # things a user or a later session must know, with sources
     notes: tuple = ()

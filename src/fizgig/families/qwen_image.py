@@ -31,6 +31,7 @@ def _preset(rank, lr=1e-4, adaptive=None, epochs=30, edit=False, slider=False):
         "KREA2_LOSS_WATCH": True, "KREA2_PER_IMAGE_LR": False, "KREA2_AUTO_RECAPTION": False,
         "KREA2_WARMUP_LOOK": False,
         "FAMILY_SLIDER_GUIDANCE": "2",   # a prompt slider's push strength (Krea 2's is 3)
+        "FAMILY_FAST_ID": False,
     }
 
 
@@ -85,8 +86,11 @@ QWEN_IMAGE_21 = FamilyDescription(
     # ArcFace vs the subjects' photos): blocks 10-14 carry the identity (alone 67% / 89% of the likeness, left out
     # -84% / -82%), 5-9 a little on one LoRA (11-15%), everything else shapes the picture. Bleed sits in 10-14 too.
     # 15-19 alone gave lara 18% (left out: nothing) - the next place to look if 10-14 ever can't carry a face alone.
-    block_categories=tuple((f"block_{i}", "identity" if 10 <= i <= 14 else
-                            "style_ident_overlap" if 5 <= i <= 9 else "look") for i in range(32)),
+    block_categories=tuple((f"block_{i}", "identity" if 10 <= i <= 14 else "look") for i in range(32)),
+    # Fast Identity Mode (2 Oct 2026, Sydney, 119 photos, 0.25 MP, 30 epochs, ArcFace vs her photos): blocks 10-14
+    # alone 2.90 it/s vs 1.84 for every block (+58%), likeness .507/.587/.620 at epochs 10/20/30 vs .490/.596/.556.
+    # One seed per run; Lara (0.5 MP, 15 epochs) matched at epoch 10 and trailed at 15.
+    identity_blocks=tuple(f"block_{i}" for i in range(10, 15)),
     repair_presets=(
         ("✨Identity only", tuple((f"block_{i}", 1.0 if 10 <= i <= 14 else 0.0) for i in range(32))),
         ("✨Look only (no identity)", tuple((f"block_{i}", 0.0) for i in range(10, 15))),
@@ -204,6 +208,10 @@ QWEN_IMAGE_21 = FamilyDescription(
         # the best-held skin detail at 0.5 MP. Automagic (lower likeness, softer late) and flat 1e-4 (too slow)
         # both lost to it.
         ("✨ Qwen 2.1 Fast (rank 8, adaptive LR)", _preset(8, adaptive=("2e-4", "4e-4"))),
+        # Fast Identity Mode: Fast's recipe on the identity blocks only, at the 0.25 MP it was measured at (Sydney,
+        # see identity_blocks above): about 1.5x faster, same or very close likeness.
+        ("✨ Qwen 2.1 Fast Identity Mode (rank 8) - same or very close quality, ~1.5x faster",
+         {**_preset(8, adaptive=("2e-4", "4e-4")), "DATASET_MEGAPIXELS": "0.25", "FAMILY_FAST_ID": True}),
         # Standard: rank 16 for bigger or mixed datasets. Fast's range at rank 16 overcooked from ~epoch 15 (skin
         # detail 6.4 -> 4.7 by epoch 30), so the range is halved; Peter has run this at rank 16.
         ("✨ Qwen 2.1 Standard (rank 16, adaptive LR)", _preset(16, adaptive=("1e-4", "2e-4"))),

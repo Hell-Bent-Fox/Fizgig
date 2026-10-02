@@ -289,6 +289,9 @@ th{color:#9aa0aa;font-weight:600;} .pill{display:inline-block;padding:2px 9px;bo
 """
 
 
+_CAT_COLOR = {"identity": "#70AD47", "look": "#5B9BD5", "style_ident_overlap": "#5BB3A6"}   # Repair Studio's
+
+
 def _pct(x):
     return "—" if x is None else f"{100 * x:.0f}%"
 
@@ -360,6 +363,18 @@ def write_report(desc, lora_path, stats, abl, output_html, labels):
     parts.append('<div class="card"><div class="kpis">' + "".join(
         f'<div class="kpi"><div class="lab">{_html.escape(k)}</div><div class="big">{_html.escape(v)}</div></div>'
         for k, v in kpis) + "</div></div>")
+    cats = dict(desc.block_categories)
+    if cats:
+        chips = "".join(f'<span title="{_html.escape(lab(b))}" style="display:inline-block;min-width:26px;padding:4px 0;'
+                        f'margin:2px;border-radius:5px;text-align:center;font-size:11px;color:#111;'
+                        f'background:{_CAT_COLOR.get(cats.get(b), "#555")}">{_html.escape(b.split("_")[-1])}</span>'
+                        for b in order if b in cats)
+        parts.append(f'<div class="card"><h2>{_html.escape(desc.display_name)} block map</h2><p class="lead">'
+                     f'<span style="color:{_CAT_COLOR["identity"]}"><b>ID</b></span>: the blocks that carry a '
+                     f'person\'s identity, measured with this Profiler across character LoRAs. '
+                     f'<span style="color:{_CAT_COLOR["look"]}"><b>Look</b></span>: the blocks that shape the '
+                     "picture (style, light, composition). Repair Studio colours its sliders the same way, and Fast "
+                     "Identity Mode on the Training tab trains only the ID blocks.</p>" + chips + "</div>")
 
     # suggestions
     sug = []
@@ -433,12 +448,13 @@ def write_report(desc, lora_path, stats, abl, output_html, labels):
             for c in offs:
                 b = c[4:]
                 d = lt.get(c, {})
-                cells.append(f'<div class="cell">{_img(th["trigger"].get(c))}<b>Without {_html.escape(lab(b))}</b>'
+                dot = (f'<span style="color:{_CAT_COLOR[cats[b]]}">● </span>' if cats.get(b) in _CAT_COLOR else "")
+                cells.append(f'<div class="cell">{_img(th["trigger"].get(c))}<b>{dot}Without {_html.escape(lab(b))}</b>'
                              + _metric_rows(d.get("change"), d.get("score"), lc.get(c, {}).get("score"), "lost")
                              + "</div>")
             parts.append('<div class="card"><h2>Each block left out</h2><p class="lead">As above, one block at a '
-                         "time: the whole LoRA with just this block switched off. Likeness rarely moves here, because "
-                         f'the neighbouring blocks make up for any single one.</p><div class="grid">{"".join(cells)}'
+                         "time: the whole LoRA with just this block switched off. Likeness often barely moves here, "
+                         f'because the neighbouring blocks make up for any single one.</p><div class="grid">{"".join(cells)}'
                          "</div></div>")
         if has_cls:
             cc = [f'<div class="cell">{_img(th["class"]["none"])}<b>Base model</b></div>',
