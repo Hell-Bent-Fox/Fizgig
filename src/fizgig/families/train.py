@@ -544,7 +544,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  sample_height=None, sample_steps=None, sample_cfg_scale=None, sample_negative=None,
                  sample_at_first=False, sample_seed=42, sample_reference=None, sample_image=None,
                  slider_pairs=False, slider_diff_weight=1.0, slider_prompts=None, slider_guidance=3.0,
-                 train_blocks=None,
+                 train_blocks=None, fast_identity=False,
                  slider_bank=16, slider_bank_res=768,
                  metadata_title=None, metadata_author=None, metadata_description=None, metadata_license=None,
                  metadata_tags=None, metadata_trigger_phrase=None, metadata_thumbnail=None,
@@ -936,6 +936,38 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     # ceil(steps / N) and the schedule runs in those updates. Sliders already backpropagate two poles per step: 1.
     accum = 1 if slider else max(1, int(gradient_accumulation_steps or 1))
     updates_per_epoch = math.ceil(steps_per_epoch / accum)
+
+    # Fast Identity Mode (the description's identity_blocks): with so few blocks training, the activations of the
+    # blocks the gradient passes through fit on a big card without gradient checkpointing, ~30% faster again
+    # (Qwen, 2 Oct 2026: 3.80 vs 2.90 it/s, peak 20.9 vs 14.1 GB at 0.25 MP). The allocator is capped below the card
+    # so running out raises instead of spilling into system memory (on Windows a spill only crawls); a step that runs
+    # out turns checkpointing back on and repeats.
+    ckpt_off = [False]
+    if fast_identity and gradient_checkpointing and not swapped and accum == 1 and not slider and ftr is None \
+            and torch.cuda.is_available():
+        _dev = torch.device(device)
+        _gpu = _dev.index if _dev.index is not None else torch.cuda.current_device()   # "cuda" carries no index
+        _total = torch.cuda.get_device_properties(_gpu).total_memory / 1024 ** 3
+        if _total >= 23.5:
+            driver.enable_gradient_checkpointing(dit, False)
+            torch.cuda.set_per_process_memory_fraction(0.94, _gpu)
+            ckpt_off[0] = True
+            logger.info(f"[fast identity] {_total:.0f} GB card: gradient checkpointing off for speed (it comes back "
+                        f"on by itself if a step runs out of memory)")
+        else:
+            logger.info(f"[fast identity] {_total:.0f} GB card: gradient checkpointing stays on")
+
+    def _ckpt_back_on():
+        """A step ran out of memory with checkpointing off: free it, switch checkpointing on, lift the cap."""
+        ckpt_off[0] = False
+        if optimizer is not None:
+            optimizer.zero_grad(set_to_none=True)
+        gc.collect()
+        torch.cuda.empty_cache()
+        driver.enable_gradient_checkpointing(dit, True)
+        torch.cuda.set_per_process_memory_fraction(1.0, _gpu)
+        logger.warning("[fast identity] out of memory with gradient checkpointing off - it is back on for the rest "
+                       "of the run and this step is repeated")
     if accum > 1:
         logger.info(f"[grad_accum] {accum} micro-batches per optimizer step (effective batch {accum}); "
                     f"{updates_per_epoch} updates/epoch")
@@ -1101,16 +1133,24 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                 cond = {k[len("cond__"):]: v.to(device) for k, v in batch.items() if k.startswith("cond__")}
                 refs = [batch[k].to(device) for k in sorted((k for k in batch if k.startswith("latents_control_")),
                                                             key=lambda k: int(k.rsplit("_", 1)[1]))]
-                loss, _info = driver.training_loss(dit, latents, cond, gen, min_t=min_timestep, max_t=max_timestep,
-                                                   **({"refs": refs} if refs else {}))
-                if pending == 0 and optimizer is not None:
-                    optimizer.zero_grad(set_to_none=True)
-                if reg_keys and all(str(k) in reg_keys for k in batch.get("item_keys") or [None]):
-                    mult = reg_lr_multiplier       # a regularisation image: a fixed nudge, never the watch's
-                else:
-                    mult = watch.multiplier(batch)  # per-image LR (batch size 1): the raw loss is still what's recorded
-                _scaled = loss * mult if mult != 1.0 else loss
-                (_scaled / accum if accum > 1 else _scaled).backward()
+                while True:
+                    try:
+                        loss, _info = driver.training_loss(dit, latents, cond, gen, min_t=min_timestep,
+                                                           max_t=max_timestep, **({"refs": refs} if refs else {}))
+                        if pending == 0 and optimizer is not None:
+                            optimizer.zero_grad(set_to_none=True)
+                        if reg_keys and all(str(k) in reg_keys for k in batch.get("item_keys") or [None]):
+                            mult = reg_lr_multiplier       # a regularisation image: a fixed nudge, never the watch's
+                        else:
+                            mult = watch.multiplier(batch)  # per-image LR (batch size 1): the raw loss is recorded
+                        _scaled = loss * mult if mult != 1.0 else loss
+                        (_scaled / accum if accum > 1 else _scaled).backward()
+                        break
+                    except torch.cuda.OutOfMemoryError:
+                        if not ckpt_off[0]:
+                            raise
+                    loss = _scaled = None          # outside the except: its traceback no longer pins the activations
+                    _ckpt_back_on()
             pending += 1
             if pending >= accum:
                 _update()
@@ -1265,6 +1305,9 @@ def setup_parser():
                    help="Slider from three prompts, no images (needs --text_encoder and --vae)")
     p.add_argument("--slider_guidance", type=float, default=3.0, help="Prompt-pair slider: how hard to push")
     p.add_argument("--slider_bank", type=int, default=16, help="Prompt-pair slider: practice images to render")
+    p.add_argument("--fast_identity", action="store_true",
+                   help="Fast Identity Mode: with --train_blocks on the identity blocks, gradient checkpointing goes "
+                        "off on cards that fit it (back on by itself if a step runs out of memory)")
     p.add_argument("--train_blocks", default="",
                    help="Comma-separated block ids (the driver's block map) to train; empty = every block")
     p.add_argument("--slider_bank_res", type=int, default=768, help="Prompt-pair slider: practice image size")
@@ -1340,6 +1383,7 @@ def main():
         slider_pairs=a.slider_pairs, slider_diff_weight=a.slider_diff_weight, slider_prompts=a.slider_prompts,
         slider_guidance=a.slider_guidance, slider_bank=a.slider_bank, slider_bank_res=a.slider_bank_res,
         train_blocks=[b.strip() for b in a.train_blocks.split(",") if b.strip()] or None,
+        fast_identity=a.fast_identity,
         metadata_title=a.metadata_title, metadata_author=a.metadata_author,
         metadata_description=a.metadata_description, metadata_license=a.metadata_license,
         metadata_tags=a.metadata_tags, metadata_trigger_phrase=a.metadata_trigger_phrase or a.trigger_word,
