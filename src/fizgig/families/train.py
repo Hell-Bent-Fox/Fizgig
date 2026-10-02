@@ -544,7 +544,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  sample_height=None, sample_steps=None, sample_cfg_scale=None, sample_negative=None,
                  sample_at_first=False, sample_seed=42, sample_reference=None, sample_image=None,
                  slider_pairs=False, slider_diff_weight=1.0, slider_prompts=None, slider_guidance=3.0,
-                 train_blocks=None, keep_checkpointing=False,
+                 train_blocks=None,
                  slider_bank=16, slider_bank_res=768,
                  metadata_title=None, metadata_author=None, metadata_description=None, metadata_license=None,
                  metadata_tags=None, metadata_trigger_phrase=None, metadata_thumbnail=None,
@@ -949,8 +949,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     ckpt_plan = [False]
     _extra = (desc.ckpt_off_gb or {}).get(precision)
     if gradient_checkpointing and _extra and torch.cuda.is_available():
-        why_not = ("switched off in Preferences (Faster training when there's room)" if keep_checkpointing else
-                   "block swap is on" if swapped else "gradient accumulation is on" if accum > 1 else
+        why_not = ("block swap is on" if swapped else "gradient accumulation is on" if accum > 1 else
                    "this is a slider" if slider else "this is a fine-tune" if ftr is not None else
                    "the blocks are compiled (the checkpoint lives inside the compiled graph)" if do_compile else "")
         if why_not:
@@ -1357,9 +1356,6 @@ def setup_parser():
                    help="Slider from three prompts, no images (needs --text_encoder and --vae)")
     p.add_argument("--slider_guidance", type=float, default=3.0, help="Prompt-pair slider: how hard to push")
     p.add_argument("--slider_bank", type=int, default=16, help="Prompt-pair slider: practice images to render")
-    p.add_argument("--keep_checkpointing", action="store_true",
-                   help="never switch gradient checkpointing off for speed (Preferences: Faster training when there's "
-                        "room, unticked)")
     p.add_argument("--train_blocks", default="",
                    help="Comma-separated block ids (the driver's block map) to train; empty = every block")
     p.add_argument("--slider_bank_res", type=int, default=768, help="Prompt-pair slider: practice image size")
@@ -1435,7 +1431,6 @@ def main():
         slider_pairs=a.slider_pairs, slider_diff_weight=a.slider_diff_weight, slider_prompts=a.slider_prompts,
         slider_guidance=a.slider_guidance, slider_bank=a.slider_bank, slider_bank_res=a.slider_bank_res,
         train_blocks=[b.strip() for b in a.train_blocks.split(",") if b.strip()] or None,
-        keep_checkpointing=a.keep_checkpointing,
         metadata_title=a.metadata_title, metadata_author=a.metadata_author,
         metadata_description=a.metadata_description, metadata_license=a.metadata_license,
         metadata_tags=a.metadata_tags, metadata_trigger_phrase=a.metadata_trigger_phrase or a.trigger_word,

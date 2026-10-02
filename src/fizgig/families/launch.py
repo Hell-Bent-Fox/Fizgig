@@ -414,8 +414,6 @@ def train_command(desc, inputs, plan):
     if trig and trig.lower() != "trigger_word":
         cmd += ["--metadata_trigger_phrase", trig]
     cmd += _preview_flags(desc, st, plan, cmd)
-    if not st.get("train_ckpt_off", True):          # Preferences: keep gradient checkpointing on
-        cmd += ["--keep_checkpointing"]
     if (desc.identity_blocks and st.get("FAMILY_FAST_ID")
             and not (slider_on(desc, st) or edit_on(desc, st) or ft_on(desc, st))):
         cmd += ["--train_blocks", ",".join(desc.identity_blocks)]
