@@ -20727,6 +20727,9 @@ class LoRATrainerGUI:
         self.profiler_stop_btn.pack(side=tk.LEFT, padx=(0, 12))
         self.profiler_open_btn = ttk.Button(run_row, text="Open Report", command=self._open_profiler_report, state="disabled")
         self.profiler_open_btn.pack(side=tk.LEFT)
+        self.profiler_repair_btn = ttk.Button(run_row, text="Open in Repair Studio", command=self._profiler_open_in_repair,
+                                              state="disabled")
+        self.profiler_repair_btn.pack(side=tk.LEFT, padx=(12, 0))
 
         self.profiler_progress_var = tk.StringVar(value="")
         tk.Label(run_card, textvariable=self.profiler_progress_var,
@@ -20848,6 +20851,50 @@ class LoRATrainerGUI:
                     self._profiler_set_baselines(paths)
             except Exception:
                 pass
+
+    def _profiler_open_in_repair(self):
+        """Hand the last rendered profile to Repair Studio: the LoRA loaded on the same prompt, seed and size, with the
+        profile's suggestions on the sliders (bleed-heavy groups turned down, quiet groups off), so the change shows
+        side by side and saves as a new file."""
+        last = getattr(self, "_profiler_last", None)
+        if not last:
+            return
+        if getattr(self, "_profiler_engine", None) is not None:
+            messagebox.showinfo("Profiler", "Wait for the profile run to finish first.")
+            return
+        from fizgig.families.block_profile import repair_settings
+        desc, lora_path, abl = last["desc"], last["lora"], last["abl"]
+        settings, notes = repair_settings(abl)
+        if self.repair_family_var.get() != desc.key:
+            self.repair_family_var.set(desc.key)
+            self._on_repair_family_changed()
+        self.repair_primary_var.set(lora_path)
+        self.notebook.select(self.repair_studio_tab)
+
+        def _push():
+            self._repair_master_mutating = True
+            try:
+                for bid, vars_ in self.repair_block_vars.items():
+                    on, strength = settings.get(bid, (True, 1.0))
+                    vars_["primary_enabled"].set(on)
+                    vars_["primary_strength"].set(strength)
+            finally:
+                self._repair_master_mutating = False
+            self.repair_prompt_var.set(last["prompt"])
+            self.repair_seed_var.set(str(last["seed"]))
+            self.repair_res_var.set(str(last["size"]))
+            if notes:
+                msg = "From the profile: " + "; ".join(notes) + "."
+            else:
+                msg = ("The profile found no group to turn down or switch off: the likeness and any bleed sit in the "
+                       "same blocks, so sliders stay as trained.")
+            if last["class_prompt"]:
+                msg += f' To see the bleed, set the prompt to "{last["class_prompt"]}".'
+            self.repair_status_var.set(msg)
+            self._repair_status_note = msg
+            self._schedule_preview(force=True)
+
+        self._load_repair_primary(on_done=_push)
 
     def _profiler_stop(self):
         eng = getattr(self, "_profiler_engine", None)
@@ -21012,6 +21059,7 @@ class LoRATrainerGUI:
         baselines = list(self._profiler_fam_baselines)
         self.profiler_run_btn.configure(state="disabled")
         self.profiler_open_btn.configure(state="disabled")
+        self.profiler_repair_btn.configure(state="disabled")
         self.profiler_results.configure(state="normal")
         self.profiler_results.delete(1.0, tk.END)
         self.profiler_results.configure(state="disabled")
@@ -21073,6 +21121,9 @@ class LoRATrainerGUI:
                                        on_progress=prog)
                 html, sidecar = write_report(desc, lora_path, stats, abl, out, labels)
                 self._profiler_report_path = html
+                self._profiler_last = None if abl is None else {
+                    "desc": desc, "lora": lora_path, "abl": abl, "prompt": prompt, "class_prompt": class_prompt,
+                    "seed": seeds[0], "size": size}
                 lines = [f"{desc.display_name} profile complete.\nReport: {html}\n\n",
                          f"Rank: {stats['max_rank']} in the file; 95% of the change fits in rank "
                          f"{stats['rank_for'][0.95]}, 99% in rank {stats['rank_for'][0.99]}.\n"]
@@ -21101,6 +21152,7 @@ class LoRATrainerGUI:
                     self._profiler_log("".join(lines))
                     self.profiler_progress_var.set("Done.")
                     self.profiler_open_btn.configure(state="normal")
+                    self.profiler_repair_btn.configure(state="normal" if abl is not None else "disabled")
                 self.master.after(0, _done)
             except Exception as exc:
                 import traceback
@@ -27078,7 +27130,9 @@ class LoRATrainerGUI:
             self._repair_redraw_preview("tweaked")
             self._repair_update_popout()
             self._repair_metrics_refresh()
-            self.repair_status_var.set("Ready.")
+            # a handoff's explanation (e.g. the Profiler's suggestions) outlives its first preview, once
+            self.repair_status_var.set(getattr(self, "_repair_status_note", None) or "Ready.")
+            self._repair_status_note = None
             print(f"[repair] preview displayed: baseline={baseline_img.size} tweaked={tweaked_img.size}")
         finally:
             self._repair_progress_end()
