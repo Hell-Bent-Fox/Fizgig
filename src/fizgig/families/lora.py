@@ -192,15 +192,23 @@ class FamilyLoRA:
     def _module_for(self, stem):
         """A file's module stem (dotted, prefixed, or kohya-flattened) -> a Linear name in this model, or None."""
         if stem.startswith("lora_unet_"):
-            return self._flat.get(stem[len("lora_unet_"):])
-        for p in _PREFIXES:
-            if p and not stem.startswith(p):
-                continue
-            name = stem[len(p):]
-            if name in self.linears:
-                return name
-            if name.replace(".", "_") in self._flat:
-                return self._flat[name.replace(".", "_")]
+            flats = [stem[len("lora_unet_"):]]
+        else:
+            flats = []
+            for p in _PREFIXES:
+                if p and not stem.startswith(p):
+                    continue
+                name = stem[len(p):]
+                if name in self.linears:
+                    return name
+                flats.append(name.replace(".", "_"))
+        for flat in flats:
+            if flat in self._flat:
+                return self._flat[flat]
+        for flat in flats:                  # another trainer's naming (the driver's renames)
+            alias = self.driver.alias_flat(flat)
+            if alias in self._flat:
+                return self._flat[alias]
         return None
 
     def read_file(self, path):

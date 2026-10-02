@@ -12,6 +12,20 @@ _LOHA = re.compile(r"\.hada_w1_a(\.|$)")
 _LOKR = re.compile(r"(.+)\.lokr_w1(_a)?$")
 
 
+def _resolver(drv, known, flat):
+    """stem -> dotted module name: kohya-flattened names through the block map, dotted names with their prefix
+    stripped, and another trainer's naming through the driver's renames (alias_flat)."""
+    def resolve(stem):
+        if stem.startswith("lora_unet_"):
+            f = stem[len("lora_unet_"):]
+            return flat.get(f) or flat.get(drv.alias_flat(f) or "")
+        mod = next((stem[len(p):] for p in _PREFIXES if stem.startswith(p)), stem)
+        if mod in known:
+            return mod
+        return flat.get(drv.alias_flat(mod.replace(".", "_")) or "") or mod
+    return resolve
+
+
 def lora_pairs(desc, keys):
     """-> [(module or None, down key, up key, alpha key or None)] for every down/up pair in `keys`. module is None
     for a kohya-flattened name outside the block map (it cannot be un-flattened without the model)."""
@@ -21,6 +35,7 @@ def lora_pairs(desc, keys):
     drv = desc.load_driver()
     known = {m for g in drv.block_map() for b in g.blocks for m in b.modules}
     flat = {m.replace(".", "_"): m for m in known}
+    resolve = _resolver(drv, known, flat)
     out = []
     for key in sorted(keys):
         m = _DOWN.match(key)
@@ -30,10 +45,7 @@ def lora_pairs(desc, keys):
         up = f"{stem}.{'lora_B' if m.group(2) == 'lora_A' else 'lora_up'}.weight"
         if up not in keys:
             continue
-        if stem.startswith("lora_unet_"):
-            mod = flat.get(stem[len("lora_unet_"):])
-        else:
-            mod = next((stem[len(p):] for p in _PREFIXES if stem.startswith(p)), stem)
+        mod = resolve(stem)
         alpha = f"{stem}.alpha"
         out.append((mod, key, up, alpha if alpha in keys else None))
     return out
@@ -42,19 +54,16 @@ def lora_pairs(desc, keys):
 def lokr_modules(desc, keys):
     """-> [(module or None, stem)] for every LoKR module in `keys` (stem = the key prefix before .lokr_*)."""
     keys = set(keys)
-    known = {m for g in desc.load_driver().block_map() for b in g.blocks for m in b.modules}
-    flat = {m.replace(".", "_"): m for m in known}
+    drv = desc.load_driver()
+    known = {m for g in drv.block_map() for b in g.blocks for m in b.modules}
+    resolve = _resolver(drv, known, {m.replace(".", "_"): m for m in known})
     out = []
     for key in sorted(keys):
         m = _LOKR.match(key)
         if not m:
             continue
         stem = m.group(1)
-        if stem.startswith("lora_unet_"):
-            mod = flat.get(stem[len("lora_unet_"):])
-        else:
-            mod = next((stem[len(p):] for p in _PREFIXES if stem.startswith(p)), stem)
-        out.append((mod, stem))
+        out.append((resolve(stem), stem))
     return out
 
 
