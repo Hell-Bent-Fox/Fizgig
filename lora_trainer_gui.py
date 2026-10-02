@@ -20576,9 +20576,9 @@ class LoRATrainerGUI:
         self._add_tab_banner(
             outer,
             "Profiler",
-            "See what a LoRA actually does. Krea 2 and Qwen Image 2.1: each block switched off in turn and "
-            "measured - picture change, likeness and bleed - plus how much rank the LoRA really uses. Klein: "
-            "activation profile; MiniMax H3: weights. Repair Studio reads every report inline.",
+            "See what a LoRA actually does: which blocks carry the likeness, which cause bleed, and how much rank "
+            "it really uses. The full profile works on Krea 2 and Qwen Image 2.1; MiniMax H3 and Klein are coming "
+            "soon and keep their earlier profiles until then. Repair Studio reads every report inline.",
         )
 
         # Model family selector. Klein's activation cards (DiT choice, prompt, resolution, stages) show for Klein
@@ -20602,6 +20602,9 @@ class LoRATrainerGUI:
                                   command=self._on_profiler_family_changed)
             _rb._fizgig_described_family = _d.key
             _rb.pack(side=tk.LEFT, padx=(20, 0))
+        self._profiler_soon_label = tk.Label(
+            fam_card, text="", font=HINT_FONT, fg=COLORS["text_explain"], bg=COLORS["bg_surface"], anchor="w",
+            justify=tk.LEFT, wraplength=700)
 
         # Card 1: Model selection
         model_card = self._start_section_card(
@@ -20771,6 +20774,16 @@ class LoRATrainerGUI:
                 pass
 
         driver = self._profiler_desc() is not None
+        soon = getattr(self, "_profiler_soon_label", None)
+        if soon is not None:
+            name = {"klein": "Klein 9B", "minimax": "MiniMax H3"}.get(self.profiler_family_var.get())
+            if name and not driver:
+                soon.configure(text=f"The full profile (likeness, bleed and rank, measured by rendering) is coming to "
+                                    f"{name} soon. Until then {name} has its earlier "
+                                    f"{'activation' if name.startswith('Klein') else 'weights'} profile.")
+                soon.pack(anchor=tk.W, pady=(8, 0))
+            else:
+                soon.pack_forget()
         fam = getattr(self, "_profiler_fam_container", None)
         if driver:
             _show(fam, getattr(self, "_profiler_run_container", None))
