@@ -215,6 +215,10 @@ class FamilyDescription:
     # Fast Identity Mode: the block ids a standard LoRA trains alone when it is on (the measured identity blocks).
     # Everything before the first of them runs forward only, so it is faster. () = no Fast Identity Mode.
     identity_blocks: tuple = ()
+    # Model Area to Train: ((name, (block ids...), (min_t, max_t) or None), ...) - () blocks = every block, a window
+    # (0-1, 0 = clean) fills the Timestep Range. The first entry is the default; the Training tab adds "Custom" (pick
+    # blocks) and shows the Timestep Range (0-1000) for a family that has areas. () = neither control
+    train_areas: tuple = ()
 
     # things a user or a later session must know, with sources
     notes: tuple = ()

@@ -6166,6 +6166,9 @@ class LoRATrainerGUI:
                 "distribution shape within the min/max range.\n"
                 "Only effective when min/max timestep is set.")
         self.entries["PRESERVE_DISTRIBUTION"] = self.preserve_dist_var
+        # the rows a family with its own timestep rule hides (_family_train_area_rows)
+        self._ts_rule_rows = (preset_btn_frame, ts_sampling_label, self.ts_sampling_combo, self.ts_sigmoid_label,
+                              self.entries["SIGMOID_SCALE"], self.preserve_dist_check)
         ts_row += 1
 
         # --- Hidden fields (not used by Klein 9B) ---
@@ -7667,6 +7670,10 @@ class LoRATrainerGUI:
                  FAMILY_FT=self._family_ft_on(desc), FAMILY_FT_FUSED=bool(self.entries["FAMILY_FT_FUSED"].get()),
                  FAMILY_SLIDER_ULTRA=bool(self.entries["FAMILY_SLIDER_ULTRA"].get()),
                  FAMILY_FAST_ID=bool(self.entries["FAMILY_FAST_ID"].get()),
+                 **({"FAMILY_TRAIN_AREA": self.training_preset_var.get(),
+                     # the Custom picker is Klein's layout (double_blocks.N / single_blocks.N) -> block ids
+                     "FAMILY_TRAIN_BLOCKS": [k.replace("_blocks.", "_") for k, v in self.training_block_vars.items()
+                                             if v.get()]} if desc.train_areas else {}),
                  **{k: str(self.entries[k].get()).strip() for k in (
                      "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY", "FAMILY_FT_ROTATE_EVERY", "FAMILY_FT_REG_DIR",
                      "FAMILY_FT_REG_MULT")},
@@ -9197,6 +9204,30 @@ class LoRATrainerGUI:
             for w in (self.labels["NETWORK_TYPE"], self._network_type_rowf):
                 self._set_widget_visible(w, False)
         self._family_edit_rows()
+        self._family_train_area_rows(desc)
+
+    def _family_train_area_rows(self, desc):
+        """Model Area to Train and the Timestep Range for a family whose description has train_areas (Klein): the
+        area names + Custom in the dropdown, the range row shown, the old sampler / sigmoid / preserve rows hidden
+        (the driver owns its timestep rule). Nothing changes for a family without areas."""
+        ts_rows = self._ts_rule_rows
+        if desc is None or not desc.train_areas:
+            for w in ts_rows:               # the old Klein section shows them (a no-op unless an area family hid them)
+                self._set_widget_visible(w, True)
+            return
+        names = [a[0] for a in desc.train_areas] + ["Custom"]
+        for w in (self._modelarea_label, self._modelarea_combo, self._modelarea_desc_label):
+            self._set_widget_visible(w, True)
+        self._modelarea_combo.configure(values=names)
+        if self.training_preset_var.get() not in names:
+            self.training_preset_var.set(names[0])
+        self._set_training_section_visible("timestep", "optimizer", True)
+        for w in ts_rows:
+            self._set_widget_visible(w, False)
+        try:
+            self._on_training_preset_changed()
+        except Exception:
+            pass
 
     def _apply_refmod_visibility(self):
         """MiniMax H3 RefMod: the Training tab is Output + the RefMod card. Every other
@@ -18585,7 +18616,12 @@ class LoRATrainerGUI:
         if min_entry is None or max_entry is None:
             return
 
-        if preset == "Style":
+        _desc = self._family_desc()
+        _area = next((a for a in _desc.train_areas if a[0] == preset), None) if _desc is not None else None
+        if _area is not None:       # a standard-layer family's own area: its timestep window, if it has one
+            min_val, max_val = ((str(round(_area[2][0] * 1000)), str(round(_area[2][1] * 1000))) if _area[2]
+                                else ("", ""))
+        elif preset == "Style":
             min_val, max_val = "0", "400"
         else:  # Full Model, Identity, Style+Composition, Details
             min_val, max_val = "", ""

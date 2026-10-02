@@ -9,6 +9,7 @@ from fizgig.families.description import FamilyDescription, LoRAFormat, ModelFile
 _BFL = "black-forest-labs"
 _DOUBLE = ("img_attn.qkv", "img_attn.proj", "img_mlp.0", "img_mlp.2",
            "txt_attn.qkv", "txt_attn.proj", "txt_mlp.0", "txt_mlp.2")
+_STYLE_COMP = tuple(f"double_{i}" for i in range(8)) + ("single_0", "single_1")
 
 KLEIN = FamilyDescription(
     key="klein_driver",
@@ -46,6 +47,16 @@ KLEIN = FamilyDescription(
     n_blocks=32,                      # 8 double-stream + 24 single-stream blocks (Klein9BParams)
     block_prefix="double_blocks",
     block_note="Block ids follow the old Repair Studio (double_0-7, single_0-23), so its saved presets apply.",
+
+    # Model Area to Train, the old Training tab's areas and their block patterns (lora_trainer_gui.py, Klein's
+    # include_patterns): Style trains the style+composition blocks at the late (clean) timesteps 0-400
+    train_areas=(
+        ("Full Model", (), None),
+        ("Identity", tuple(f"single_{i}" for i in range(1, 17)), None),
+        ("Style", _STYLE_COMP, (0.0, 0.4)),
+        ("Style+Composition", _STYLE_COMP, None),
+        ("Details", tuple(f"single_{i}" for i in range(12, 24)), None),
+    ),
 
     lora=LoRAFormat(
         key_template="lora_unet_double_blocks_{block}_{module}.{ab}.weight",

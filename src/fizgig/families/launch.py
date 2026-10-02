@@ -106,6 +106,28 @@ def _ft_int(inputs, key, default):
         return None
 
 
+def area_blocks(desc, inputs):
+    """The block ids the Model Area to Train setting trains (FAMILY_TRAIN_AREA; "Custom" = FAMILY_TRAIN_BLOCKS), or
+    [] for every block."""
+    name = _s(inputs.get("FAMILY_TRAIN_AREA"))
+    if name == "Custom":
+        return [b for b in (inputs.get("FAMILY_TRAIN_BLOCKS") or []) if b]
+    area = next((a for a in desc.train_areas if a[0] == name), None)
+    return list(area[1]) if area else []
+
+
+def timestep_flags(inputs):
+    """The Timestep Range (MIN/MAX_TIMESTEP, 0-1000 as the Training tab shows it) as the trainer's 0-1 window."""
+    out = []
+    for key, flag in (("MIN_TIMESTEP", "--min_timestep"), ("MAX_TIMESTEP", "--max_timestep")):
+        try:
+            v = float(_s(inputs.get(key)))
+        except ValueError:
+            continue
+        out += [flag, f"{min(max(v, 0.0), 1000.0) / 1000.0:g}"]
+    return out
+
+
 def caches(desc, inputs):
     """Whether the cache stages run: not on a resume (the cache is already built), not for a prompt slider (no
     photos), not with Enable Cache off."""
@@ -417,6 +439,12 @@ def train_command(desc, inputs, plan):
     if (desc.identity_blocks and st.get("FAMILY_FAST_ID")
             and not (slider_on(desc, st) or edit_on(desc, st) or ft_on(desc, st))):
         cmd += ["--train_blocks", ",".join(desc.identity_blocks)]
+    elif desc.train_areas and not (slider_on(desc, st) or ft_on(desc, st)):
+        blocks = area_blocks(desc, st)
+        if blocks:
+            cmd += ["--train_blocks", ",".join(blocks)]
+    if desc.train_areas and not ft_on(desc, st):
+        cmd += timestep_flags(st)
     if slider_on(desc, st):
         if desc.slider_ultra_blocks and st.get("FAMILY_SLIDER_ULTRA"):
             cmd += ["--train_blocks", ",".join(desc.slider_ultra_blocks)]
