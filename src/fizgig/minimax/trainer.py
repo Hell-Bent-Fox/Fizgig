@@ -5817,6 +5817,8 @@ def train_minimax(
         if ema is not None:
             ema.swap_out()
     logger.info(f"saved final LoRA: {final}")
+    # the last epoch under its number too (#176): a resumed run that extends this one would overwrite the plain name
+    shutil.copyfile(final, os.path.join(output_dir, f"{output_name}-{max_train_epochs:06d}.safetensors"))
     if save_state_on_train_end and max_train_epochs > start_epoch:
         # Non-fatal: the final LoRA is already on disk; dying here would turn a finished run red.
         try:

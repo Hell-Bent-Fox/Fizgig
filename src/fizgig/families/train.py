@@ -372,8 +372,6 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
                 else:
                     lats.append(driver.generate(dit, cond, width, height, steps=steps, seed=seed + i, cfg=cfg,
                                                 neg_cond=neg, **ref_kw))
-        if slider:
-            net.set_trainable_multiplier(1.0)
         park = lowmem and not swapped      # a swapped DiT is already mostly on CPU; moving it would undo the layout
         if park:                            # #123: never hold the training DiT and the VAE decode together
             _preview_vram("before decode")
@@ -387,6 +385,8 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
             (_slider_strip(frames, SLIDER_PREVIEW_MULTIPLIERS) if slider else frames[0]).save(p)
             paths.append(p)
     finally:
+        if slider:
+            net.set_trainable_multiplier(1.0)  # a preview that failed mid-dial must not leave the LoRA scaled
         if lowmem and not swapped:
             quant.move(dit, device)
             _preview_vram("after decode, DiT restored")
@@ -1032,9 +1032,23 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                 ema.swap_out()
         logger.info(f"[save] {path}")
 
+    previews_off = [False]
+
     def previews(epoch):
-        if encoded is None:
+        """The epoch's previews. A preview that fails (out of memory, say) switches previews off for the rest of the
+        run and training carries on, as the original Krea 2 trainer did: a picture is never worth the run."""
+        if encoded is None or previews_off[0]:
             return
+        try:
+            _previews(epoch)
+        except Exception as exc:
+            previews_off[0] = True
+            logger.warning(f"[previews] the epoch {epoch} preview failed ({type(exc).__name__}: {str(exc)[:200]}) - "
+                           f"previews are off for the rest of this run; training continues", exc_info=True)
+            gc.collect()
+            torch.cuda.empty_cache()
+
+    def _previews(epoch):
         conds, w, h, sd, prompts = encoded, sample_width, sample_height, sample_seed, sample_prompts
         ov = _read_sample_override(output_dir)
         if ov:
@@ -1235,6 +1249,10 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         logger.info(f"Fine-tune complete -> {final}")
         return final
     save_lora(final, max_train_epochs)
+    # the last epoch under its number too (#176): a resumed run that extends this one ends on the same plain name, and
+    # without a numbered copy that epoch would be overwritten and lost
+    import shutil
+    shutil.copyfile(final, os.path.join(output_dir, f"{output_name}-{max_train_epochs:06d}.safetensors"))
     if save_state_on_train_end:
         state(max_train_epochs)
     logger.info(f"Training complete -> {final}")
