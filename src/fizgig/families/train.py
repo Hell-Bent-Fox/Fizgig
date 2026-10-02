@@ -544,7 +544,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  sample_height=None, sample_steps=None, sample_cfg_scale=None, sample_negative=None,
                  sample_at_first=False, sample_seed=42, sample_reference=None, sample_image=None,
                  slider_pairs=False, slider_diff_weight=1.0, slider_prompts=None, slider_guidance=3.0,
-                 train_blocks=None,
+                 train_blocks=None, fast_identity=False,
                  slider_bank=16, slider_bank_res=768,
                  metadata_title=None, metadata_author=None, metadata_description=None, metadata_license=None,
                  metadata_tags=None, metadata_trigger_phrase=None, metadata_thumbnail=None,
@@ -937,53 +937,25 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     accum = 1 if slider else max(1, int(gradient_accumulation_steps or 1))
     updates_per_epoch = math.ceil(steps_per_epoch / accum)
 
-    # Gradient checkpointing off when it fits (the description's ckpt_off_gb): ~25-45% faster steps for roughly twice
-    # the activation memory. The first step runs checkpointed and its real peak is measured; the off peak is that plus
-    # the description's extra, scaled to the largest bucket and to the share of blocks the gradient passes through
-    # (a LoRA on late blocks only - Fast Identity Mode - needs less). It switches off only if that fits what this
-    # process can really use (what it holds + what the card has free now, less 1 GB), and the allocator is capped at
-    # exactly that, so running out RAISES instead of spilling into system memory (on Windows a spill only crawls). A
-    # step that runs out frees itself, switches checkpointing back on, lifts the cap and is repeated: the run goes on.
+    # Fast Identity Mode (the description's identity_blocks): with so few blocks training, the activations of the
+    # blocks the gradient passes through fit on a big card without gradient checkpointing, ~30% faster again
+    # (Qwen, 2 Oct 2026: 3.80 vs 2.90 it/s, peak 20.9 vs 14.1 GB at 0.25 MP). The allocator is capped below the card
+    # so running out raises instead of spilling into system memory (on Windows a spill only crawls); a step that runs
+    # out turns checkpointing back on and repeats.
     ckpt_off = [False]
-    ckpt_gpu = [None]
-    ckpt_plan = [False]
-    _extra = (desc.ckpt_off_gb or {}).get(precision)
-    if gradient_checkpointing and _extra and torch.cuda.is_available():
-        why_not = ("block swap is on" if swapped else "gradient accumulation is on" if accum > 1 else
-                   "this is a slider" if slider else "this is a fine-tune" if ftr is not None else
-                   "the blocks are compiled (the checkpoint lives inside the compiled graph)" if do_compile else "")
-        if why_not:
-            logger.info(f"[checkpointing] stays on: {why_not}")
-        else:
-            ckpt_plan[0] = True
-
-    def _plan_ckpt_off():
-        """After the first (checkpointed) step: switch checkpointing off if the predicted peak fits."""
+    if fast_identity and gradient_checkpointing and not swapped and accum == 1 and not slider and ftr is None \
+            and torch.cuda.is_available():
         _dev = torch.device(device)
-        gpu = _dev.index if _dev.index is not None else torch.cuda.current_device()   # "cuda" carries no index
-        try:
-            mp_max = max(w * h / 1e6 for ds in group.datasets for (w, h) in ds.batch_manager.bucket_resos)
-        except Exception:
-            mp_max = 0.25
-        order = [b.id for g in driver.block_map(dit) for b in g.blocks]
-        share = 1.0
-        if train_blocks:
-            first = min((order.index(b) for b in train_blocks if b in order), default=0)
-            share = (len(order) - first) / max(1, len(order))
-        peak_on = torch.cuda.max_memory_allocated(gpu) / 1024 ** 3
-        need = peak_on + _extra * max(1.0, mp_max / 0.25) * share
-        free, total = torch.cuda.mem_get_info(gpu)
-        usable = (torch.cuda.memory_reserved(gpu) + free) / 1024 ** 3 - 1.0
-        if need > usable:
-            logger.info(f"[checkpointing] stays on: off would need ~{need:.1f} GB ({peak_on:.1f} measured + "
-                        f"{need - peak_on:.1f} estimated at {mp_max:.2f} MP), {usable:.1f} GB usable")
-            return
-        driver.enable_gradient_checkpointing(dit, False)
-        torch.cuda.set_per_process_memory_fraction(min(1.0, usable * 1024 ** 3 / total), gpu)
-        ckpt_off[0], ckpt_gpu[0] = True, gpu
-        logger.info(f"[checkpointing] off for speed: ~{need:.1f} GB of {usable:.1f} GB usable ({peak_on:.1f} measured "
-                    f"+ {need - peak_on:.1f} estimated at {mp_max:.2f} MP). If a step runs out of memory it switches "
-                    f"back on by itself and the step is repeated.")
+        _gpu = _dev.index if _dev.index is not None else torch.cuda.current_device()   # "cuda" carries no index
+        _total = torch.cuda.get_device_properties(_gpu).total_memory / 1024 ** 3
+        if _total >= 23.5:
+            driver.enable_gradient_checkpointing(dit, False)
+            torch.cuda.set_per_process_memory_fraction(0.94, _gpu)
+            ckpt_off[0] = True
+            logger.info(f"[fast identity] {_total:.0f} GB card: gradient checkpointing off for speed (it comes back "
+                        f"on by itself if a step runs out of memory)")
+        else:
+            logger.info(f"[fast identity] {_total:.0f} GB card: gradient checkpointing stays on")
 
     def _ckpt_back_on():
         """A step ran out of memory with checkpointing off: free it, switch checkpointing on, lift the cap."""
@@ -993,10 +965,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         gc.collect()
         torch.cuda.empty_cache()
         driver.enable_gradient_checkpointing(dit, True)
-        torch.cuda.set_per_process_memory_fraction(1.0, ckpt_gpu[0])
-        gc.collect()
-        torch.cuda.empty_cache()
-        logger.warning("[checkpointing] a step ran out of memory with checkpointing off - it is back on for the rest "
+        torch.cuda.set_per_process_memory_fraction(1.0, _gpu)
+        logger.warning("[fast identity] out of memory with gradient checkpointing off - it is back on for the rest "
                        "of the run and this step is repeated")
     if accum > 1:
         logger.info(f"[grad_accum] {accum} micro-batches per optimizer step (effective batch {accum}); "
@@ -1199,9 +1169,6 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             if pending >= accum:
                 _update()
             global_step += 1
-            if ckpt_plan[0]:
-                ckpt_plan[0] = False
-                _plan_ckpt_off()
             recorder.add(epoch=epoch, step=i, loss=loss.item())
             watch.observe(epoch + 1, global_step, batch, _info.get("t", 0.5), loss.item())
             progress.set_postfix(avr_loss=f"{recorder.moving_average:.4f}", refresh=False)
@@ -1356,6 +1323,9 @@ def setup_parser():
                    help="Slider from three prompts, no images (needs --text_encoder and --vae)")
     p.add_argument("--slider_guidance", type=float, default=3.0, help="Prompt-pair slider: how hard to push")
     p.add_argument("--slider_bank", type=int, default=16, help="Prompt-pair slider: practice images to render")
+    p.add_argument("--fast_identity", action="store_true",
+                   help="Fast Identity Mode: with --train_blocks on the identity blocks, gradient checkpointing goes "
+                        "off on cards that fit it (back on by itself if a step runs out of memory)")
     p.add_argument("--train_blocks", default="",
                    help="Comma-separated block ids (the driver's block map) to train; empty = every block")
     p.add_argument("--slider_bank_res", type=int, default=768, help="Prompt-pair slider: practice image size")
@@ -1431,6 +1401,7 @@ def main():
         slider_pairs=a.slider_pairs, slider_diff_weight=a.slider_diff_weight, slider_prompts=a.slider_prompts,
         slider_guidance=a.slider_guidance, slider_bank=a.slider_bank, slider_bank_res=a.slider_bank_res,
         train_blocks=[b.strip() for b in a.train_blocks.split(",") if b.strip()] or None,
+        fast_identity=a.fast_identity,
         metadata_title=a.metadata_title, metadata_author=a.metadata_author,
         metadata_description=a.metadata_description, metadata_license=a.metadata_license,
         metadata_tags=a.metadata_tags, metadata_trigger_phrase=a.metadata_trigger_phrase or a.trigger_word,

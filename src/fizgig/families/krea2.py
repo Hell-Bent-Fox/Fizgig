@@ -100,9 +100,6 @@ KREA2 = FamilyDescription(
     # the text-fusion boosts (15 Sep 2026, #137): the four text-fusion blocks at x2 / x3, everything else untouched.
     # Measured across several LoRAs, x3 lifted the detail metric ~72 -> ~77 and likeness 2-7 points on every LoRA but
     # an overtrained one, composition unchanged
-    # checkpointing off (2 Oct 2026, 5090, 40 photos, 0.25 MP, rank 8, no compile): INT8 15.3 -> 28.9 GB, 1.37 ->
-    # 1.72 it/s (0.37 MP: out of memory on 32 GB); NF4 runs out at once - it keeps dequantised weights for backward.
-    ckpt_off_gb={"int8": 13.6},
     repair_presets=tuple((f"✨Text fusion ×{m} (experimental)",
                           tuple((f"txt_{s}_{i}", float(m)) for s in ("lw", "rf") for i in range(2)))
                          for m in (2, 3)),
