@@ -19931,11 +19931,12 @@ class LoRATrainerGUI:
         ttk.Label(inf_card, text="Faster training when there's room:").grid(row=3, column=0, sticky=tk.W,
                                                                            padx=(0, 10), pady=(10, 4))
         ttk.Checkbutton(
-            inf_card, text="Use spare memory to train Krea 2 and Qwen Image 2.1 faster (recommended)",
+            inf_card, text="Let Krea 2 and Qwen Image 2.1 training switch gradient checkpointing off when it fits "
+                           "(recommended)",
             variable=self.prefs_vars["train_ckpt_off"], onvalue="1", offvalue="0",
         ).grid(row=3, column=1, sticky=tk.W, pady=(10, 4))
-        tk.Label(inf_card, text="On by default. About 25-45% faster steps when the card has room; training can then use most of "
-                                "the card's free memory. Untick to leave memory free for other apps on the same GPU.",
+        tk.Label(inf_card, text="About 25-45% faster steps, but training then uses most of the card's free memory. "
+                                "Untick to keep checkpointing on and leave VRAM free for other apps on the same GPU.",
                  font=(FONT_FAMILY, 9), fg=COLORS["text_muted"], bg=COLORS["bg_surface"], wraplength=720,
                  justify=tk.LEFT).grid(row=4, column=1, sticky=tk.W, padx=5, pady=(0, 4))
 
