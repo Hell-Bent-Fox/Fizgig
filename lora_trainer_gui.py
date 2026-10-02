@@ -20576,21 +20576,20 @@ class LoRATrainerGUI:
         self._add_tab_banner(
             outer,
             "Profiler",
-            "Analyze a LoRA's per-block signature. Klein: full activation profile (5-bucket report). "
-            "Krea 2, MiniMax H3 and Qwen Image 2.1: weight-only profile (flat per-block — no block-role map yet). "
-            "All write a sidecar the Repair Studio reads inline.",
+            "See what a LoRA actually does. Krea 2 and Qwen Image 2.1: each block switched off in turn and "
+            "measured - picture change, likeness and bleed - plus how much rank the LoRA really uses. Klein: "
+            "activation profile; MiniMax H3: weights. Repair Studio reads every report inline.",
         )
 
-        # Model family selector. Every family but Klein is a weight-only profile — no pipeline,
-        # prompt, resolution or stages — so those cards are hidden for them.
+        # Model family selector. Klein's activation cards (DiT choice, prompt, resolution, stages) show for Klein
+        # only; driver families get the "What to measure" card, MiniMax H3 neither (weights only).
         _pfam = str(self.last_used.get("profiler_family", "klein"))
         if _pfam not in ("klein", "minimax") and self._profiler_desc(_pfam) is None:
             _pfam = "klein"
         self.profiler_family_var = tk.StringVar(value=_pfam)
         fam_card = self._start_section_card(
             outer, "Model Family",
-            "Klein 9B (activation profile), MiniMax H3, Krea 2 or Qwen Image 2.1 (weight-only — the instrument "
-            "to discover each family's block roles). Browsing a LoRA auto-switches to its family.",
+            "Browsing a LoRA switches to its family.",
         )
         _pf = tk.Frame(fam_card, bg=COLORS["bg_surface"])
         _pf.pack(anchor=tk.W)
@@ -20662,6 +20661,61 @@ class LoRATrainerGUI:
         ttk.Combobox(options_row, textvariable=self.profiler_stages_var,
                      values=["3", "5", "8", "10"], state="readonly", width=4).pack(side=tk.LEFT)
 
+        # Card 4b (driver families): what each block does, measured by rendering
+        fam_opts = self._start_section_card(
+            outer, "What to measure",
+            "Find out what each block of the LoRA actually does: it renders the LoRA, then again with each block "
+            "switched off, and reports how much each block changes the picture, carries the likeness and causes "
+            "bleed (other people starting to look like your subject). Weights only is instant and shows how much "
+            "rank the LoRA really uses.")
+        self._profiler_fam_container = fam_opts.master.master
+        fam_opts.grid_columnconfigure(1, weight=1)
+        self.profiler_fam_mode_var = tk.StringVar(value=str(self.last_used.get("profiler_fam_mode", "quick")))
+        _mr = tk.Frame(fam_opts, bg=COLORS["bg_surface"])
+        _mr.grid(row=0, column=0, columnspan=3, sticky=tk.W, pady=(0, 8))
+        for _v, _t in (("weights", "Weights only (instant)"), ("quick", "Quick (1 seed)"),
+                       ("thorough", "Thorough (2 seeds, steadier)")):
+            ttk.Radiobutton(_mr, text=_t, variable=self.profiler_fam_mode_var, value=_v,
+                            command=self._profiler_fam_mode_changed).pack(side=tk.LEFT, padx=(0, 18))
+        self._profiler_fam_render_rows = []
+        ttk.Label(fam_opts, text="Prompt:").grid(row=1, column=0, sticky=tk.W, padx=(0, 10), pady=4)
+        self.profiler_fam_prompt_var = tk.StringVar(value="")
+        _e = ttk.Entry(fam_opts, textvariable=self.profiler_fam_prompt_var, width=60)
+        _e.grid(row=1, column=1, columnspan=2, sticky=tk.EW, pady=4)
+        _h = tk.Label(fam_opts, text="With the trigger word, e.g. \"zwxem, a portrait photo of a woman\". Filled in from "
+                                     "the LoRA's trigger when it has one.", font=HINT_FONT, fg=COLORS["text_explain"],
+                      bg=COLORS["bg_surface"], anchor="w", justify=tk.LEFT, wraplength=700)
+        _h.grid(row=2, column=1, columnspan=2, sticky=tk.W)
+        ttk.Label(fam_opts, text="Bleed check:").grid(row=3, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 4))
+        self.profiler_fam_class_var = tk.StringVar(value="")
+        _c = ttk.Entry(fam_opts, textvariable=self.profiler_fam_class_var, width=60)
+        _c.grid(row=3, column=1, columnspan=2, sticky=tk.EW, pady=(10, 4))
+        _h2 = tk.Label(fam_opts, text="Optional: the same prompt WITHOUT the trigger. With the LoRA loaded it should "
+                                      "still look like anyone; the report shows which blocks pull it toward your subject.",
+                       font=HINT_FONT, fg=COLORS["text_explain"], bg=COLORS["bg_surface"], anchor="w",
+                       justify=tk.LEFT, wraplength=700)
+        _h2.grid(row=4, column=1, columnspan=2, sticky=tk.W)
+        ttk.Label(fam_opts, text="Subject photos:").grid(row=5, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 4))
+        self._profiler_fam_baselines = []
+        self.profiler_fam_base_var = tk.StringVar(value="None (picture change only)")
+        _br = tk.Frame(fam_opts, bg=COLORS["bg_surface"])
+        _br.grid(row=5, column=1, columnspan=2, sticky=tk.W, pady=(10, 4))
+        ttk.Button(_br, text="Pick 3 photos…", command=self._profiler_pick_baselines).pack(side=tk.LEFT)
+        ttk.Button(_br, text="Clear", command=lambda: self._profiler_set_baselines([])).pack(side=tk.LEFT,
+                                                                                            padx=(6, 10))
+        tk.Label(_br, textvariable=self.profiler_fam_base_var, fg=COLORS["text_secondary"], bg=COLORS["bg_surface"],
+                 font=(FONT_FAMILY, 10)).pack(side=tk.LEFT)
+        _h3 = tk.Label(fam_opts, text="Optional, for a person LoRA: three photos of the subject turn on the likeness and "
+                                      "bleed scores (face recognition). Taken from the run's sample gallery when it "
+                                      "already has them.", font=HINT_FONT, fg=COLORS["text_explain"],
+                       bg=COLORS["bg_surface"], anchor="w", justify=tk.LEFT, wraplength=700)
+        _h3.grid(row=6, column=1, columnspan=2, sticky=tk.W)
+        ttk.Label(fam_opts, text="Size:").grid(row=7, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 4))
+        self.profiler_fam_res_var = tk.StringVar(value="768")
+        ttk.Combobox(fam_opts, textvariable=self.profiler_fam_res_var, values=["512", "768", "1024"],
+                     state="readonly", width=6).grid(row=7, column=1, sticky=tk.W, pady=(10, 4))
+        self._profiler_fam_render_rows = [w for w in fam_opts.grid_slaves() if int(w.grid_info()["row"]) >= 1]
+
         # Card 5: Run
         run_card = self._start_section_card(outer, "Run", None)
         self._profiler_run_container = run_card.master.master
@@ -20669,6 +20723,8 @@ class LoRATrainerGUI:
         run_row.pack(anchor=tk.W)
         self.profiler_run_btn = ttk.Button(run_row, text="Profile LoRA", command=self._run_profiler, style="Primary.TButton")
         self.profiler_run_btn.pack(side=tk.LEFT, padx=(0, 12))
+        self.profiler_stop_btn = ttk.Button(run_row, text="Stop", command=self._profiler_stop, state="disabled")
+        self.profiler_stop_btn.pack(side=tk.LEFT, padx=(0, 12))
         self.profiler_open_btn = ttk.Button(run_row, text="Open Report", command=self._open_profiler_report, state="disabled")
         self.profiler_open_btn.pack(side=tk.LEFT)
 
@@ -20697,9 +20753,8 @@ class LoRATrainerGUI:
         self._apply_profiler_family_ui()
 
     def _apply_profiler_family_ui(self):
-        """Every family but Klein profiles weight-only — hide the activation-probe cards
-        (Model/Prompt/Options). Re-show (Klein) uses before= anchors so the cards land back
-        in their canonical order."""
+        """Klein's activation-probe cards (Model/Prompt/Options) for Klein only; the driver families' "What to
+        measure" card for them. Re-shows use before= anchors so the cards land back in their canonical order."""
         weight_only = self.profiler_family_var.get() == "minimax" or self._profiler_desc() is not None
 
         def _show(cont, before):
@@ -20712,6 +20767,13 @@ class LoRATrainerGUI:
             except Exception:
                 pass
 
+        driver = self._profiler_desc() is not None
+        fam = getattr(self, "_profiler_fam_container", None)
+        if driver:
+            _show(fam, getattr(self, "_profiler_run_container", None))
+            self._profiler_fam_mode_changed()
+        elif fam is not None:
+            fam.pack_forget()
         if weight_only:
             for cont in (getattr(self, "_profiler_model_container", None),
                          getattr(self, "_profiler_prompt_container", None),
@@ -20726,6 +20788,72 @@ class LoRATrainerGUI:
             _show(getattr(self, "_profiler_options_container", None), getattr(self, "_profiler_run_container", None))
             _show(getattr(self, "_profiler_prompt_container", None), getattr(self, "_profiler_options_container", None))
             _show(getattr(self, "_profiler_model_container", None), getattr(self, "_profiler_lora_container", None))
+
+    def _profiler_fam_mode_changed(self):
+        """Weights only needs no prompt or photos: grey those rows out."""
+        mode = self.profiler_fam_mode_var.get()
+        for w in getattr(self, "_profiler_fam_render_rows", []):
+            try:
+                w.configure(state="disabled" if mode == "weights" else "normal")
+            except Exception:
+                for c in w.winfo_children():
+                    try:
+                        c.configure(state="disabled" if mode == "weights" else "normal")
+                    except Exception:
+                        pass
+        try:
+            self.last_used["profiler_fam_mode"] = mode
+        except Exception:
+            pass
+
+    def _profiler_set_baselines(self, paths):
+        self._profiler_fam_baselines = list(paths)
+        self.profiler_fam_base_var.set(", ".join(os.path.basename(p) for p in paths) if paths
+                                       else "None (picture change only)")
+
+    def _profiler_pick_baselines(self):
+        paths = filedialog.askopenfilenames(
+            title="Pick 3 photos of the subject",
+            filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp"), ("All files", "*.*")],
+            initialdir=self.image_folder_var.get().strip() or None)
+        if not paths:
+            return
+        if len(paths) != 3:
+            messagebox.showwarning("Profiler", "Pick exactly 3 photos of the subject (one alone carries its own "
+                                               "framing into every score).")
+            return
+        self._profiler_set_baselines(paths)
+
+    def _profiler_prefill_from_lora(self, lora_path):
+        """Trigger-word prompts and the run's gallery baselines, when the LoRA has them (only fills empty boxes)."""
+        try:
+            from safetensors import safe_open
+            with safe_open(lora_path, "pt") as f:
+                md = f.metadata() or {}
+        except Exception:
+            md = {}
+        trig = (md.get("modelspec.trigger_phrase") or md.get("ss_trigger_word") or "").strip()
+        if not self.profiler_fam_prompt_var.get().strip():
+            self.profiler_fam_prompt_var.set(f"{trig + ', ' if trig else ''}a portrait photo of a person, natural light")
+        if not self.profiler_fam_class_var.get().strip():
+            self.profiler_fam_class_var.set("a portrait photo of a person, natural light")
+        if not self._profiler_fam_baselines:
+            try:
+                import json as _json
+                sdir = os.path.join(os.path.dirname(lora_path), "sample")
+                lk = _json.load(open(os.path.join(sdir, "likeness.json"), encoding="utf-8"))
+                ds = _json.load(open(os.path.join(sdir, "dataset.json"), encoding="utf-8")).get("folder", "")
+                paths = [os.path.join(ds, b) for b in lk.get("baselines", [])]
+                if len(paths) == 3 and all(os.path.isfile(p) for p in paths):
+                    self._profiler_set_baselines(paths)
+            except Exception:
+                pass
+
+    def _profiler_stop(self):
+        eng = getattr(self, "_profiler_engine", None)
+        if eng is not None:
+            eng.request_cancel()
+            self.profiler_progress_var.set("Stopping after this render…")
 
     def _profiler_desc(self, fam=None):
         """The FamilyDescription behind the Profiler selector, or None for Klein / Krea 2 / H3."""
@@ -20766,6 +20894,11 @@ class LoRATrainerGUI:
                     self._on_profiler_family_changed()
             except Exception:
                 pass
+            if self._profiler_desc() is not None:
+                self.profiler_fam_prompt_var.set("")
+                self.profiler_fam_class_var.set("")
+                self._profiler_set_baselines([])
+                self._profiler_prefill_from_lora(filepath)
 
     def _browse_profiler_file(self, var):
         filepath = filedialog.askopenfilename(
@@ -20849,51 +20982,147 @@ class LoRATrainerGUI:
         thread.start()
 
     def _run_profiler_family(self, desc, lora_path):
-        """Standard-layer family: weight-only profile laid out by the driver's block map. No pipeline, fast."""
+        """Standard-layer family: the weights report (instant), or with Quick / Thorough the measured profile -
+        the LoRA rendered whole, off, and with each block off, through the same workbench engine as Repair Studio
+        (families/block_profile.py). Runs in a thread; Stop cancels at the next denoising step."""
         import threading
+        mode = self.profiler_fam_mode_var.get()
+        self._profiler_prefill_from_lora(lora_path)
+        prompt = self.profiler_fam_prompt_var.get().strip()
+        class_prompt = self.profiler_fam_class_var.get().strip()
+        if mode != "weights" and not prompt:
+            messagebox.showerror("Profiler", "Enter a prompt (with the LoRA's trigger word, if it has one).")
+            return
+        plan = None
+        if mode != "weights":
+            paths = {r: self.prefs_vars.get(desc.pref_for(r), tk.StringVar()).get().strip()
+                     for r in ("dit", "vae", "text_encoder")}
+            labels_ = {f.role: f.label for f in desc.model_files}
+            for role, pth in paths.items():
+                if not pth or not os.path.exists(pth):
+                    messagebox.showerror("Profiler", f"{labels_.get(role, role)} path not set or not found.\n"
+                                                     "Configure it on the Preferences tab.")
+                    return
+            dit, speed_path, ck = self._workbench_preview_model(desc)
+            plan = dict(dit_path=dit, vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
+                        speed_lora_path=speed_path, preview_sampling=ck, device="cuda",
+                        **self._family_inference_memory())
+        seeds = (1234, 5678) if mode == "thorough" else (1234,)
+        size = int(self.profiler_fam_res_var.get() or 768)
+        baselines = list(self._profiler_fam_baselines)
         self.profiler_run_btn.configure(state="disabled")
         self.profiler_open_btn.configure(state="disabled")
         self.profiler_results.configure(state="normal")
         self.profiler_results.delete(1.0, tk.END)
         self.profiler_results.configure(state="disabled")
-        self.profiler_progress_var.set(f"Profiling ({desc.display_name}, weight-only)…")
+        self.profiler_progress_var.set(f"Profiling ({desc.display_name})…")
+
+        def _ui(fn, *a):
+            self.master.after(0, lambda: fn(*a))
 
         def worker():
+            import time as _time
+            from fizgig.families.block_profile import (renders_needed, run_ablation, verdicts, weight_stats,
+                                                       write_report)
+            from fizgig.families.workbench import RenderCancelled, WorkbenchEngine
+            eng = None
             try:
-                from fizgig.families.weight_profile import profile_weight_only
                 profiles_dir = (self.prefs_vars["profiles_dir"].get() if "profiles_dir" in self.prefs_vars
                                 else os.path.join(OUTPUT_LORAS_DIR, "profiles"))
                 os.makedirs(profiles_dir, exist_ok=True)
                 stem = os.path.splitext(os.path.basename(lora_path))[0]
-                html, sidecar = profile_weight_only(
-                    desc, lora_path, os.path.join(profiles_dir, f"{stem}_{desc.lora_name_suffix}_profile.html"))
+                out = os.path.join(profiles_dir, f"{stem}_{desc.lora_name_suffix}_profile.html")
+                stats = weight_stats(desc, lora_path)
+                labels = {b.id: b.label for g in desc.load_driver().block_map() for b in g.blocks}
+                abl = None
+                if plan is not None:
+                    _ui(self.profiler_progress_var.set, f"Loading {desc.display_name}…")
+                    eng = WorkbenchEngine(desc)
+                    if desc.workbench_follows_samples:
+                        eng.preview_settings = self._samples_settings_for(desc)
+                    self._profiler_engine = eng
+                    _ui(lambda: self.profiler_stop_btn.configure(state="normal"))
+                    eng.ensure_pipeline(**plan)
+                    eng.load_primary(lora_path)
+                    embed, base_embs = None, []
+                    if baselines:
+                        base_embs = [self._ff_embed_cached(pth) for pth in baselines]
+                        if any(e is None for e in base_embs):
+                            _ui(self._profiler_log, "No face found in one of the subject photos - likeness and "
+                                                    "bleed scores are off for this run.\n")
+                            base_embs = []
+                        else:
+                            embed = lambda pil: self._repair_embed_pil(pil)[0]
+                    from fizgig.families.block_profile import conditions
+                    conds = [(c, l) for c, l, _ in conditions(eng, mode == "thorough")]
+                    t0 = _time.time()
+
+                    def prog(done, total, kind, cond):
+                        el = _time.time() - t0
+                        eta = el / done * (total - done) if done else 0
+                        what = dict(conds).get(cond, cond)
+                        bc = " (bleed check)" if kind == "class" else ""
+                        _ui(self.profiler_progress_var.set,
+                            f"Rendering {done}/{total}: {what}{bc} · about {int(eta // 60)}m {int(eta % 60)}s left")
+                    per_block = mode == "thorough"
+                    _ui(self._profiler_log, f"{len(seeds)} seed(s), {size}x{size}: "
+                                            f"{renders_needed(eng, len(seeds), bool(class_prompt), per_block)} "
+                                            "renders.\n")
+                    abl = run_ablation(eng, prompt=prompt, class_prompt=class_prompt, seeds=seeds, width=size,
+                                       height=size, embed=embed, baselines=base_embs, per_block=per_block,
+                                       on_progress=prog)
+                html, sidecar = write_report(desc, lora_path, stats, abl, out, labels)
                 self._profiler_report_path = html
+                lines = [f"{desc.display_name} profile complete.\nReport: {html}\n\n",
+                         f"Rank: {stats['max_rank']} in the file; 95% of the change fits in rank "
+                         f"{stats['rank_for'][0.95]}, 99% in rank {stats['rank_for'][0.99]}.\n"]
+                if abl is not None:
+                    vd = verdicts(abl)
+                    wl = {w: l for w, l, _ in abl["windows"]}
+                    alone = abl["alone"]["trigger"]
+                    g = abl["gain"].get("trigger")
+                    if g is not None and g > 0.03:
+                        lines.append(f"\nLikeness the LoRA adds: +{100 * g:.0f} points.\n")
+                    gb = abl["gain"].get("class")
+                    if gb is not None:
+                        lines.append(f"Bleed into the plain prompt: "
+                                     f"{'+%.0f points' % (100 * gb) if gb > 0.03 else 'none measurable'}.\n")
+                    lines.append("\nEach group of blocks on its own:\n")
+                    cls = abl["alone"].get("class", {})
+                    for w, l, _bs in abl["windows"]:
+                        a = alone[w]
+                        extra = (f", likeness {100 * a['score']:.0f}%" if a.get("score") is not None else "") + \
+                                (f", bleed {100 * cls[w]['score']:.0f}%" if cls.get(w, {}).get("score") is not None
+                                 else "")
+                        lines.append(f"  {l:<26} picture {100 * a['change']:.0f}%{extra} - {vd[w][1]}\n")
+                    lines.append("\nOpen Report for every render and what to do with it.\n")
 
                 def _done():
-                    import json as _json
-                    try:
-                        d = _json.load(open(sidecar, encoding="utf-8"))
-                        labels = {b.id: b.label for g in self._repair_block_groups(desc) for b in g.blocks}
-                        lines = [f"{desc.display_name} weight-only profile complete.\n",
-                                 f"Report: {html}\n\nTop blocks by weight:\n"]
-                        for b in d.get("top_active_blocks", []):
-                            lines.append(f"  {labels.get(b['name'], 'Outside the blocks'):<18} {b['pct']:.1f}%\n")
-                        self._profiler_log("".join(lines))
-                    except Exception:
-                        self._profiler_log(f"Profile complete: {html}\n")
+                    self._profiler_log("".join(lines))
                     self.profiler_progress_var.set("Done.")
-                    self.profiler_run_btn.configure(state="normal")
                     self.profiler_open_btn.configure(state="normal")
                 self.master.after(0, _done)
-            except Exception:
+            except Exception as exc:
                 import traceback
-                err = traceback.format_exc()
+                stopped = isinstance(exc, RenderCancelled)
+                msg = "Stopped.\n" if stopped else traceback.format_exc() + "\n"
 
                 def _fail():
-                    self._profiler_log(err + "\n")
-                    self.profiler_progress_var.set("Error — see results.")
-                    self.profiler_run_btn.configure(state="normal")
+                    self._profiler_log(msg)
+                    self.profiler_progress_var.set("Stopped." if stopped else "Error — see results.")
                 self.master.after(0, _fail)
+            finally:
+                if eng is not None:
+                    try:
+                        eng.reset()
+                    except Exception:
+                        pass
+                self._profiler_engine = None
+
+                def _idle():
+                    self.profiler_run_btn.configure(state="normal")
+                    self.profiler_stop_btn.configure(state="disabled")
+                self.master.after(0, _idle)
         threading.Thread(target=worker, daemon=True).start()
 
     def _run_profiler_h3(self, lora_path):

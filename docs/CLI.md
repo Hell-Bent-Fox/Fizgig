@@ -119,7 +119,7 @@ Klein 9B, Krea 2 and Qwen Image 2.1 share the dataset format and most of the wor
 | INT8 base (`--precision int8`) | ❌ | ✅ | ✅ |
 | torch.compile speedup | ✅ (`--compile` + flags) | ✅ (`--compile_blocks auto`, on by default when it pays) | ❌ |
 | Weight-only extraction (rank reduction, `--samples 0`) | ✅ | ✅ | GUI (Extract tab) |
-| Profiling | ✅ full activation profile | ✅ weight-only (`--krea2`) | GUI (Profiler tab) |
+| Profiling | ✅ full activation profile | ✅ weights (`--family krea2`); rendered on the Profiler tab | ✅ weights (`--family qwen_image21`); rendered on the Profiler tab |
 | Activation-weighted (specialized) extraction | ✅ Klein only | ❌ (needs the Klein pipeline) | ❌ |
 
 Auto-recaption captions with Krea 2's Qwen3-VL-4B, the same model the GUI's Captions tab uses, whichever model you're training; Qwen Image 2.1 passes it as `--captioner`. Klein has none of the four intelligence toggles.
@@ -707,13 +707,13 @@ python src/fizgig/scripts/profile_lora.py \
 
 Use the Distilled DiT for speed. PEFT and LyCORIS LoRAs auto-convert on load.
 
-**Krea 2** — weight-only per-block profile, no models loaded, runs in seconds:
+**Krea 2 and Qwen Image 2.1** — the weights report, no models loaded, runs in seconds:
 
 ```bash
-python src/fizgig/scripts/profile_lora.py --lora my_krea2_subject.safetensors --krea2
+python src/fizgig/scripts/profile_lora.py --lora my_krea2_subject.safetensors --family krea2
 ```
 
-Writes `<name>_krea2_profile.html` next to the LoRA (or pass `--output report.html`) with per-block bars ranked by depth, plus the Repair Studio sidecar. Krea 2's block *roles* aren't mapped yet — this report is the instrument for discovering them, so if you spot patterns, share them on GitHub.
+Writes `<name>_<family>_profile.html` next to the LoRA (or pass `--output report.html`), plus the Repair Studio sidecar: how much of the LoRA's change each rank keeps (what Extract → Fast SVD keeps at that rank) and how big each block's real update is. The rendered profile — each group of blocks on its own and left out, with likeness and bleed scored against photos of your subject — runs on the Profiler tab.
 
 ---
 

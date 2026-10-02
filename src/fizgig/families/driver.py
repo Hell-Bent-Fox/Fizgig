@@ -154,6 +154,12 @@ class FamilyDriver:
             blocks.append(Block(f"block_{i}", f"Block {i}", mods))
         return [BlockGroup("Blocks", blocks)]
 
+    def alias_flat(self, flat: str):
+        """Another trainer's name for one of this model's Linears (e.g. diffusers naming from OneTrainer or
+        AI-Toolkit), flattened with dots as underscores -> this model's flattened name, or None. The loaders look the
+        result up among the model's own Linears, so a family only lists its renames."""
+        return None
+
     def lora_target_names(self, dit) -> list:
         """Dotted module names (relative to dit) of the Linears a LoRA wraps: every module in the block map."""
         return [m for g in self.block_map(dit) for b in g.blocks for m in b.modules]

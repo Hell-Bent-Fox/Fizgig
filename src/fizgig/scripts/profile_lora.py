@@ -27,8 +27,10 @@ logging.basicConfig(level=logging.INFO)
 def main():
     parser = argparse.ArgumentParser(description="Profile a LoRA to map per-block per-timestep activity")
     parser.add_argument("--lora", type=str, required=True, help="Path to LoRA safetensors file")
-    parser.add_argument("--krea2", action="store_true",
-                        help="Krea 2 LoRA: weight-only per-block profile (HTML report + sidecar, no models loaded)")
+    parser.add_argument("--family", type=str, default=None,
+                        help="A driver-system family (krea2, qwen_image21): the weights report - how much rank the "
+                             "LoRA really uses and where its weights are - with no model loaded. The rendered "
+                             "profile (each block group switched off, likeness and bleed) is on the Profiler tab.")
     parser.add_argument("--dit", type=str, default=None, help="Path to Klein 9B DiT checkpoint (Klein mode only)")
     parser.add_argument("--vae", type=str, default=None, help="Path to VAE/AE checkpoint (Klein mode only)")
     parser.add_argument("--text_encoder", type=str, default=None, help="Path to Qwen3-8B checkpoint (Klein mode only)")
@@ -45,22 +47,28 @@ def main():
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
     args = parser.parse_args()
 
-    if args.krea2:
+    if args.family:
+        from fizgig.families.block_profile import weight_stats, write_report
         from fizgig.families.registry import get
-        from fizgig.families.weight_profile import profile_weight_only
-
+        desc = get(args.family)
+        if desc is None:
+            parser.error(f"unknown family {args.family!r}")
         out_html = args.output
         if not out_html.lower().endswith(".html"):
-            out_html = os.path.splitext(args.lora)[0] + "_krea2_profile.html"
-        html, sidecar = profile_weight_only(get("krea2"), args.lora, out_html)
-        print(f"\nKrea 2 weight-only profile:")
+            out_html = os.path.splitext(args.lora)[0] + f"_{desc.lora_name_suffix}_profile.html"
+        labels = {b.id: b.label for g in desc.load_driver().block_map() for b in g.blocks}
+        stats = weight_stats(desc, args.lora)
+        html, sidecar = write_report(desc, args.lora, stats, None, out_html, labels)
+        rf = stats["rank_for"]
+        print(f"\n{desc.display_name} weights profile: rank {stats['max_rank']} in the file; 95% of the change "
+              f"fits in rank {rf[0.95]}, 99% in rank {rf[0.99]}.")
         print(f"  Report:  {html}")
         print(f"  Sidecar: {sidecar}")
         return
 
     if not (args.dit and args.vae and args.text_encoder):
         parser.error("--dit, --vae and --text_encoder are required for Klein activation profiling "
-                     "(or pass --krea2 for a weight-only Krea 2 profile).")
+                     "(or pass --family krea2 / qwen_image21 for a weights profile).")
 
     pipeline = KleinInferencePipeline()
     pipeline.load_models(
