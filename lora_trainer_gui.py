@@ -7580,7 +7580,7 @@ class LoRATrainerGUI:
                 _n = [b.split("_")[-1] for b in _idb]
                 self._family_fastid_hint.configure(
                     text=f"Trains only the identity blocks ({_n[0]}-{_n[-1]}): about 1.5x faster (about 2x on cards with "
-                         "24 GB or more), with the same or very close likeness. The base model's composition and styling stay more intact.")
+                         "24 GB or more), with very close to full-model likeness. The base model's composition and styling stay more intact.")
             self._set_widget_visible(self._family_slider_frame, slider_on)
             self._set_widget_visible(self._family_slider_ultra,
                                      slider_on and bool(desc is not None and desc.slider_ultra_blocks))
