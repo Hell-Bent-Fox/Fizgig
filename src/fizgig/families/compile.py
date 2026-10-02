@@ -177,6 +177,13 @@ def compile_blocks(dit, blocks, blocks_to_swap: int = 0, fp8_scaled: bool = Fals
     _sdpa.prime()
     # A compile failure must cost speed, not the run.
     torch._dynamo.config.suppress_errors = True
+    # Two inductor notices that are expected here, not problems: TF32 stays off on purpose (the LoRA's fp32 maths
+    # would change), and a complex-number op (Qwen's RoPE) runs uncompiled inside the compiled block.
+    import warnings
+    warnings.filterwarnings("ignore", category=UserWarning,
+                            message=r"TensorFloat32 tensor cores for float32 matrix multiplication available")
+    warnings.filterwarnings("ignore", category=UserWarning,
+                            message=r"Torchinductor does not support code generation for complex operators")
 
     # fullgraph=True refuses to compile around a graph break instead of quietly degrading. The
     # known break (attn_params.seqlens[0].item(), a device sync in the trim check) was fixed
