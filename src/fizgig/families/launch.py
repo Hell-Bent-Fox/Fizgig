@@ -41,7 +41,8 @@ import re
 from dataclasses import dataclass, field
 
 PRECISION_LABELS = {"auto": "Auto (fits your free VRAM)", "bf16": "bf16 (full precision)",
-                    "int8": "INT8 (8-bit, fastest)", "nf4": "4-bit NF4 (smallest)"}
+                    "int8": "INT8 (8-bit, fastest)", "nf4": "4-bit NF4 (smallest)",
+                    "hqq": "4-bit HQQ (more accurate 4-bit)"}
 PAIR_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 

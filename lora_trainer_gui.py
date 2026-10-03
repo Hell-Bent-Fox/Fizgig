@@ -9194,7 +9194,7 @@ class LoRATrainerGUI:
         for w in (self._family_precision_label, self.entries["FAMILY_PRECISION"], self._family_precision_hint):
             self._set_widget_visible(w, many)
         if many:
-            opts = ["auto"] + [p for p in ("bf16", "int8", "nf4") if p in desc.precisions]
+            opts = ["auto"] + [p for p in ("bf16", "int8", "nf4", "hqq") if p in desc.precisions]
             labels = {**self._FAMILY_PRECISION_LABELS, **desc.precision_labels}
             self.entries["FAMILY_PRECISION"].configure(values=[labels[p] for p in opts])
             if self.entries["FAMILY_PRECISION"].get() not in self.entries["FAMILY_PRECISION"].cget("values"):

@@ -238,15 +238,16 @@ class FamilyDriver:
         dit.offloader = streamer
         dit.blocks_to_swap = 1
 
-    # ---- the preview decode's memory ---------------------------------------------------------------
-    def park_for_decode(self, dit, device):
-        """Make room for the preview decode next to the resident training model. None (the default) = the shared
-        rule (small cards park the whole DiT on CPU); anything else is a token for unpark_after_decode, the driver
-        having done (or decided against) its own park - H3 parks only as many tail blocks as the decode needs."""
+    # ---- room beside the training model (preview decode, override encode) ----------------------------
+    def park_for(self, dit, device, need_gb, purpose: str):
+        """Make `need_gb` free next to the resident training model (None = the driver's own figure for a preview
+        decode). None (the default) = the shared rule (small cards park the whole DiT on CPU for a decode; an encode
+        parks it when the text encoder does not fit); anything else is a token for unpark, the driver having done
+        (or decided against) its own park - H3 parks only as many tail blocks as are missing, ring-aware."""
         return None
 
-    def unpark_after_decode(self, dit, device, token) -> None:
-        """Undo park_for_decode."""
+    def unpark(self, dit, device, token) -> None:
+        """Undo park_for."""
 
     # ---- training previews on the preview checkpoint (descriptions with train_preview_checkpoint) ----------------
     def park_for_preview(self, dit, device):
@@ -274,6 +275,18 @@ class FamilyDriver:
         from fizgig.families.compile import compile_blocks
         compile_blocks(dit, self.compile_targets(dit), blocks_to_swap, boundary=boundary,
                        fullgraph=self.description.compile_fullgraph)
+
+    def plan_run(self, precision: str, blocks_to_swap: int, *, group, run: dict) -> Optional[tuple]:
+        """The family's own Auto plan, or None for the shared one (quant.plan over the description's train_memory).
+        Called when the precision is "auto" or the swap is -1; `run` carries what the plan may weigh (dit_path,
+        network_type / dim, lokr_factor, optimizer_type, training_adapter, context_lora_path, ema_decay, preview
+        frames / size). Returns (precision, blocks_to_swap, why)."""
+        return None
+
+    def load_planned(self, path, device, precision: str, blocks_to_swap: int) -> Optional[tuple]:
+        """Load the base at `precision` with `blocks_to_swap` streamed, the driver's own way - (dit, swapped) - or
+        None for the shared load (quant.load_base: load_dit, quantise, enable_block_swap)."""
+        return None
 
     def auto_uncompiled_precision(self, dit_path: str, precision: str) -> Optional[str]:
         """A precision that beats Auto's pick when this run is not compiled, or None. Klein: its INT8 base is slower

@@ -32,13 +32,116 @@ class MiniMaxDriver(FamilyDriver):
     _allowed = {}
     _uncond = None
 
-    loads_quantized = True            # the file is int8 ConvRot: load_dit returns it ready, nothing re-quantises
-
     # ---- models ---------------------------------------------------------------------------------
     def load_dit(self, path, device):
+        return self.load_planned(path, device, "int8", 0)[0]
+
+    # ---- the base: H3's tiers and rings (the old trainer's plan_base_quant / enable_block_swap) -------------
+    def max_blocks_to_swap(self, dit=None):
+        return 40                     # the old planner's cap (50 blocks, >= 10 resident)
+
+    def plan_run(self, precision, blocks_to_swap, *, group, run):
+        """The old trainer's Auto plan, unchanged: the precision and the streamed-block count chosen together from
+        free VRAM, the run's real adapter size (header shapes, optimizer, frozen LoRAs, EMA shadow) and the
+        dataset's heaviest item (spatial size x clip frames). int8 first (streamed H2D when it does not fit), NF4
+        under the tested streaming floor or when the staging would starve system RAM. Previews are trimmed to the
+        plan up front: a streamed plan leaves ~4 GB, so clips start at 22 frames; a 16 GB-class card caps them at
+        768x640 / 22 frames."""
+        from fizgig.minimax import trainer as T
+        from fizgig.utils.device import plannable_free_vram
+        path = run["dit_path"]
+        free = plannable_free_vram()
+        pruned = T.is_pruned_checkpoint(path)
+        mp = 0.25
+        try:
+            mp = max(k[-2] * k[-1] / 1e6 for ds in group.datasets for k in ds.batch_manager.bucket_resos)
+        except Exception:
+            pass
+        eff, clip_t = T._max_effective_mp(group)
+        if eff > 0:
+            mp = eff
+        if clip_t > 1:
+            logger.info(f"[vram] the heaviest item is a {clip_t}-latent-frame clip - planning against its effective "
+                        f"{mp:.2f} MP (spatial size x frames).")
+        pats = [x for x in T.DEFAULT_INCLUDE_PATTERNS if "token_refiner" not in x]   # the LoRA's 200 block Linears
+        params = T.adapter_param_count(path, pats,
+                                       network_type=run.get("network_type") or "lora",
+                                       network_dim=int(run.get("network_dim") or 16),
+                                       lokr_factor=int(run.get("lokr_factor") or 8))
+        adapter, frozen, ema = T.plan_adapter_gb(params, run.get("optimizer_type") or "adamw8bit",
+                                                 training_adapter_path=run.get("training_adapter"),
+                                                 context_lora_path=run.get("context_lora_path"),
+                                                 ema_decay=run.get("ema_decay") or 0.0)
+        if precision == "auto" and blocks_to_swap >= 0:
+            # a hand-set swap skips the planner: the precision is the file's own, as in the old trainer
+            mode, n = ("int8" if pruned else "nf4"), blocks_to_swap
+            why = (f"chosen from the checkpoint, not from free VRAM, because Blocks Swap is set to {n} rather than "
+                   f"Auto. Set Blocks Swap to Auto to have the precision and the swap count planned together.")
+        elif precision == "auto":
+            mode, n, _ckpt, why = T.plan_base_quant(free, pruned, mp=mp, adapter_gb=adapter)
+        else:
+            mode = precision
+            resident = {"int8": T._RESIDENT_INT8_GB,
+                        "hqq": T._RESIDENT_HQQ_PRUNED_GB if pruned else T._RESIDENT_HQQ_GB}.get(
+                mode, T._RESIDENT_PRUNED_GB if pruned else T._RESIDENT_GB)
+            n, _ckpt = T.plan_vram(free, mp=mp, resident_gb=resident,
+                                   transient_gb=T._INT8_TRANSIENT_GB if mode == "int8" else 0.0, adapter_gb=adapter)
+            why = f"base precision pinned to {mode} by the user"
+        extra = (f" +{frozen:.2f} GB frozen LoRAs" if frozen else "") + (f" +{ema:.2f} GB EMA shadow" if ema else "")
+        logger.info(f"[vram] auto plan: free {free:.1f} GB, largest item {mp:.2f} MP, adapter ~{adapter:.1f} GB "
+                    f"({params / 1e6:.0f} M params){extra} -> {mode}, blocks_to_swap={n}")
+        if mode == "nf4" and pruned and precision == "auto":
+            logger.warning("[vram] this run trains on a 4-bit base (~9% error) instead of the checkpoint's own int8 "
+                           "(~0.17%). It is much faster here, but the LoRA spends some capacity correcting "
+                           "quantization error that will NOT exist at inference. To force the accurate base, set Base "
+                           "Precision to int8 - expect block swap and a slower run - or close other GPU apps and "
+                           "re-launch.")
+        self._plan_previews(n)
+        return mode, n, why
+
+    def _plan_previews(self, n_swap):
+        try:
+            total = torch.cuda.get_device_properties(0).total_memory / 1e9
+        except Exception:
+            total = 99.0
+        frames = int(self.options.get("preview_frames", 1) or 1)
+        if n_swap > 0 and total >= 20.0 and frames > 22:
+            logger.info(f"[preview] the plan streams {n_swap} blocks, which leaves clip previews ~4 GB - {frames} "
+                        f"frames -> 22 up front (a 56-frame 768 clip OOMs at that headroom). Sound kept.")
+            self.options["preview_frames"] = 22
+        if total < 20.0:
+            if frames > 22:
+                self.options["preview_frames"] = 22
+            self._small_card = True
+            logger.info("[preview] 16 GB card: previews cap at 768x640 / 22 frames on this class of GPU (sound kept)")
+
+    def load_planned(self, path, device, precision, blocks_to_swap):
+        """The base at int8 (the file's ConvRot codes), NF4 or HQQ, the last n blocks streamed host->device through
+        the ring that matches their type (rintic-13's int8 / HQQ rings, @mabseyuk's NF4 ring); classic parking if
+        a ring cannot build. AdaLN stays fp32 (not a LoRA target), as in the old --no_train_adaln runs."""
+        import os
         from fizgig.minimax.loader import load_minimax_h3_dit
-        return load_minimax_h3_dit(path, device=device, compute_dtype=DTYPE, quantize=True,
-                                   base_quant="int8").requires_grad_(False)
+        mode = precision if precision in ("int8", "nf4", "hqq") else "int8"
+        n = max(0, int(blocks_to_swap or 0))
+        dit = load_minimax_h3_dit(path, device=device, compute_dtype=DTYPE, quantize=True, blocks_to_swap=n,
+                                  base_quant=mode, adaln_fp32=True).requires_grad_(False)
+        if n > 0:
+            ring = mode == "int8" or os.environ.get("FIZGIG_NO_NF4_H2D") != "1"
+            n = dit.enable_block_swap(n, h2d_only=ring, ring_size=2)
+            off = getattr(dit, "_h2d_offloader", None)
+            if off is not None:
+                gb = getattr(off, "staged_gb", None)
+                gb = n * 0.39 if gb is None else gb
+                staging = ("pinned in RAM" if not getattr(off, "_pin_failed", False) else
+                           "staged in ordinary RAM (pinning unavailable or RAM too tight) - copies synchronous")
+                logger.info(f"[vram] block swap active: last {n} blocks streamed H2D-only "
+                            f"({getattr(off, 'kind', '?')}, ring 2, ~{gb:.1f} GB {staging}) - no writeback, "
+                            f"prefetch overlaps compute")
+            else:
+                logger.info(f"[vram] block swap active: last {n} blocks parked on CPU (~{n * 0.34:.1f} GB VRAM "
+                            f"freed, packed {mode} in RAM)")
+        self._n_swap = n
+        return dit, n
 
     def enable_gradient_checkpointing(self, dit, on=True):
         dit.enable_gradient_checkpointing(bool(on))
@@ -264,6 +367,9 @@ class MiniMaxDriver(FamilyDriver):
         the resolution down the standard sizes to 512. Both caps stick for later epochs; a resolution step prints the
         marker the GUI writes back into the Samples tab. At the floor of both it re-raises."""
         from fizgig.minimax.trainer import clip_fallback_frames, next_preview_res
+        if getattr(self, "_small_card", False):
+            from fizgig.minimax.trainer import cap_preview_res_small_card
+            width, height = cap_preview_res_small_card(width, height)
         cap = getattr(self, "_res_cap", None)
         if cap and (cap[0] < width or cap[1] < height):
             width, height = min(width, cap[0]), min(height, cap[1])
@@ -316,26 +422,28 @@ class MiniMaxDriver(FamilyDriver):
                 self._res_cap = (nw, nh)
                 print(f"[preview] resolution settled: {nw}x{nh}", flush=True)
 
-    def park_for_decode(self, dit, device):
-        """The old previews' decode park: the clip / still decode wants ~7.5 GB free; on a card that cannot offer it
-        beside the resident base, only the missing gigabytes (+1) of tail blocks go to CPU (park_dit_partial) - every
-        extra gigabyte moved is paging churn and a slower restore on a WDDM card. Stills included."""
+    def park_for(self, dit, device, need_gb, purpose):
+        """The old trainer's park: when the card cannot offer `need_gb` beside the resident base (the decode wants
+        ~7.5 GB, an override encode the text encoder + 2), only the missing gigabytes (+1) of tail blocks go to CPU
+        (park_dit_partial, which unbinds a streaming ring first) - every extra gigabyte moved is paging churn and a
+        slower restore on a WDDM card."""
         from fizgig.minimax.trainer import park_dit_partial
         from fizgig.utils.device import plannable_free_vram
+        need_gb = 7.5 if need_gb is None else need_gb
         gc.collect()
         torch.cuda.empty_cache()
         free = plannable_free_vram()
-        if free >= 7.5:
+        if free >= need_gb:
             return False
-        need = (7.5 - free) + 1.0
-        logger.info(f"[preview] {free:.1f} GB free is too tight for decode - parking ~{need:.1f} GB of tail blocks "
-                    f"for this decode pass.")
+        need = (need_gb - free) + 1.0
+        logger.info(f"[preview] {free:.1f} GB free is too tight for {purpose} - parking ~{need:.1f} GB of tail blocks "
+                    f"for this pass.")
         park_dit_partial(dit, need_gb=need)
         gc.collect()
         torch.cuda.empty_cache()
         return True
 
-    def unpark_after_decode(self, dit, device, token):
+    def unpark(self, dit, device, token):
         if token:
             from fizgig.minimax.trainer import restore_parked_dit
             restore_parked_dit(dit, device, getattr(self, "_n_swap", 0))     # swap-aware: never the whole base

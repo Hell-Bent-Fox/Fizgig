@@ -68,7 +68,9 @@ MINIMAX = FamilyDescription(
     training_adapter="minimax_circlestone_adapter",    # the old default for photos (v6.3.0); Ostris for clips comes later
     training_adapter_note=("Keeps H3 LoRA training stable: frozen at 1.0 for every training step, off for previews "
                            "and never in your saved file."),
-    precisions=("int8",),             # the native int8 ConvRot base (quant tiers + rings come with the H3 port)
+    # the checkpoint's own int8 ConvRot codes, or a 4-bit base (NF4, HQQ); Auto is the driver's plan_run (the old
+    # planner), which streams blocks H2D rather than giving up the int8 base
+    precisions=("int8", "nf4", "hqq"),
     optimizers=("automagic3", "adamw8bit", "adamw"),
     optimizer_weight_decay=1e-4,      # the old trainer's (ai-toolkit's job template); bnb's default is 1e-2
     optimizer_eps_floor_8bit=True,

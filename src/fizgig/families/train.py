@@ -224,7 +224,8 @@ def _encode_override(driver, te_path, prompt, dit, device, parkable=True, refere
     encoder when VRAM is short)."""
     from fizgig.families import quant
     te_gb = os.path.getsize(te_path) / 1024 ** 3 if te_path and os.path.exists(te_path) else 0.0
-    park = parkable and quant.free_vram_gb() < te_gb + 2.0
+    tok = driver.park_for(dit, device, te_gb + 2.0, "the override prompt's text encoder")
+    park = tok is None and parkable and quant.free_vram_gb() < te_gb + 2.0
     if park:
         quant.move(dit, "cpu")
         torch.cuda.empty_cache()
@@ -242,6 +243,8 @@ def _encode_override(driver, te_path, prompt, dit, device, parkable=True, refere
             del te
             torch.cuda.empty_cache()
     finally:
+        if tok is not None:
+            driver.unpark(dit, device, tok)
         if park:
             quant.move(dit, device)
 
@@ -399,7 +402,7 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
                 else:
                     lats.append(driver.generate(dit, cond, width, height, steps=steps, seed=seed + i, cfg=cfg,
                                                 neg_cond=neg, **ref_kw))
-        tok = None if swapped else driver.park_for_decode(dit, device)
+        tok = driver.park_for(dit, device, None, "decode")   # None = the shared rule below
         if tok is not None:
             done.add("decode_park")
         park = lowmem and not swapped and tok is None   # a swapped DiT is already mostly on CPU
@@ -418,7 +421,7 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
         if slider:
             net.set_trainable_multiplier(1.0)  # a preview that failed mid-dial must not leave the LoRA scaled
         if "decode_park" in done:
-            driver.unpark_after_decode(dit, device, tok)
+            driver.unpark(dit, device, tok)
         if "lowmem_park" in done:
             quant.move(dit, device)
             _preview_vram("after decode, DiT restored")
@@ -832,8 +835,15 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         req = (precision, blocks_to_swap)
         res = user_config.get("general", {}).get("resolution") or [1024, 1024]
         mp = (res[0] * res[1] if isinstance(res, (list, tuple)) else res * res) / 1e6
-        precision, blocks_to_swap, why = quant.plan(desc, driver, precision, blocks_to_swap, megapixels=mp)
-        why += f" at {mp:.2f} MP"
+        own = driver.plan_run(precision, blocks_to_swap, group=group, run=dict(
+            dit_path=dit_path, network_type=network_type, network_dim=network_dim, lokr_factor=lokr_factor,
+            optimizer_type=optimizer_type, training_adapter=training_adapter, context_lora_path=context_lora_path,
+            ema_decay=ema_decay))
+        if own is not None:
+            precision, blocks_to_swap, why = own
+        else:
+            precision, blocks_to_swap, why = quant.plan(desc, driver, precision, blocks_to_swap, megapixels=mp)
+            why += f" at {mp:.2f} MP"
         logger.info(f"[precision] Auto plan: {precision}, block swap {blocks_to_swap} ({why}); asked {req}")
 
     # ---- torch.compile (Krea 2's rule), decided here on the empty card as the original does - the free VRAM its
