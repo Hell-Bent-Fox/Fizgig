@@ -66,6 +66,9 @@ MINIMAX = FamilyDescription(
     ema_default="0.98",               # the old H3 default (v5.4.1)
     precisions=("int8",),             # the native int8 ConvRot base (quant tiers + rings come with the H3 port)
     optimizers=("automagic3", "adamw8bit", "adamw"),
+    optimizer_weight_decay=1e-4,      # the old trainer's (ai-toolkit's job template); bnb's default is 1e-2
+    optimizer_eps_floor_8bit=True,
+    trainable_dtype="bf16",           # the old trainer: network.to(device, dtype=bfloat16)    # the old trainer's 8-bit Adam eps 1e-6 (minimax/trainer.py create_optimizer)
     network_types=("lora", "lokr"),
 
     sampling=(

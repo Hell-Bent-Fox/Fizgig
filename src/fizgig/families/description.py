@@ -190,6 +190,13 @@ class FamilyDescription:
     # {} = Auto just takes the first precision
     train_memory: dict = field(default_factory=dict)
     optimizers: tuple = ("adamw8bit", "adamw")
+    # optimizer settings a family's own trainer applied (only when Optimizer Args doesn't set them): an Adam-family
+    # weight decay, and the 8-bit Adam eps floor of 1e-6 (training/optimizers.create_optimizer eps_floor_8bit - H3's
+    # fix for 8-bit second moments underflowing on its most structured tensors)
+    optimizer_weight_decay: Optional[float] = None
+    optimizer_eps_floor_8bit: bool = False
+    # the trainable adapter's weights: "fp32" (the layer's) or "bf16" (MiniMax H3's old trainer)
+    trainable_dtype: str = "fp32"
     # Automagic v3 keeps one learning rate per parameter group: (group name, (substrings of the dotted module
     # name, ...)) splits the LoRA so each family of modules finds its own rate; the first match wins, the rest form
     # "other". () = one group

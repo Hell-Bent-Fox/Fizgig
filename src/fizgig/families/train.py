@@ -672,7 +672,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  recaption_instruction_detailed=None, captioner=None,
                  finetune=False, ft_rotations=10, ft_save_every_rotations=1, ft_rotate_every=1, ft_start_window=0,
                  ft_epochs_done=0, ft_fused_backward=False, reg_lr_multiplier=0.2, preview_checkpoint=None,
-                 preview_checkpoint_cache="auto", preview_int8=False):
+                 preview_checkpoint_cache="auto", preview_int8=False, family_options=None):
     desc = get_family(family)
     if desc is None or not desc.training_ready:
         raise RuntimeError(f"unknown or untrainable family {family!r}")
@@ -681,6 +681,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         raise RuntimeError("A Context LoRA trains a LoRA on top of another one; a fine-tune trains the base model "
                            "itself, so the two don't combine. Drop --context_lora_path.")
     driver = desc.load_driver()
+    driver.set_options(dict(family_options or {}))      # before the data: an option may shape the dataset
     arch = desc.arch_id
     speed_desc = desc.preview_speed() if speed_lora else None
     if speed_lora and speed_desc is None:
@@ -899,6 +900,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     if gradient_checkpointing:
         driver.enable_gradient_checkpointing(dit, True)
     net = FamilyLoRA(dit, driver, device=device)
+    driver.prepare_training(dit, group)
     if training_adapter:
         n = net.add_file(training_adapter, ADAPTER, training_adapter_strength)
         if n == 0:
@@ -1003,7 +1005,12 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                 optimizer_args = f"{optimizer_args or ''} polarity_history={desc.automagic_sign_window}".strip()
                 logger.info(f"[optimizer] Automagic v3: sign window {desc.automagic_sign_window} (this family's "
                             f"default; set polarity_history in Optimizer Args to override)")
-        optimizer, opt_label = create_optimizer(optimizer_type, opt_params, learning_rate, optimizer_args)
+        _oargs = optimizer_args or ""
+        if (desc.optimizer_weight_decay is not None and "weight_decay" not in _oargs
+                and "adam" in str(optimizer_type or "").lower()):
+            _oargs = (_oargs + f" weight_decay={desc.optimizer_weight_decay:g}").strip()
+        optimizer, opt_label = create_optimizer(optimizer_type, opt_params, learning_rate, _oargs,
+                                                eps_floor_8bit=desc.optimizer_eps_floor_8bit)
     if owns_its_rate(optimizer):        # Automagic v3 sets its own rate: the watcher and schedulers stand down
         if adaptive_lr:
             logger.info("[adaptive_lr] ignored - the optimizer sets its own learning rate")
@@ -1187,6 +1194,22 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     dit.train()
     pending = 0                            # micro-batches backpropagated since the last optimizer step
 
+    _block_params = {}
+
+    def _step_freeze(blocks):
+        """requires_grad off for the trainable adapter's parameters in `blocks` (block ids); returns them."""
+        if not blocks:
+            return []
+        if not _block_params:
+            from fizgig.families.lora import TRAINABLE as _TR
+            for _full, _w in net.wrapped.items():
+                if _TR in _w.adapters:
+                    _block_params.setdefault(driver.block_of(_full), []).extend(_w.adapters[_TR].parameters())
+        out = [p for b in blocks for p in _block_params.get(b, ())]
+        for p in out:
+            p.requires_grad_(False)
+        return out
+
     def _update():
         nonlocal pending
         if ftr is not None and ftr.fused is not None:
@@ -1257,6 +1280,9 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                 cond = driver.batch_cond(batch, device)
                 refs = [batch[k].to(device) for k in sorted((k for k in batch if k.startswith("latents_control_")),
                                                             key=lambda k: int(k.rsplit("_", 1)[1]))]
+                # per-step routing (a family's step_frozen_blocks): those blocks' trainable weights sit out this
+                # step's forward and backward, so the backward stops at the first trained block and they get no grad
+                _frozen_now = _step_freeze(driver.step_frozen_blocks(batch))
                 loss, _info = driver.training_loss(dit, latents, cond, gen, min_t=min_timestep, max_t=max_timestep,
                                                    **({"refs": refs} if refs else {}))
                 if pending == 0 and optimizer is not None:
@@ -1267,6 +1293,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                     mult = watch.multiplier(batch)  # per-image LR (batch size 1): the raw loss is still what's recorded
                 _scaled = loss * mult if mult != 1.0 else loss
                 (_scaled / accum if accum > 1 else _scaled).backward()
+                for _p in _frozen_now:
+                    _p.requires_grad_(True)
             pending += 1
             if pending >= accum:
                 _update()
@@ -1413,6 +1441,8 @@ def setup_parser():
     p.add_argument("--sample_negative", default=None)
     p.add_argument("--sample_at_first", action="store_true")
     p.add_argument("--sample_seed", type=int, default=42)
+    p.add_argument("--family_option", action="append", default=[], metavar="KEY=VALUE",
+                   help="a family's own training option (the driver's set_options), e.g. photo_blocks=20-49")
     p.add_argument("--preview_checkpoint", default=None,
                    help="Render training previews on this checkpoint (families with train_preview_checkpoint)")
     p.add_argument("--preview_checkpoint_cache", default="auto", choices=("auto", "on", "off"),
@@ -1518,7 +1548,8 @@ def main():
         ft_rotate_every=a.ft_rotate_every, ft_start_window=a.ft_start_window, ft_epochs_done=a.ft_epochs_done,
         ft_fused_backward=a.ft_fused_backward, reg_lr_multiplier=a.reg_lr_multiplier,
         preview_checkpoint=a.preview_checkpoint, preview_checkpoint_cache=a.preview_checkpoint_cache,
-        preview_int8=a.preview_int8)
+        preview_int8=a.preview_int8,
+        family_options=dict(o.split("=", 1) for o in a.family_option if "=" in o))
 
 
 if __name__ == "__main__":

@@ -92,6 +92,21 @@ class FamilyDriver:
         called for families whose media include "clip" / "voice"."""
         return ""
 
+    # ---- family training options (optional) ------------------------------------------------------
+    options = {}
+
+    def set_options(self, options: dict) -> None:
+        """The run's --family_option KEY=VALUE pairs, before the dataset is built (an option may shape it)."""
+        self.options = dict(options)
+
+    def prepare_training(self, dit, group) -> None:
+        """After the DiT and the LoRA are built, before the first step: install model-side training state (H3:
+        TREAD, the caption-dropout embed). Default: nothing."""
+
+    def step_frozen_blocks(self, batch: dict):
+        """Block ids whose trainable weights sit out this item's step (per-modality routing). Default: none."""
+        return ()
+
     def batch_cond(self, batch: dict, device) -> dict:
         """The conditioning dict training_loss gets for one loaded item: the cached `cond__` entries, batched. A
         family that keeps its own cache layout (H3's hidden_states + audio rows) maps its keys here."""
