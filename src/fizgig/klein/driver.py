@@ -82,6 +82,20 @@ class KleinDriver(FamilyDriver):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+    def compile_blocks(self, dit, boundary="inside", blocks_to_swap=0):
+        """Both block lists through the shared compile (families/compile.py). Klein's blocks checkpoint themselves;
+        once a list is accepted for compiling, the shared wrapper does the checkpoint and each block's own is switched
+        off (before the first trace) - a refused list keeps its own, so it never runs without one."""
+        from fizgig.families.compile import compile_blocks
+        for blocks in (dit.double_blocks, dit.single_blocks):
+            originals = list(blocks)
+            compile_blocks(dit, blocks, blocks_to_swap, boundary=boundary,
+                           fullgraph=self.description.compile_fullgraph)
+            if blocks[0] is originals[0]:
+                return                      # refused (and logged): run eager, checkpointing as before
+            for b in originals:
+                b.gradient_checkpointing = False
+
     def enable_gradient_checkpointing(self, dit, on=True):
         if on:
             dit.enable_gradient_checkpointing()

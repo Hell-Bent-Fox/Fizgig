@@ -94,7 +94,13 @@ KLEIN = FamilyDescription(
     optimizers=("adamw8bit", "adamw"),
     network_types=("lora", "lokr"),
     adaptive_lr_clip_signal=True,     # the old trainer's grad-clip ratio signal (K6)
+    # torch.compile of both block lists (the driver's compile_blocks); graph breaks tolerated, as the old trainer's
+    # default. Auto stays off until compile_payback_steps is measured here
+    compiles=True,
+    compile_fullgraph=False,
     edit_training=True,               # Klein is an edit model: references ride after the image tokens
+    edit_note=("Pairs of an original and its edited version, the same crop and shape - about 40 pairs is a good "
+               "start (20 at least). Each photo 1 MP or larger; Fizgig resizes them."),
     slider_training=True,
     train_preview_checkpoint=True,    # the old "Use Distilled model for samples" (on by default)
     preview_checkpoint_sampling=SamplingSettings(
