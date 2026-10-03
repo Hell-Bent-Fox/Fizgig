@@ -320,10 +320,6 @@ class _SliderBank(torch.utils.data.Dataset):
         return {"latents": self.latents[i]}
 
 
-# A slider's learning rate when Automagic was picked (every family's Slider preset trains at it with adamw8bit)
-SLIDER_LR = 2e-4
-
-
 # The dial is the point, so a slider preview shows it moving: one prompt, one seed, these strengths side by side.
 SLIDER_PREVIEW_MULTIPLIERS = (-1.0, 0.0, 1.0)
 
@@ -753,13 +749,6 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             logger.info("[slider] network type %s -> LoRA: a slider is a plain LoRA whose strength is the dial",
                         network_type)
             network_type = "lora"
-        if str(optimizer_type).lower().startswith("automagic"):
-            # the Learning Rate box was Automagic's starting value (H3's presets: 1e-6), not a rate for AdamW - kept,
-            # a slider barely moves; the slider rate every family's Slider preset uses instead
-            logger.info("[slider] optimizer %s -> adamw8bit at %.0e (was %.0e, Automagic's own start): the +1/-1 flip "
-                        "every step reads as noise to an optimizer that sets its own rate", optimizer_type,
-                        SLIDER_LR, learning_rate)
-            optimizer_type, learning_rate = "adamw8bit", SLIDER_LR
         if adaptive_lr or ema_decay or log_per_image_loss or per_image_lr or auto_recaption or warmup_look_outliers:
             logger.info("[slider] adaptive LR, weight averaging and the per-image loss watch are off: they assume "
                         "one target per image, and a slider step has two")
