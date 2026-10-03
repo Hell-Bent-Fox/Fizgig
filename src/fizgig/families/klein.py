@@ -148,12 +148,12 @@ KLEIN = FamilyDescription(
                               "prompt. Empirical-mu schedule.",
                          source="src/fizgig/klein/model_utils.py KLEIN_MODEL_INFO['klein-base-9b'], get_schedule"),
     ),
-    preview_steps=20,
-    preview_cfg=1.0,                  # the old SAMPLE_CFG_SCALE default
+    preview_steps=40,                 # the old Klein entry's Base sample defaults: 40 steps, CFG 4.5, 768x768
+    preview_cfg=4.5,
     preview_cfg_note="Base has no guidance embed, so CFG is the only guidance: 1 = none (the negative prompt is "
                      "ignored); about 3.5 to 4.5 gives guided previews.",
-    preview_width=1024,
-    preview_height=1024,
+    preview_width=768,
+    preview_height=768,
     presets=(
         ("✨ Old Reliable (rank 16, full model, single subject)", _preset(16, 1e-4, 55, "Full Model", ("1e-4", "4e-4"))),
         ("✨ Old Reliable - Flavour 8 (rank 8, full model, single subject)",

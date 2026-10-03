@@ -5326,16 +5326,16 @@ class LoRATrainerGUI:
         self.entries["FAMILY_EMA"].pack(side=tk.LEFT)
         self._family_ema_hint = ttk.Label(
             training_content,
-            text="Checkpoints and previews come from a running average of the adapter's recent steps instead of "
-                 "whichever step the epoch ended on. 0.98 measured best on MiniMax H3 and Krea 2; Off is there for "
-                 "an A/B.",
+            text=self._FAMILY_EMA_HINT,
             foreground=COLORS["text_explain"], font=(FONT_FAMILY, 9, "italic"), justify=tk.LEFT, wraplength=720)
         self._family_ema_hint.grid(row=53, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(0, 4))
         # --- Family options - a described family's own controls (description.options, FamilyOption) ---------
         # Rebuilt per family by _family_options_rows; each control reads and writes the setting of the same key
         # (H3's are the old MINIMAX_* keys), so presets, queued runs and Last Train carry them unchanged.
+        # Training Parameters' rows sit above Multi Concept (where H3's old rows were); section "other" ones go in
+        # Other Options (_family_options_frame_other, built with that section)
         self._family_options_frame = ttk.Frame(training_content)
-        self._family_options_frame.grid(row=60, column=0, columnspan=3, sticky=tk.W, padx=0, pady=(4, 0))
+        self._family_options_frame.grid(row=47, column=0, columnspan=3, sticky=tk.W, padx=0, pady=(4, 0))
         self._family_opt_vars = {}
         self._family_opt_rows = {}
         # --- Edit LoRA — standard-layer families whose model edits images (description.edit_training) ----
@@ -5550,6 +5550,10 @@ class LoRATrainerGUI:
         self.entries["FAMILY_FT_FUSED"] = tk.BooleanVar(value=bool(self.settings.get("FAMILY_FT_FUSED", True)))
         ttk.Checkbutton(_row(), text="Free each gradient as soon as it's used (less memory - recommended)",
                         variable=self.entries["FAMILY_FT_FUSED"]).pack(side=tk.LEFT)
+        # the family's own fine-tune options (FamilyOption mode "finetune" - H3: Train on, Fine-tune blocks)
+        self._family_options_frame_ft = ttk.Frame(_f)
+        self._family_options_frame_ft.grid(row=_r[0], column=0, sticky=tk.W)
+        _r[0] += 1
         _block("Regularisation images (optional)",
                "A folder of ordinary photos of the broader class (men, women, people) with normal detailed captions. "
                "They train at a reduced LR (the multiplier beside the folder) so they hold the model's sense of that "
@@ -5605,6 +5609,8 @@ class LoRATrainerGUI:
         self.collapsible_sections["scheduler"] = scheduler_section
 
         scheduler_content = scheduler_section.get_content_frame()
+        self._family_options_frame_other = ttk.Frame(scheduler_content)
+        self._family_options_frame_other.grid(row=40, column=0, columnspan=3, sticky=tk.W, padx=0, pady=(4, 0))
         scheduler_content.columnconfigure(1, weight=1)
 
         # === Dataset subsection (migrated from the removed Dataset tab) ===
@@ -6476,6 +6482,8 @@ class LoRATrainerGUI:
             _desc = self._family_desc()
             if _desc is not None and _desc.options:      # the family options' controls re-read their settings
                 for _o in _desc.options:
+                    if _o.tab == "model":        # never from a preset
+                        continue
                     if _o.key in preset:
                         self.settings[_o.key] = preset[_o.key]
                     elif _o.setting in preset:      # an old preset: its MINIMAX_* value seeds the option
@@ -7484,7 +7492,7 @@ class LoRATrainerGUI:
         "SAMPLE_SEED", "SAMPLE_EVERY_N_EPOCHS", "SAMPLE_EVERY_N_STEPS",
         "SAMPLE_AT_FIRST", "SAMPLE_FLOW_SHIFT",
         "SAMPLE_NEGATIVE", "SAMPLE_CFG_SCALE", "SAMPLE_FRAMES",
-        "MINIMAX_TURBO_STEPS", "MINIMAX_TURBO_STRENGTH",
+        "MINIMAX_TURBO_STEPS", "MINIMAX_TURBO_STRENGTH", "FAMILY_TURBO_STRENGTH",
         "RESUME_TRAINING",
     }
 
@@ -7861,8 +7869,10 @@ class LoRATrainerGUI:
                                               for v in self._concept_folder_vars]
         # a described family's own options (keys that have no old widget travel this way)
         if _described:
+            _mc = {o.key for o in self._family_model_card_opts()}     # preset-immune, as the old row
             for _k, _v in self._family_options_values(self._family_desc()).items():
-                preset.setdefault(_k, _v)
+                if _k not in _mc:
+                    preset.setdefault(_k, _v)
 
         _grab("preserve_dist_var", "PRESERVE_DISTRIBUTION")
         _grab("fp8_var", "FP8")
@@ -8675,6 +8685,9 @@ class LoRATrainerGUI:
     def _family_option_value(self, opt):
         """An option's current value: its own setting once set, else the old setting it maps (the old widget first),
         else its default - a Samples-tab option always reads that tab's live control. Checks read as "1" / ""."""
+        if opt.tab == "model":           # the Training Base row's own var (old H3 and RefMod share it)
+            var = getattr(self, self._MODEL_CARD_VARS.get(opt.setting, ""), None)
+            return opt.pick(var.get() if var is not None else opt.default)
         e = self.entries.get(opt.setting) if opt.setting else None
         v = None
         if opt.tab == "samples" and e is not None:
@@ -8699,6 +8712,13 @@ class LoRATrainerGUI:
             return opt.pick(v)
         return str(v)
 
+    # A model-card option's control: the existing row's var, keyed by the option's setting
+    _MODEL_CARD_VARS = {"MINIMAX_TRAIN_BASE": "minimax_train_base_var"}
+
+    def _family_model_card_opts(self):
+        d = self._family_desc()
+        return [o for o in (d.options if d is not None else ()) if o.tab == "model"]
+
     def _family_option_store(self, opt, value):
         """An option's value into its own setting (never the old key it was seeded from: the old H3 path reads
         those with its own meanings while both exist)."""
@@ -8719,16 +8739,24 @@ class LoRATrainerGUI:
         """Build the Training tab's card of the family's own controls (none for a family without options), each row
         shown only where it applies to the dataset in the training folder (clips, a mixed voice + picture set)."""
         from fizgig.families import launch as _fl
-        frame = self._family_options_frame
-        for w in frame.winfo_children():
-            w.destroy()
+        frames = {"": self._family_options_frame, "other": self._family_options_frame_other,
+                  "ft": self._family_options_frame_ft}       # a fine-tune option sits in the fine-tune card
+
+        def _sec(o):
+            return "ft" if o.mode == "finetune" else (o.section if o.section in frames else "")
+        for f in frames.values():
+            for w in f.winfo_children():
+                w.destroy()
         self._family_opt_vars, self._family_opt_rows = {}, {}
         opts = [o for o in (desc.options if desc is not None else ()) if o.tab == "training" and o.kind != "fixed"]
-        self._set_widget_visible(frame, bool(opts))
+        for sec, f in frames.items():
+            self._set_widget_visible(f, any(_sec(o) == sec for o in opts))
         if not opts:
             return
-        r = 0
+        rows_at = dict.fromkeys(frames, 0)
         for opt in opts:
+            frame = frames[_sec(opt)]
+            r = rows_at[_sec(opt)]
             val = self._family_option_value(opt)
             row = []
             if opt.kind == "check":
@@ -8752,9 +8780,14 @@ class LoRATrainerGUI:
             r += 1
             hint = ttk.Label(frame, text=opt.hint, foreground=COLORS["text_explain"], font=HINT_FONT,
                              justify=tk.LEFT, wraplength=720)
-            if opt.hint:
+            if opt.hint or opt.choice_notes:
                 hint.grid(row=r, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(0, 2))
                 row.append(hint)
+            if opt.choice_notes:
+                def _note(*_a, o=opt, v=var, h=hint):
+                    h.config(text=dict(o.choice_notes).get(v.get(), o.hint))
+                var.trace_add("write", _note)
+                _note()
             r += 1
             if opt.choice_hints:
                 amber = ttk.Label(frame, text="", foreground=COLORS["warning"],
@@ -8775,6 +8808,7 @@ class LoRATrainerGUI:
             var.trace_add("write", _store)
             self._family_opt_vars[opt.key] = var
             self._family_opt_rows[opt.key] = (opt, row)
+            rows_at[_sec(opt)] = r
         self._family_options_media_refresh()
 
     def _family_options_media_refresh(self, *_a):
@@ -9187,7 +9221,8 @@ class LoRATrainerGUI:
         # selector when that family is picked, hide it otherwise.
         _note = getattr(self, "_minimax_sample_note", None)
         if _note is not None:
-            if is_minimax and not self._is_refmod_arch():   # RefMod has no previews
+            _clipfam = "clip" in getattr(self._family_desc(), "media", ())
+            if (is_minimax and not self._is_refmod_arch()) or _clipfam:   # RefMod has no previews
                 if not _note.winfo_manager():
                     _note.pack(anchor=tk.W, pady=(10, 0))
             elif _note.winfo_manager():
@@ -9197,7 +9232,7 @@ class LoRATrainerGUI:
         _brow = getattr(self, "_minimax_base_frame", None)
         if _brow is not None:
             _bhint = self._minimax_base_hint
-            if is_minimax:
+            if is_minimax or self._family_model_card_opts():
                 if not _brow.winfo_manager():
                     _kw = {"before": _note} if (_note is not None
                                                 and _note.winfo_manager()) else {}
@@ -9267,10 +9302,11 @@ class LoRATrainerGUI:
             self._compile_blocks_hint.configure(text=desc.compile_hint)
         # The per-image loss watch runs for standard-layer families (families/loss_watch.py); auto-recaption only where
         # the family's text encoder can caption images.
+        _lw = bool(desc is not None and desc.loss_watch)
         for w in (self._krea2_losswatch_frame, self._krea2_perimglr_cb, self._krea2_warmuplook_cb,
                   self._krea2_losswatch_hint):
-            self._set_widget_visible(w, desc is not None)
-        self._set_widget_visible(self._krea2_autorecap_cb, self._family_can_caption(desc))
+            self._set_widget_visible(w, _lw)
+        self._set_widget_visible(self._krea2_autorecap_cb, _lw and self._family_can_caption(desc))
         # The FT sub-controls are gated by the checkbox as well as by the family: the family's FT visibility logic
         # also swaps the Network Type rows. Away from MiniMax its FT sub-widgets hide outright.
         if is_minimax:
@@ -9348,9 +9384,10 @@ class LoRATrainerGUI:
         # Adaptive LR is hidden under MiniMax: ticking it silently disabled the governor +
         # warmup (they defer to it). The var is forced off so the greyed-LR-box state and the
         # curated launch dict can't carry a stale True into a run.
+        _no_alr = is_minimax or not getattr(self._family_desc(), "adaptive_lr", True)
         for w in (self._adaptive_cb, self._adaptive_frame, self._adaptive_desc_label):
-            self._set_widget_visible(w, not is_minimax)
-        if is_minimax:
+            self._set_widget_visible(w, not _no_alr)
+        if _no_alr:
             if self.adaptive_lr_var.get():
                 self.adaptive_lr_var.set(False)
                 try:
@@ -9411,6 +9448,8 @@ class LoRATrainerGUI:
         if has_adapter:
             self._family_adapter_hint.config(text=desc.training_adapter_note)
         has_ema = bool(desc is not None and desc.ema_default)
+        if desc is not None:
+            self._family_ema_hint.configure(text=desc.ema_hint or self._FAMILY_EMA_HINT)
         for w in (self._family_ema_label, self._family_ema_frame, self._family_ema_hint):
             self._set_widget_visible(w, has_ema)
         if has_ema:
@@ -9426,9 +9465,12 @@ class LoRATrainerGUI:
         if many:
             opts = ["auto"] + [p for p in ("bf16", "int8", "nf4", "hqq") if p in desc.precisions]
             labels = {**self._FAMILY_PRECISION_LABELS, **desc.precision_labels}
+            _cur = self.entries["FAMILY_PRECISION"].get()
+            _was = next((k for k, v in self._FAMILY_PRECISION_LABELS.items() if v == _cur), None)
             self.entries["FAMILY_PRECISION"].configure(values=[labels[p] for p in opts])
-            if self.entries["FAMILY_PRECISION"].get() not in self.entries["FAMILY_PRECISION"].cget("values"):
-                self.entries["FAMILY_PRECISION"].set(self._FAMILY_PRECISION_LABELS["auto"])
+            if _cur not in self.entries["FAMILY_PRECISION"].cget("values"):
+                # another family's label for the same choice keeps it; anything else is Auto
+                self.entries["FAMILY_PRECISION"].set(labels[_was] if _was in opts else labels["auto"])
             self._family_precision_hint.config(text=desc.precision_hint or (
                 "Auto (recommended) picks at launch from your FREE VRAM: bf16 if it fits, else INT8 (8-bit, about "
                 "half the size and the fastest), else 4-bit NF4 (smallest, slower). Only when none of those fit does "
@@ -10498,6 +10540,9 @@ class LoRATrainerGUI:
         self._refresh_network_type_hint()
         self._save_last_used_paths()
 
+    _FAMILY_EMA_HINT = ("Checkpoints and previews come from a running average of the adapter's recent steps instead "
+                        "of whichever step the epoch ended on. 0.98 measured best on MiniMax H3 and Krea 2; Off is "
+                        "there for an A/B.")
     _NETWORK_HINT_GENERAL = "LoKR: potentially higher quality · LoRA: ~20% faster training"
     _NETWORK_HINT_LOKR = ("LoKR selected: set your learning rate to 5e-5 — or with Adaptive LR, set Max 1e-4 and "
                           "Min 5e-5.")
@@ -10509,8 +10554,9 @@ class LoRATrainerGUI:
         if hint is None:
             return
         try:
-            if self._is_minimax_arch():
-                hint.config(text="LoRA recommended for MiniMax")
+            _nh = getattr(self._family_desc(), "network_hint", "")
+            if self._is_minimax_arch() or _nh:
+                hint.config(text=_nh or "LoRA recommended for MiniMax")
             elif self._network_type_is_lokr():
                 hint.config(text=self._NETWORK_HINT_LOKR)
             else:
@@ -10536,6 +10582,7 @@ class LoRATrainerGUI:
                       and str(combo.get()).strip().lower() == "automagic3")
         except tk.TclError:
             on = False
+        _alr = getattr(self._family_desc(), "adaptive_lr", True)
         cb = getattr(self, "_adaptive_cb", None)
         if cb is not None:
             try:
@@ -10565,7 +10612,7 @@ class LoRATrainerGUI:
         note = getattr(self, "_automagic_note", None)
         if note is not None:
             try:
-                if on:
+                if on and _alr:          # a family without Adaptive LR has nothing for the note to explain
                     note.grid()
                 else:
                     note.grid_remove()
@@ -13432,7 +13479,8 @@ class LoRATrainerGUI:
         """Grey out fields that Distilled overrides when the checkbox is ticked. Klein only: a described family
         renders on its own training model, so a tick left over from Klein must not lock its Steps / CFG (and MiniMax
         H3 sets its own fixed CFG)."""
-        if self._family_desc() is not None or self._is_minimax_arch():
+        _d = self._family_desc()
+        if (_d is not None and not _d.train_preview_checkpoint) or self._is_minimax_arch():
             return
         use_distilled = self.use_distilled_samples_var.get()
         state = "disabled" if use_distilled else "normal"
@@ -13709,7 +13757,8 @@ class LoRATrainerGUI:
                 self._apply_samples_klein_only()
             # ...then let MiniMax override the wording that is still Klein's. Runs AFTER, so the
             # Klein path above is untouched.
-            self._apply_samples_minimax(bool(config.get("is_minimax")))
+            self._apply_samples_minimax(bool(config.get("is_minimax"))
+                                        or "clip" in getattr(self._family_desc(), "media", ()))
             self._on_distilled_samples_toggled()        # Klein's Distilled tick greys its fields; a no-op elsewhere
 
             # Sample length (clip) row — MiniMax only: the other families' preview stacks are
@@ -13781,7 +13830,7 @@ class LoRATrainerGUI:
                 else:
                     _adv_outer.pack(fill=tk.X, padx=36, pady=(0, 16))
         _d = self._family_desc()
-        if _d is not None and not is_minimax:   # a described family's previews: its own CFG wording, not Klein's
+        if _d is not None and not is_minimax and not _d.train_preview_checkpoint:   # its own CFG wording
             _t = dict(_t, flow=f"Not used for {_d.display_name} previews",
                       neg="Used when CFG Scale is above 1",
                       cfg=_d.preview_cfg_note or "1 = no CFG. Above 1 the negative prompt applies.")
@@ -13860,6 +13909,14 @@ class LoRATrainerGUI:
         speed_on = bool(sp and sp.pref_key and self._krea2_pref(sp.pref_key)
                         and os.path.exists(self._krea2_pref(sp.pref_key)))
         sp_steps, sp_strength = desc.preview_speed_defaults() or (None, None)
+        if desc.samples_turbo_pace:
+            # H3: its own Turbo preview row (N steps at M%) - the Steps box stays the plain-model count
+            for _w in (getattr(self, "_family_turbo_label", None), self.entries.get("FAMILY_TURBO_STRENGTH")):
+                if _w is not None and _w.winfo_manager():
+                    _w.pack_forget()
+            if hasattr(self, "sample_steps_var") and self.sample_steps_var.get().strip() in ("", str(sp_steps)):
+                self.sample_steps_var.set(str(desc.preview_steps))
+            sp = speed_on = None
         # The Turbo strength box is one widget: each family keeps its own value (last_used["turbo_strengths"]) -
         # switching stores the box for the family left and shows the one entered, or its default (Qwen's 0 must not
         # become Krea 2's).
@@ -13931,6 +13988,8 @@ class LoRATrainerGUI:
                        f"standard one") if speed_on else
                       f"{desc.display_name}: {desc.preview_steps} steps at CFG {desc.preview_cfg:g}"
                       + (f" - set the {sp.name} in Preferences for {sp_steps}-step previews" if sp else "")))
+        if desc.train_preview_checkpoint and hasattr(self, "sample_steps_note"):     # Klein's own line
+            self.sample_steps_note.configure(text="Base samples only — Distilled is locked at 4 steps")
         # the reference row: live where the family's previews take a picture (Krea 2's vision path, Qwen's edits)
         _kind = desc.reference_kind
         if hasattr(self, "sample_ref_entry"):
@@ -33007,6 +33066,8 @@ class LoRATrainerGUI:
                 "FAMILY_EMA": self.entries["FAMILY_EMA"].get(),
                 "FAMILY_PRECISION": self.entries["FAMILY_PRECISION"].get(),
                 "FAMILY_TURBO_STRENGTH": self.entries["FAMILY_TURBO_STRENGTH"].get(),
+                "MINIMAX_TURBO_STEPS": self.entries["MINIMAX_TURBO_STEPS"].get(),
+                "MINIMAX_TURBO_STRENGTH": self.entries["MINIMAX_TURBO_STRENGTH"].get(),
                 "FAMILY_EDIT": self._family_edit_on(),
                 "FAMILY_EDIT_DIR": self.entries["FAMILY_EDIT_DIR"].get().strip(),
                 "FAMILY_EDIT_REF": self.entries["FAMILY_EDIT_REF"].get().strip(),

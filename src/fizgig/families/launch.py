@@ -436,7 +436,7 @@ def train_command(desc, inputs, plan):
     if ctx and not ft_on(desc, st):         # a fine-tune trains the base itself: there is no LoRA to stack on
         cmd += ["--context_lora_path", ctx,
                 "--context_lora_strength", _s(st.get("CONTEXT_LORA_STRENGTH") or "1.0") or "1.0"]
-    if st.get("ADAPTIVE_LR"):
+    if st.get("ADAPTIVE_LR") and desc.adaptive_lr:
         cmd += ["--adaptive_lr",
                 "--adaptive_lr_min", str(st.get("ADAPTIVE_LR_MIN", "1e-4")).split(" ")[0],
                 "--adaptive_lr_max", str(st.get("ADAPTIVE_LR_MAX", "2e-4")).split(" ")[0]]
@@ -487,7 +487,7 @@ def train_command(desc, inputs, plan):
         bs1 = int(str(st.get("batch_size", 1)).strip() or 1) <= 1
     except ValueError:
         bs1 = True
-    lw = st.get("loss_watch") or {}
+    lw = (st.get("loss_watch") or {}) if desc.loss_watch else {}
     watch = [("detect", "--log_per_image_loss"), ("per_image_lr", "--per_image_lr"), ("warmup", "--warmup_look_outliers")]
     can_recaption = bool(st.get("captioner"))   # every family captions with the shared captioner
     if can_recaption:
@@ -578,14 +578,21 @@ def _preview_flags(desc, st, plan, cmd):
         return out
     sp = desc.preview_speed()
     speed_path = (st.get("models") or {}).get(sp.pref_key, "") if sp and sp.pref_key else ""
+    turbo_steps = None
     if speed_path and os.path.exists(speed_path):
         dflt = desc.preview_speed_defaults()[1]
         try:
-            ts = float(str(st.get("FAMILY_TURBO_STRENGTH", "") or dflt))
+            if desc.samples_turbo_pace:        # H3's row: N steps at M% (the Steps box is the plain-model count)
+                ts = float(str(st.get("MINIMAX_TURBO_STRENGTH", "") or round(100 * dflt))) / 100.0
+                turbo_steps = str(st.get("MINIMAX_TURBO_STEPS", "") or "").strip() or str(desc.preview_speed_defaults()[0])
+            else:
+                ts = float(str(st.get("FAMILY_TURBO_STRENGTH", "") or dflt))
         except ValueError:
             ts = dflt
         if ts > 0:                              # strength 0 = previews without the turbo: don't load it
             out += ["--speed_lora", speed_path]
+        else:
+            turbo_steps = None
             if abs(ts - dflt) > 1e-9:
                 out += ["--speed_lora_strength", f"{max(0.0, min(2.0, ts)):g}"]
     samples_dir = st.get("samples_dir") or os.path.join(_s(st.get("LORA_OUTPUT_DIR")), "sample")
@@ -622,7 +629,9 @@ def _preview_flags(desc, st, plan, cmd):
                 "--text_encoder", _model(st, desc, "text_encoder"),
                 "--sample_width", str(sm.get("width") or "").strip() or str(desc.preview_width),
                 "--sample_height", str(sm.get("height") or "").strip() or str(desc.preview_height)]
-        if str(sm.get("steps") or "").strip():
+        if turbo_steps and turbo_steps.isdigit():
+            out += ["--sample_steps", turbo_steps]
+        elif str(sm.get("steps") or "").strip():
             out += ["--sample_steps", str(sm["steps"]).strip()]
         try:
             cfg = float(str(sm.get("cfg") or "").strip() or desc.preview_cfg)

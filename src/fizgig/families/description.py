@@ -118,7 +118,12 @@ class FamilyOption:
     default: str = ""                 # entry text / "1" for a ticked check; a choice defaults to its first label
     hint: str = ""                    # the grey line under the control
     choice_hints: tuple = ()          # (label, amber line) shown while that choice is picked
-    tab: str = "training"             # "training" | "samples"
+    choice_notes: tuple = ()          # (label, grey line) shown in place of the hint while that choice is picked
+    choice_values: tuple = ()         # choice: the old setting's value each choice stands for, in choice order
+    #                                   ("60", "8", ""); "" marks the custom choice any other value lands on
+    tab: str = "training"             # "training" | "samples" | "model" (the Training Base row under the Base
+    #                                   Model picker: never in a preset, carried by Last Train and the queue)
+    section: str = ""                 # training tab: "" = Training Parameters, "other" = Other Options
     setting: str = ""                 # the old settings key this option's value is read from on first use
     show_if_media: str = ""           # shown only when the dataset holds this media kind ("clip", "voice")
     mixed_only: bool = False          # shown only when the dataset mixes voice with photos or clips
@@ -137,6 +142,13 @@ class FamilyOption:
         labels = self.choice_labels()
         if v in labels:
             return v
+        if self.choice_values and v:
+            for lab, cv in zip(labels, self.choice_values):
+                if cv and v == cv:
+                    return lab
+            for lab, cv in zip(labels, self.choice_values):
+                if cv == "":
+                    return lab           # an old value no choice names: the custom choice
         low = v.lower()
         for lab in labels:
             if low and (low in lab.lower() or lab.lower().startswith(low.split(" ")[0])):
@@ -276,6 +288,13 @@ class FamilyDescription:
     # Adaptive LR also treats a grad-clip ratio over 50% of an epoch's steps as a stability signal (Klein's rule,
     # training/adaptive_lr.AdaptiveLR clip_signal)
     adaptive_lr_clip_signal: bool = False
+    adaptive_lr: bool = True          # the Adaptive LR control (off: hidden, never sent - MiniMax H3)
+    loss_watch: bool = True           # the per-image loss watch toggles (off: hidden, never sent - MiniMax H3)
+    network_hint: str = ""            # the line under Network Type in place of the LoRA / LoKR trade
+    ema_hint: str = ""                # the line under Weight averaging (EMA) in place of the shared one
+    # the Samples tab's "Turbo preview: N steps at M% strength" row (MiniMax H3) instead of the Turbo strength box:
+    # the Steps box is the plain-model count, the row the turbo's
+    samples_turbo_pace: bool = False
     edit_training: bool = False       # Edit LoRA from before/after pairs (the driver's supports_references)
     edit_note: str = ""               # the Edit LoRA section's "What you need" line: pair count and photo size
     slider_training: bool = False     # Slider LoRAs (strength is a dial between two looks); the driver needs
