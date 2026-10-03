@@ -165,6 +165,9 @@ MINIMAX = FamilyDescription(
 
     options=OPTIONS,
     presets=PRESETS,
+    settings_aliases={"FAMILY_EMA": "MINIMAX_EMA", "FAMILY_FT": "MINIMAX_FINETUNE",
+                      "FAMILY_FT_ROTATE_EVERY": "MINIMAX_FT_EVERY", "FAMILY_FT_FUSED": "MINIMAX_FT_FUSED",
+                      "FAMILY_FT_REG_DIR": "MINIMAX_REG_DIR", "FAMILY_FT_REG_MULT": "MINIMAX_REG_MULT"},
     workbench=("repair", "explorer", "profiler", "extract", "royale"),
     workbench_engine="fizgig.minimax.workbench:H3WorkbenchEngine",
     finetune=True,

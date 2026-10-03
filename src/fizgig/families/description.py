@@ -151,7 +151,9 @@ class FamilyOption:
             return self.tokens.split()
         if self.kind == "check":
             return self.tokens.split() if str(value) in ("1", "True", "true") else []
+        import re
         text = str(value or "").split("·")[0].strip()          # a suggestion's label: its value before the "·"
+        text = re.sub(r"\s*\([^()]*\)$", "", text)            # an old label's note: "0.05 (default)" -> "0.05"
         return [t.replace("{}", text) for t in self.tokens.split()] if text else []
 
 
@@ -335,6 +337,9 @@ class FamilyDescription:
     # things a user or a later session must know, with sources
     notes: tuple = ()
     options: tuple = ()               # FamilyOption controls (the family's own settings, as launch tokens)
+    # a saved preset / Last Train written by the family's old entry: {standard-layer key: old key} filled in when the
+    # preset lacks the new key (H3's MINIMAX_EMA -> FAMILY_EMA, its fine-tune card's keys, ...)
+    settings_aliases: dict = field(default_factory=dict)
 
     # ---- derived ------------------------------------------------------------------------------
     # generic entry points shared by every described family (the standard layer)

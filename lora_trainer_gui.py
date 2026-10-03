@@ -6420,6 +6420,12 @@ class LoRATrainerGUI:
 
     def _apply_preset_values(self, preset):
         """Apply preset values to the UI (shared by load_default_preset and load_custom_preset)"""
+        _desc0 = self._family_desc()
+        if _desc0 is not None and _desc0.settings_aliases:
+            preset = dict(preset)          # a preset from the family's old entry: its keys onto the standard ones
+            for _new, _old in _desc0.settings_aliases.items():
+                if _new not in preset and _old in preset:
+                    preset[_new] = preset[_old]
         try:
             return self._apply_preset_values_inner(preset)
         finally:
@@ -6429,7 +6435,8 @@ class LoRATrainerGUI:
                     if _o.key in preset:
                         self.settings[_o.key] = preset[_o.key]
                     elif _o.setting in preset:      # an old preset: its MINIMAX_* value seeds the option
-                        self.settings.pop(_o.key, None)
+                        _v = preset[_o.setting]
+                        self.settings[_o.key] = ("1" if _v is True or str(_v) in ("1", "True", "true") else "")                             if _o.kind == "check" else (_o.pick(_v) if _o.kind == "choice" else str(_v))
                 self._family_options_rows(_desc)
             getattr(self, "_refmod_audio_opts_refresh", lambda: None)()
             getattr(self, "_refresh_automagic_gating", lambda: None)()
