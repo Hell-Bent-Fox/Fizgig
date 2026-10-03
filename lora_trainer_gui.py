@@ -8883,8 +8883,12 @@ class LoRATrainerGUI:
     def _family_options_align(self):
         """One label column for a section's own fields and the family's option rows (the old H3 rows sat in the
         section's grid): the section's column 0 is wide enough for both, and each option frame uses it."""
+        # (the fine-tune card's rows keep their own label width: that card's column 0 is its full-width text)
         frames = [getattr(self, a, None) for a in ("_family_options_frame", "_family_options_frame_after",
-                                                   "_family_options_frame_other", "_family_options_frame_ft")]
+                                                   "_family_options_frame_other")]
+        ft = getattr(self, "_family_options_frame_ft", None)
+        if ft is not None:
+            ft.grid_columnconfigure(1, weight=1)        # a long hint's span goes to the control column
         by_master = {}
         for f in frames:
             if f is not None:
