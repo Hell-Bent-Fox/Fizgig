@@ -9,21 +9,31 @@ from fizgig.families.description import (ClipSpec, FamilyDescription, FamilyOpti
 
 # The old H3 Training-tab controls as family options (lora_trainer_gui.py's MiniMax rows and _build_minimax_command),
 # their old settings keys kept so presets, queued runs and Last Train carry across.
-_MORE_BLOCKS = ",".join(f"h3blk_{i}" for i in range(6, 50))
 _OSTRIS = "pref:minimax_training_adapter[H3_TRAIN_BASE=ref2va|H3_DISTILL=1->minimax_ref_training_adapter]"
 OPTIONS = (
     FamilyOption("H3_LIKENESS_MODE", "Training mode", choices=(
         ("Default", "photo_blocks=20-49 clip_blocks=20-49 audio_blocks=20-49"),
-        ("More Blocks", f"--train_blocks={_MORE_BLOCKS}"),
-        ("All 50 blocks (experiments)", "")),
+        ("More Blocks", "--train_blocks=6-49"),
+        ("Off · hand-pick the blocks below", "")),
         choice_hints=(
-            ("Default", "Photos, clips and voice train blocks 20-49, and each step's backward stops there: the "
-                        "versatile recipe - best for characters and styles alike, and the quickest."),
-            ("More Blocks", "Blocks 6-49 for every step type: holds the dataset's global look (colour, grain) out "
-                            "of the LoRA longer and helps motion, at a slower step. Not a likeness upgrade."),
-            ("All 50 blocks (experiments)", "Blocks 0-5 deform anatomy and pull the dataset's colour into every "
-                                            "render - for experiments only.")),
+            ("Default", "High quality, versatile, best at preserving model priors. Photos, clips and voice all train "
+                        "blocks 20-49, and the backward stops at the window so the steps are quicker too."),
+            ("More Blocks", "Less preservation of model priors, high quality. May help when you are training a MOTION "
+                            "concept specifically, since it reaches more of the model. It is not a likeness upgrade - "
+                            "Default reaches higher likeness, sooner, with quicker steps. Every step type trains 6-49, "
+                            "at 44 blocks in the backward instead of 30. Blocks 0-5 stay out either way; they deform "
+                            "anatomy and colour."),
+            ("Off · hand-pick the blocks below", "The blocks are yours to pick, for experiments: Blocks to Train.")),
         setting="MINIMAX_LIKENESS_MODE"),
+    FamilyOption("H3_BLOCKS", "Blocks to Train", kind="entry", tokens="--train_blocks={}", default="all",
+                 suggestions=("6-49 · recommended (skips 0-5)", "all · every block (50 of 50)",
+                              "10-49 · skip the first 10", "14-37 · middle band", "25-49 · back half",
+                              "0-24 · front half"),
+                 hint="Train a subset of the 50 blocks. Type ranges and singles, comma-separated, like 3-12, 22, "
+                      "31-33. Measured answers: 6-49 for the whole model (what More Blocks runs) and 20-49 for "
+                      "likeness (Default). Blocks 0-5 are in neither: they deform anatomy and pull the dataset's "
+                      "colour into the render.",
+                 setting="MINIMAX_BLOCKS", requires="H3_LIKENESS_MODE=Off"),
     FamilyOption("H3_TRAIN_BASE", "Base model", choices=(
         ("First/last frame (fl2va) — standard", ""),
         ("Reference (ref2va)", "--dit=pref:minimax_ref_dit")),

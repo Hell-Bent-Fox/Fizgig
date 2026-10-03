@@ -107,6 +107,11 @@ class FamilyDriver:
         """Block ids whose trainable weights sit out this item's step (per-modality routing). Default: none."""
         return ()
 
+    def expand_train_blocks(self, items: list) -> Optional[list]:
+        """--train_blocks as typed (block ids, or a family's own spec such as H3's "3-12, 22") -> block ids, or None
+        for every block. Default: the ids as given."""
+        return list(items) or None
+
     def legacy_state_order(self, dit) -> Optional[list]:
         """Module names in the order an older trainer for this family laid out its parameters (each module's down
         then up weight) - an untagged saved state's optimizer moments and EMA shadow are remapped from it into the

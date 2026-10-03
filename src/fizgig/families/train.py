@@ -717,6 +717,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                            "itself, so the two don't combine. Drop --context_lora_path.")
     driver = desc.load_driver()
     driver.set_options(dict(family_options or {}))      # before the data: an option may shape the dataset
+    if train_blocks:
+        train_blocks = driver.expand_train_blocks(train_blocks)
     arch = desc.arch_id
     speed_desc = desc.preview_speed() if speed_lora else None
     if speed_lora and speed_desc is None:

@@ -8670,6 +8670,8 @@ class LoRATrainerGUI:
                 if opt.kind == "choice":
                     w = ttk.Combobox(frame, values=opt.choice_labels(), textvariable=var, state="readonly",
                                      width=max(24, max(len(x) for x in opt.choice_labels()) + 2))
+                elif opt.suggestions:          # editable: the suggestions are starting points, typing is the control
+                    w = ttk.Combobox(frame, values=list(opt.suggestions), textvariable=var, width=34)
                 else:
                     w = ttk.Entry(frame, textvariable=var, width=10)
                 w.grid(row=r, column=1, sticky=tk.W, padx=5, pady=(8, 0))
@@ -8695,7 +8697,7 @@ class LoRATrainerGUI:
 
             def _store(*_a, o=opt, v=var):
                 self._family_option_store(o, ("1" if v.get() else "") if isinstance(v, tk.BooleanVar) else v.get())
-                if any(x.requires == o.key for x in desc.options):
+                if any(x.requires.partition("=")[0] == o.key for x in desc.options):
                     self._family_options_media_refresh()        # a tick that shows / hides its sub-rows
             var.trace_add("write", _store)
             self._family_opt_vars[opt.key] = var
@@ -8712,7 +8714,7 @@ class LoRATrainerGUI:
         media = _fl.dataset_media(self.image_folder_var.get().strip())
         vals = self._family_options_values(self._family_desc())
         for opt, widgets in rows.values():
-            on = _fl.option_applies(opt, media, vals)
+            on = _fl.option_applies(opt, media, vals, self._family_desc().options)
             for w in widgets:
                 self._set_widget_visible(w, on)
 

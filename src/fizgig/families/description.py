@@ -122,7 +122,9 @@ class FamilyOption:
     setting: str = ""                 # the old settings key this option's value is read from on first use
     show_if_media: str = ""           # shown only when the dataset holds this media kind ("clip", "voice")
     mixed_only: bool = False          # shown only when the dataset mixes voice with photos or clips
-    requires: str = ""                # shown (and sent) only while the check option with this key is ticked
+    requires: str = ""                # shown (and sent) only while this check is ticked ("KEY") or this choice is
+    #                                   picked ("KEY=LABEL", matched as pick() matches)
+    suggestions: tuple = ()           # entry: ready-made values offered in an editable dropdown ("6-49 · why")
 
     def choice_labels(self):
         return [c[0] for c in self.choices]
@@ -148,7 +150,7 @@ class FamilyOption:
             return self.tokens.split()
         if self.kind == "check":
             return self.tokens.split() if str(value) in ("1", "True", "true") else []
-        text = str(value or "").strip()
+        text = str(value or "").split("·")[0].strip()          # a suggestion's label: its value before the "·"
         return [t.replace("{}", text) for t in self.tokens.split()] if text else []
 
 

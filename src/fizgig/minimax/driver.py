@@ -699,6 +699,22 @@ class MiniMaxDriver(FamilyDriver):
                          keep([f"token_refiner.blocks.{i}.{m}" for m in _BLOCK_MODULES])) for i in range(2)]
         return [BlockGroup("Blocks", main), BlockGroup("Token refiner", refiner)]
 
+    def expand_train_blocks(self, items):
+        """The old Blocks to Train field: ranges and singles ("3-12, 22, 31-33"), "all", or h3blk_N ids."""
+        from fizgig.minimax.trainer import parse_block_spec
+        ids, spec = [], []
+        for it in items:
+            it = str(it).split("·")[0].strip()
+            if it.startswith("h3"):
+                ids.append(it)
+            elif it and it.lower() != "all":
+                spec.append(it)
+            elif it.lower() == "all":
+                return None
+        if spec:
+            ids += [f"h3blk_{i}" for i in parse_block_spec(",".join(spec), self.description.n_blocks)]
+        return ids or None
+
     def legacy_state_order(self, dit):
         """The old H3 trainer's parameter order: its network walked named_modules - the token refiner (registered
         first) then blocks 0-49, each qkv / out / fc1 / fc2."""
