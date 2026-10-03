@@ -42,10 +42,18 @@ def _clean(t, what, key):
     return t
 
 
-def save_latents(desc, item, latent, controls=()):
-    _, h, w = latent.shape
+def _latent_key(latent):
+    """A still (C, h, w) -> latent_{h}x{w}; a clip (C, T, h, w) -> latent_{T}x{h}x{w} (H3's rule - both start
+    `latent_`, which is all the dataset collate looks at)."""
+    return "latent_" + "x".join(str(d) for d in latent.shape[1:])
+
+
+def save_latents(desc, item, latent, controls=(), extra=None):
+    """extra: further tensors the driver stores beside the latent (e.g. a clip's audio rows), keyed as given."""
     os.makedirs(os.path.dirname(item.latent_cache_path), exist_ok=True)
-    sd = {f"latent_{h}x{w}": _clean(latent, "latent", item.item_key)}
+    sd = {_latent_key(latent): _clean(latent, "latent", item.item_key)}
+    for k, v in (extra or {}).items():
+        sd[k] = _clean(v, k, item.item_key)
     for i, c in enumerate(controls):
         sd[f"latent_control_{i}_{c.shape[-2]}x{c.shape[-1]}"] = _clean(c, "control latent", item.item_key)
     save_file(sd, item.latent_cache_path, metadata={

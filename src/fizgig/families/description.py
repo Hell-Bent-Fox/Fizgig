@@ -89,6 +89,20 @@ class LoRAFormat:
 
 
 @dataclass(frozen=True)
+class ClipSpec:
+    """What a video family's clips must be (descriptions with "clip" in media). The launch refuses an off-spec clip
+    with the reason (driver.media_problem) - it never converts one."""
+    fps: int = 24
+    frame_step: int = 17              # frame counts frame_offset + n * frame_step (H3: 17n + 5)
+    frame_offset: int = 5
+    edge_multiple: int = 32           # width and height
+    audio_rate: int = 32000
+    audio_channels: int = 2
+    mute_suffix: str = "_mute"        # a clip named ..._mute trains its pictures only
+    note: str = ""
+
+
+@dataclass(frozen=True)
 class FamilyDescription:
     # identity
     key: str                          # family key (the workbench vocabulary), e.g. "qwen_image21"
@@ -107,6 +121,10 @@ class FamilyDescription:
     shares_prefs_with: str = ""
     # a tip under the family's Preferences section (e.g. filling the paths by hand from a ComfyUI install)
     prefs_note: str = ""
+
+    # what one training item may be: "photo", "clip" (frames + optional sound), "voice" (sound only)
+    media: tuple = ("photo",)
+    clip_spec: Optional[ClipSpec] = None
 
     # latent rules
     latent_channels: int = 16

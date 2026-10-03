@@ -409,8 +409,7 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
         for i in range(len(lats) // per):
             p = os.path.join(out_dir, f"{output_name}_e{epoch:06d}_{i:02d}_{ts}_{seed + i}.png")
             frames = [driver.decode(vae, lat, width, height) for lat in lats[i * per:(i + 1) * per]]
-            (_slider_strip(frames, SLIDER_PREVIEW_MULTIPLIERS) if slider else frames[0]).save(p)
-            paths.append(p)
+            paths += driver.save_preview(_slider_strip(frames, SLIDER_PREVIEW_MULTIPLIERS) if slider else frames[0], p)
     finally:
         if slider:
             net.set_trainable_multiplier(1.0)  # a preview that failed mid-dial must not leave the LoRA scaled
@@ -1235,7 +1234,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                     _l, _t = _prompt_slider_step(driver, dit, net, latents, slider_enc, gen,
                                                  guidance=slider_guidance, min_t=min_timestep, max_t=max_timestep)
                 else:
-                    cond = {k[len("cond__"):]: v.to(device) for k, v in batch.items() if k.startswith("cond__")}
+                    cond = driver.batch_cond(batch, device)
                     _neg = batch.get("latents_control_0")
                     if _neg is None:
                         raise RuntimeError("[slider] this item has no pair image - an image-pair slider needs one in "
@@ -1255,7 +1254,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                     _t = _info.get("t", 0.5)
                 loss, _info = torch.tensor(_l), {"t": _t}
             else:
-                cond = {k[len("cond__"):]: v.to(device) for k, v in batch.items() if k.startswith("cond__")}
+                cond = driver.batch_cond(batch, device)
                 refs = [batch[k].to(device) for k in sorted((k for k in batch if k.startswith("latents_control_")),
                                                             key=lambda k: int(k.rsplit("_", 1)[1]))]
                 loss, _info = driver.training_loss(dit, latents, cond, gen, min_t=min_timestep, max_t=max_timestep,

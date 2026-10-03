@@ -81,6 +81,16 @@ class FamilyDriver:
         """captions -> list of conditioning dicts (tensors on CPU)."""
         raise NotImplementedError
 
+    def media_problem(self, path: str) -> str:
+        """Why this clip or sound file cannot train as it is ("" = fine), against the description's clip_spec. Only
+        called for families whose media include "clip" / "voice"."""
+        return ""
+
+    def batch_cond(self, batch: dict, device) -> dict:
+        """The conditioning dict training_loss gets for one loaded item: the cached `cond__` entries, batched. A
+        family that keeps its own cache layout (H3's hidden_states + audio rows) maps its keys here."""
+        return {k[len("cond__"):]: v.to(device) for k, v in batch.items() if k.startswith("cond__")}
+
     # ---- edit training (optional) -----------------------------------------------------------------
     supports_references = False       # reference ("before") images: pair datasets and edit previews
 
@@ -120,12 +130,15 @@ class FamilyDriver:
         raise NotImplementedError
 
     def generate(self, dit, cond: dict, width: int, height: int, *, steps: int, seed: int, cfg: float = 1.0,
-                 neg_cond: Optional[dict] = None, sigmas=None, options=(), noise=None, on_step=None, refs=None):
+                 neg_cond: Optional[dict] = None, sigmas=None, options=(), noise=None, on_step=None, refs=None,
+                 frames: int = 1, audio: bool = False):
         """Denoise one image from noise (refs: reference latents for an edit, with conditioning from
         encode_text_with_references); returns latents in the driver's own layout (fed to decode).
         sigmas / options: an explicit schedule and driver-specific sampler options (e.g. from a speed LoRA's
         SamplingSettings); a driver ignores what it doesn't use. noise: a start from initial_noise() (or a blend of
-        two) instead of the seed's. on_step(done, total): called before every step; it may raise to abort."""
+        two) instead of the seed's. on_step(done, total): called before every step; it may raise to abort.
+        frames / audio (video families): a clip of `frames` frames, with sound - callers pass them only when they
+        ask for more than a still, so a still-only driver never sees them."""
         raise NotImplementedError
 
     def pad_conditioning(self, conds: list) -> list:
@@ -135,8 +148,16 @@ class FamilyDriver:
         raise NotImplementedError
 
     def decode(self, vae, latents, width: int, height: int):
-        """-> PIL.Image (RGB)."""
+        """-> PIL.Image (RGB). A video family may return its own clip object instead (frames + sound), which its
+        save_preview writes."""
         raise NotImplementedError
+
+    def save_preview(self, result, path: str) -> list:
+        """Write one decoded preview at `path` (the gallery's <name>_e<epoch>_<idx>_<timestamp>_<seed>.png) and return
+        the files written. Default: the PNG. A video family writes its clip contract around it (the PNG last, as
+        the gallery's trigger)."""
+        result.save(path)
+        return [path]
 
     # ---- LoRA and the block map -------------------------------------------------------------------
     def block_map(self, dit=None) -> list:
