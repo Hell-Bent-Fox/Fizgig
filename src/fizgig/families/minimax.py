@@ -35,6 +35,7 @@ MINIMAX = FamilyDescription(
     vae_label="MiniMax H3 Video VAE",
 
     media=("photo", "clip", "voice"),
+    preview_park_optimizer=True,      # the old previews' optimizer-state park (~2.5 GB back for the render)
     clip_spec=ClipSpec(fps=24, frame_step=17, frame_offset=5, edge_multiple=32, audio_rate=32000, audio_channels=2,
                        mute_suffix="_mute", note="src/fizgig/minimax/clip.py FPS / GRID_FRAMES / SIZE_STEP"),
 

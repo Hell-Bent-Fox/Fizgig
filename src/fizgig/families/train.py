@@ -399,8 +399,12 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
                 else:
                     lats.append(driver.generate(dit, cond, width, height, steps=steps, seed=seed + i, cfg=cfg,
                                                 neg_cond=neg, **ref_kw))
-        park = lowmem and not swapped      # a swapped DiT is already mostly on CPU; moving it would undo the layout
+        tok = None if swapped else driver.park_for_decode(dit, device)
+        if tok is not None:
+            done.add("decode_park")
+        park = lowmem and not swapped and tok is None   # a swapped DiT is already mostly on CPU
         if park:                            # #123: never hold the training DiT and the VAE decode together
+            done.add("lowmem_park")
             _preview_vram("before decode")
             quant.move(dit, "cpu")
             torch.cuda.empty_cache()
@@ -413,7 +417,9 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
     finally:
         if slider:
             net.set_trainable_multiplier(1.0)  # a preview that failed mid-dial must not leave the LoRA scaled
-        if lowmem and not swapped:
+        if "decode_park" in done:
+            driver.unpark_after_decode(dit, device, tok)
+        if "lowmem_park" in done:
             quant.move(dit, device)
             _preview_vram("after decode, DiT restored")
         if "swap" in done:
@@ -1133,7 +1139,17 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         run and training carries on, as the original Krea 2 trainer did: a picture is never worth the run."""
         if encoded is None or previews_off[0]:
             return
+        parked = []
         try:
+            if desc.preview_park_optimizer and optimizer is not None:
+                for st in optimizer.state.values():
+                    for k, v in st.items():
+                        if torch.is_tensor(v) and v.is_cuda:
+                            st[k] = v.to("cpu")
+                            parked.append((st, k))
+                if parked:
+                    torch.cuda.empty_cache()
+                    logger.info(f"[preview] {len(parked)} optimizer tensors parked on CPU for the preview")
             _previews(epoch)
         except Exception as exc:
             previews_off[0] = True
@@ -1141,6 +1157,9 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                            f"previews are off for the rest of this run; training continues", exc_info=True)
             gc.collect()
             torch.cuda.empty_cache()
+        finally:
+            for st, k in parked:            # the next training step needs it back, whatever happened
+                st[k] = st[k].to(device)
 
     def _previews(epoch):
         conds, w, h, sd, prompts = encoded, sample_width, sample_height, sample_seed, sample_prompts

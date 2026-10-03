@@ -10,12 +10,17 @@ it does today:
   schedule, a voice item's video term left out
 * LoRA: the blocks' attention + MLP Linears (AdaLN left out, as --no_train_adaln), block ids h3blk_N / h3_rf_N
 
-Still to come (the doc's §5.7 order): quant tiers + H2D rings, modality routing, TREAD, likeness cut, adapters, two
-bases, previews with the clip contract, the workbench wrap, FT.
+Still to come (the migration doc's §5.7b order): quant tiers + H2D rings, the Ostris clip adapter, two bases, the
+workbench wrap, FT.
 """
+import gc
+import logging
+
 import torch
 
 from fizgig.families.driver import Block, BlockGroup, FamilyDriver
+
+logger = logging.getLogger(__name__)
 
 DTYPE = torch.bfloat16
 TURBO = "h3_turbo"                     # the preview Turbo LoRA's adapter name
@@ -247,11 +252,94 @@ class MiniMaxDriver(FamilyDriver):
         if cfg > 1.0 and neg_cond is not None:
             unc = neg_cond["hidden_states"]
             unc = (unc[None] if unc.dim() == 2 else unc).to(device, DTYPE)
-        lat, arows = sampling.sample_image(dit, txt, width=width, height=height, steps=steps, cfg_scale=cfg,
-                                           uncond_embeds=unc, seed=seed, device=device, dtype=DTYPE,
-                                           num_frames=frames, return_audio=True)
+        lat, arows, width, height, frames = self._ladder(sampling, dit, txt, unc, width, height, steps, cfg, seed,
+                                                         device, frames)
+        want_audio = want_audio and frames > 1
         return {"latent": lat.cpu(), "audio": arows.cpu() if (want_audio and arows is not None) else None,
                 "size": (width, height)}
+
+    def _ladder(self, sampling, dit, txt, unc, width, height, steps, cfg, seed, device, frames):
+        """The old previews' OOM ladder: an out-of-memory render - or one paging into system RAM, which Windows never
+        raises - retries one rung down, a shorter clip first (141 -> 56 -> 22 -> still never: 22 is the floor), then
+        the resolution down the standard sizes to 512. Both caps stick for later epochs; a resolution step prints the
+        marker the GUI writes back into the Samples tab. At the floor of both it re-raises."""
+        from fizgig.minimax.trainer import clip_fallback_frames, next_preview_res
+        cap = getattr(self, "_res_cap", None)
+        if cap and (cap[0] < width or cap[1] < height):
+            width, height = min(width, cap[0]), min(height, cap[1])
+        state = {"wh": (width, height), "frames": frames, "slow_told": False}
+
+        def slow(seconds, step, total):
+            w, h = state["wh"]
+            f = state["frames"]
+            if (f > 1 and clip_fallback_frames(f) > 1) or next_preview_res(w, h) != (w, h):
+                logger.warning(f"[preview] step {step}/{total} took {seconds:.0f}s - the render is paging into system "
+                               f"RAM (Windows never raises an OOM for this). Abandoning this sample and retrying one "
+                               f"rung down (a shorter clip first, then resolution).")
+                return True
+            if not state["slow_told"]:
+                state["slow_told"] = True
+                logger.warning(f"[preview] step {step}/{total} took {seconds:.0f}s - the render is spilling into "
+                               f"system RAM even at the ladder floor (shortest clip, 512x512). It will finish, just "
+                               f"slowly. The Turbo LoRA (Preferences) or a still Sample length make it lighter.")
+            return False
+
+        oom = (torch.cuda.OutOfMemoryError, getattr(torch, "AcceleratorError", torch.cuda.OutOfMemoryError),
+               sampling.PreviewAborted)
+        while True:
+            state["wh"], state["frames"] = (width, height), frames
+            try:
+                lat, arows = sampling.sample_image(dit, txt, width=width, height=height, steps=steps, cfg_scale=cfg,
+                                                   uncond_embeds=unc, seed=seed, device=device, dtype=DTYPE,
+                                                   num_frames=frames, return_audio=True, on_slow_step=slow)
+                return lat, arows, width, height, frames
+            except oom:
+                gc.collect()
+                torch.cuda.empty_cache()
+                nf = clip_fallback_frames(frames) if frames > 1 else 1
+                if nf > 1:
+                    logger.warning(f"[preview] OOM at {frames} frames - retrying this sample at {nf} frames "
+                                   f"({width}x{height} kept)")
+                    frames = nf
+                    self.options["preview_frames"] = nf
+                    continue
+                nw, nh = next_preview_res(width, height)
+                if (nw, nh) == (width, height):
+                    raise
+                msg = f"[preview] OOM at {width}x{height} - retrying at {nw}x{nh}"
+                if min(nw, nh) < 768 and not getattr(self, "_res_warned", False):
+                    self._res_warned = True
+                    msg += (". NOTE: below H3's 768 training canvas the model is outside its expected regime - treat "
+                            "these previews as a rough guide, and judge the LoRA at full size in ComfyUI.")
+                logger.warning(msg)
+                width, height = nw, nh
+                self._res_cap = (nw, nh)
+                print(f"[preview] resolution settled: {nw}x{nh}", flush=True)
+
+    def park_for_decode(self, dit, device):
+        """The old previews' decode park: the clip / still decode wants ~7.5 GB free; on a card that cannot offer it
+        beside the resident base, only the missing gigabytes (+1) of tail blocks go to CPU (park_dit_partial) - every
+        extra gigabyte moved is paging churn and a slower restore on a WDDM card. Stills included."""
+        from fizgig.minimax.trainer import park_dit_partial
+        from fizgig.utils.device import plannable_free_vram
+        gc.collect()
+        torch.cuda.empty_cache()
+        free = plannable_free_vram()
+        if free >= 7.5:
+            return False
+        need = (7.5 - free) + 1.0
+        logger.info(f"[preview] {free:.1f} GB free is too tight for decode - parking ~{need:.1f} GB of tail blocks "
+                    f"for this decode pass.")
+        park_dit_partial(dit, need_gb=need)
+        gc.collect()
+        torch.cuda.empty_cache()
+        return True
+
+    def unpark_after_decode(self, dit, device, token):
+        if token:
+            from fizgig.minimax.trainer import restore_parked_dit
+            restore_parked_dit(dit, device, getattr(self, "_n_swap", 0))     # swap-aware: never the whole base
+            torch.cuda.empty_cache()
 
     @torch.no_grad()
     def decode(self, vae, latents, width, height):

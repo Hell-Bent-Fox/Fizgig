@@ -182,6 +182,8 @@ class FamilyDescription:
     # how the workbench samples its preview checkpoint (the model file with role "preview_dit"), which it uses by
     # default for fast previews when the file is set; None = the family has none
     preview_checkpoint_sampling: Optional[SamplingSettings] = None
+    # the optimizer state waits on CPU while the previews render (H3: ~2.5 GB of dead weight for a no-grad render)
+    preview_park_optimizer: bool = False
     # a full fine-tune of the base model is offered (the driver's ft_spec returns its FTSpec, families/ft.py): the
     # Training tab shows the fine-tune card and the launch sends --finetune. Optional - most families never need it
     finetune: bool = False

@@ -238,6 +238,16 @@ class FamilyDriver:
         dit.offloader = streamer
         dit.blocks_to_swap = 1
 
+    # ---- the preview decode's memory ---------------------------------------------------------------
+    def park_for_decode(self, dit, device):
+        """Make room for the preview decode next to the resident training model. None (the default) = the shared
+        rule (small cards park the whole DiT on CPU); anything else is a token for unpark_after_decode, the driver
+        having done (or decided against) its own park - H3 parks only as many tail blocks as the decode needs."""
+        return None
+
+    def unpark_after_decode(self, dit, device, token) -> None:
+        """Undo park_for_decode."""
+
     # ---- training previews on the preview checkpoint (descriptions with train_preview_checkpoint) ----------------
     def park_for_preview(self, dit, device):
         """Free VRAM on the training model for the preview checkpoint; returns a token for unpark_after_preview."""
