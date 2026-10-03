@@ -107,6 +107,12 @@ class FamilyDriver:
         """Block ids whose trainable weights sit out this item's step (per-modality routing). Default: none."""
         return ()
 
+    def legacy_state_order(self, dit) -> Optional[list]:
+        """Module names in the order an older trainer for this family laid out its parameters (each module's down
+        then up weight) - an untagged saved state's optimizer moments and EMA shadow are remapped from it into the
+        family LoRA's own order (sorted module names). None = the states already share the family LoRA's order."""
+        return None
+
     def after_optimizer_step(self) -> None:
         """Called after every optimizer step (the H3 adapter-relative LR ramp reads the adapter's new size)."""
 

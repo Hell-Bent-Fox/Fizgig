@@ -201,6 +201,9 @@ class FamilyDescription:
     training_adapter_note: str = ""   # one line for the Training tab under the adapter toggle
     ema_default: str = ""             # default EMA decay for the Training tab ("0.98", "Off"); "" = no EMA control
     ema_short_run: bool = False       # the EMA dropdown also offers "Short run" (decay sized to the run - H3's)
+    # a saved state with no architecture tag is this family's own (the old H3 trainer wrote the same layout and
+    # parameter order): resume restores its optimizer and EMA too, not just the LoRA
+    resumes_untagged_states: bool = False
     implementation: str = ""          # SAI modelspec.implementation (reference repo URL)
     precisions: tuple = ("bf16",)     # base precisions offered for training: any of "bf16", "int8", "nf4"
     # what Auto may choose, in order ((): every offered precision, most precise first). Krea 2: INT8, then NF4 - its

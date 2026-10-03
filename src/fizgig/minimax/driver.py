@@ -162,7 +162,7 @@ class MiniMaxDriver(FamilyDriver):
             else:
                 logger.info(f"[vram] block swap active: last {n} blocks parked on CPU (~{n * 0.34:.1f} GB VRAM "
                             f"freed, packed {mode} in RAM)")
-        self._n_swap = n
+        self._n_swap, self._base_mode = n, mode
         return dit, n
 
     def enable_gradient_checkpointing(self, dit, on=True):
@@ -304,7 +304,21 @@ class MiniMaxDriver(FamilyDriver):
                 spec = f"{self.options['stop_epoch']}:{self.options.get('stop_mode') or 'anchor'}"
             n, _, mode = str(spec or "").partition(":")
             return f"{int(n)}:{mode or 'anchor'}" if n.strip().isdigit() and int(n) else "off"
-        return {"ss_visual_stop": stop("visual_stop"), "ss_audio_stop": stop("audio_stop")}
+        o = self.options
+        md = {"ss_visual_stop": stop("visual_stop"), "ss_audio_stop": stop("audio_stop"),
+              # the old trainer's run record, from the options this run had
+              "ss_photo_blocks": o.get("photo_blocks") or "all", "ss_clip_blocks": o.get("clip_blocks") or "all",
+              "ss_audio_blocks": o.get("audio_blocks") or "all", "ss_tread": o.get("tread") or "off",
+              "ss_caption_dropout": str(o.get("caption_dropout") or 0),
+              "ss_clip_still_as_photo": "1" if o.get("clip_still_as_photo") == "1" else "0",
+              "ss_distill": "dataset" if o.get("distill") == "1" else "off",
+              "ss_adapter_ramp": str(o.get("adapter_ramp") or "off"),
+              "ss_train_token_refiner": "1" if o.get("train_token_refiner") == "1" else "0"}
+        if self._shift() is not None:
+            md["ss_timestep_density"] = f"{float(self._shift()):g}"
+        if getattr(self, "_base_mode", None):
+            md["ss_base_quant"] = self._base_mode
+        return md
 
     def _distill_setup(self, group, log):
         """Reference distillation (options distill=1, distill_weight 0.8, distill_phase1 -1 = auto): the cached r2v
@@ -684,6 +698,12 @@ class MiniMaxDriver(FamilyDriver):
         refiner = [Block(f"h3_rf_{i}", f"Token refiner {i}",
                          keep([f"token_refiner.blocks.{i}.{m}" for m in _BLOCK_MODULES])) for i in range(2)]
         return [BlockGroup("Blocks", main), BlockGroup("Token refiner", refiner)]
+
+    def legacy_state_order(self, dit):
+        """The old H3 trainer's parameter order: its network walked named_modules - the token refiner (registered
+        first) then blocks 0-49, each qkv / out / fc1 / fc2."""
+        groups = self.block_map(dit)
+        return [m for b in groups[1].blocks for m in b.modules] + [m for b in groups[0].blocks for m in b.modules]
 
     def lora_target_names(self, dit):
         """The 50 main blocks (the old default); the token refiner too with option train_token_refiner=1."""

@@ -153,6 +153,7 @@ MINIMAX = FamilyDescription(
     implementation="https://github.com/MiniMax-AI/MiniMax-H3",
     ema_default="0.98",               # the old H3 default (v5.4.1)
     ema_short_run=True,
+    resumes_untagged_states=True,     # an old H3 pause: same files, same parameter order (blocks, qkv/out/fc1/fc2)
     # the training adapter is the MINIMAX_ADAPTER option (Circlestone / Ostris per base / Off), not the generic tick
     # the checkpoint's own int8 ConvRot codes, or a 4-bit base (NF4, HQQ); Auto is the driver's plan_run (the old
     # planner), which streams blocks H2D rather than giving up the int8 base

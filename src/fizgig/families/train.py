@@ -119,7 +119,27 @@ def _optimizer_family_groups(desc, net, lr):
     return [{"params": buckets[f], "lr": float(lr), "family": f, "modules": counts[f]} for f in order if f in buckets]
 
 
-def _load_state(state_dir, net, optimizer, device, arch):
+def _legacy_perm(driver, net):
+    """{old parameter index: family LoRA parameter index} for an older trainer's state (driver.legacy_state_order), or
+    None when the orders already agree. Only modules that train here count, in the old order, down then up."""
+    order = driver.legacy_state_order(net.dit)
+    if order is None:
+        return None
+    from fizgig.families.lora import TRAINABLE
+    here, i = {}, 0
+    for full, w in net.wrapped.items():
+        if TRAINABLE in w.adapters:
+            for part, _p in enumerate(w.adapters[TRAINABLE].parameters()):
+                here[(full, part)] = i
+                i += 1
+    old = [(m, part) for m in order if (m, 0) in here for part in range(2) if (m, part) in here]
+    if len(old) != len(here):
+        raise RuntimeError(f"[resume] the old state's layout ({len(old)} tensors) does not match this LoRA "
+                           f"({len(here)}) - different rank, blocks or network type?")
+    return {k: here[key] for k, key in enumerate(old)}
+
+
+def _load_state(state_dir, net, optimizer, device, arch, untagged_own=False, driver=None):
     """(epoch, global step, training_state.json) of a saved state, its LoRA weights and RNG restored. The optimizer
     (and, by the caller, the EMA) is restored only from a state this family wrote: another trainer's (the original
     Krea 2's) orders its parameters differently, so its moments would land on the wrong tensors - that state goes on
@@ -153,9 +173,15 @@ def _load_state(state_dir, net, optimizer, device, arch):
                            f"target modules?")
     with open(os.path.join(state_dir, "training_state.json"), encoding="utf-8") as f:
         meta = json.load(f)
-    meta["own_state"] = meta.get("architecture") == arch
+    meta["own_state"] = meta.get("architecture") == arch or (untagged_own and "architecture" not in meta)
     if meta["own_state"]:
-        optimizer.load_state_dict(torch.load(os.path.join(state_dir, "optimizer.pt"), map_location=device))
+        sd = torch.load(os.path.join(state_dir, "optimizer.pt"), map_location=device)
+        perm = _legacy_perm(driver, net) if (driver is not None and "architecture" not in meta) else None
+        if perm is not None:            # an older trainer's order: each moment back onto its own tensor
+            sd["state"] = {perm[int(k)]: v for k, v in sd["state"].items()}
+            meta["legacy_perm"] = perm
+            logger.info("[resume] an older trainer's state: optimizer moments remapped into this LoRA's order")
+        optimizer.load_state_dict(sd)
     else:
         logger.info("[resume] this state was saved by another trainer: continuing from its LoRA weights, with a "
                     "fresh optimizer and weight average (they settle within a few steps)")
@@ -1071,13 +1097,20 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
 
     start_epoch = global_step = 0
     if resume_state_dir:
-        start_epoch, global_step, meta = _load_state(resume_state_dir, net, optimizer, device, arch)
+        start_epoch, global_step, meta = _load_state(resume_state_dir, net, optimizer, device, arch,
+                                                     untagged_own=desc.resumes_untagged_states, driver=driver)
         if global_step is None:
             global_step = start_epoch * steps_per_epoch
         if adaptive:
             adaptive.load_state_dict(meta.get("adaptive_lr_state"))
         if ema is not None and meta["own_state"] and os.path.exists(os.path.join(resume_state_dir, "ema.pt")):
-            ema.load_state_dict(torch.load(os.path.join(resume_state_dir, "ema.pt"), map_location="cpu"))
+            _esd = torch.load(os.path.join(resume_state_dir, "ema.pt"), map_location="cpu")
+            if meta.get("legacy_perm"):     # an older trainer's order, as the optimizer's
+                _sh = [None] * len(_esd["shadow"])
+                for _i, _t in enumerate(_esd["shadow"]):
+                    _sh[meta["legacy_perm"][_i]] = _t
+                _esd["shadow"] = _sh
+            ema.load_state_dict(_esd)
         logger.info(f"[resume] from {resume_state_dir}: continuing at epoch {start_epoch + 1}/{max_train_epochs}")
     from fizgig.families.loss_watch import Watch
     watch = Watch(output_dir, group, user_config, driver, log=log_per_image_loss, per_image_lr=per_image_lr,
