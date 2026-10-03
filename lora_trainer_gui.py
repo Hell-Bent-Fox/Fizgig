@@ -6496,6 +6496,10 @@ class LoRATrainerGUI:
 
     def _apply_preset_values(self, preset):
         """Apply preset values to the UI (shared by load_default_preset and load_custom_preset)"""
+        # The Turbo strength box belongs to each family (last_used["turbo_strengths"]): a preset or a remembered
+        # settings snapshot never writes it - one taken while the box showed another family's value carried Qwen's 0
+        # into Krea 2 and MiniMax H3
+        preset = {k: v for k, v in preset.items() if k != "FAMILY_TURBO_STRENGTH"}
         _desc0 = self._family_desc()
         if _desc0 is not None and _desc0.settings_aliases:
             preset = dict(preset)          # a preset from the family's old entry: its keys onto the standard ones
