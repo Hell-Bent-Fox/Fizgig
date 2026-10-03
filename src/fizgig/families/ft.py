@@ -565,10 +565,78 @@ def save_checkpoint(state: Dict[str, torch.Tensor], src_path: str, path: str, me
     return sum(1 for k in state if k in header), len(header)
 
 
+class SharedBackend:
+    """The fine-tune's model-side pieces for a family whose base is a bf16 file quantised to NF4 at load (Krea 2,
+    Qwen): the Rotator and its master, the window planner, the block streamer, the streamed checkpoint. A driver
+    whose base differs (H3's int8 ConvRot file, its own 4-bit trunk and ring) brings its own backend with the same
+    surface (driver.ft_backend)."""
+
+    always_label = None
+
+    def __init__(self, driver, dit, device, src, group=None):
+        self.driver, self.dit, self.device, self.src = driver, dit, torch.device(device), src
+        self.spec = driver.ft_spec(dit)
+        if self.spec is None:
+            raise RuntimeError(f"{driver.description.display_name}'s driver declares no fine-tune (ft_spec)")
+        self.rot = Rotator(dit, self.spec, device)
+        self.streamer = None
+        self.always_label = ", ".join(self.spec.always_on) or "none"
+
+    def build_master(self, where, scratch_dir):
+        return self.rot.build_master(self.src, where, scratch_dir)
+
+    def start_always(self):
+        return self.rot.start_always()
+
+    def plan(self, free_gb, allow_stream=True, mp=None):
+        windows, stream, why, usable = plan_windows(self.dit, self.spec, self.rot, free_gb, allow_stream, mp)
+        if windows is not None and stream and any(isinstance(w, tuple) for w in windows):
+            from fizgig.krea2.rotation import RotationOffloader
+            n = len(self.rot.blocks)
+            self.streamer = RotationOffloader(self.rot.blocks, self.device, range(n))
+            self.driver.install_ft_streamer(self.dit, self.streamer)
+            logger.info("[finetune] frozen blocks outside the window stream from CPU")
+        return windows, stream, why, usable
+
+    def cycle_len(self):
+        return len(self.rot.blocks)
+
+    def rotate(self, want):
+        if self.streamer is not None:
+            self.streamer.set_resident(self.rot.resident_blocks(want))
+        return self.rot.rotate_to(want)
+
+    def trainable_params(self):
+        return self.rot.trainable_params()
+
+    def park(self):
+        self.rot.rotate_to([])
+
+    @property
+    def active(self):
+        return self.rot.active
+
+    @property
+    def master(self):
+        return self.rot.master
+
+    def params_in_blocks(self, block_ids):
+        want = set(block_ids)
+        return [lin.weight for k, lin, bi, ln in self.rot.targets
+                if self.driver.block_of(f"{self.spec.blocks}.{bi}.{ln}") in want and lin.weight.requires_grad]
+
+    def save(self, path, meta):
+        return save_checkpoint(self.rot.state_dict(), self.src, path, meta)
+
+    def cleanup(self):
+        if hasattr(self.rot.master, "cleanup"):
+            self.rot.master.cleanup()
+
+
 def schedule(windows, n_blocks, rotate_every=1, start_window=0) -> RotationSchedule:
     return RotationSchedule(n_blocks, mode="component", components=tuple(windows), rotate_every=rotate_every,
                             start_window=start_window)
 
 
-__all__ = ["FTSpec", "Rotator", "FusedSteps", "make_optimizer", "plan_windows", "save_checkpoint", "schedule",
+__all__ = ["FTSpec", "Rotator", "SharedBackend", "FusedSteps", "make_optimizer", "plan_windows", "save_checkpoint", "schedule",
            "snap_ft_epochs", "source_unfit_reason", "component_gb_per_block"]

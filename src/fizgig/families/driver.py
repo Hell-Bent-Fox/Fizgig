@@ -247,6 +247,20 @@ class FamilyDriver:
         finetune=True return one."""
         return None
 
+    def ft_backend(self, dit, device, src, group):
+        """The fine-tune's model-side backend (families.ft.SharedBackend's surface), or None for the shared one. A
+        family whose base file and trunk differ from the shared bf16 + NF4 path brings its own (H3)."""
+        return None
+
+    def ft_cycle(self, cycle: int, offset: int, total: int) -> None:
+        """The fine-tune's rotation cycle is known (`cycle` epochs; `offset` epochs done before this leg; `total`
+        epochs this leg runs): a family whose options land on epochs (H3's retirement) snaps them here."""
+
+    def ft_source_unfit(self, path):
+        """Why `path` cannot be fine-tuned by this family, or None. Default: the shared rule (a bf16 file)."""
+        from fizgig.families.ft import source_unfit_reason
+        return source_unfit_reason(path)
+
     def install_ft_streamer(self, dit, streamer) -> None:
         """Hand the fine-tune's block streamer to the model: it implements the block-swap interface the forward
         already calls (wait_for_block / submit_move_blocks_forward). The default suits the common

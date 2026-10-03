@@ -125,6 +125,7 @@ class FamilyOption:
     requires: str = ""                # shown (and sent) only while this check is ticked ("KEY") or this choice is
     #                                   picked ("KEY=LABEL", matched as pick() matches)
     suggestions: tuple = ()           # entry: ready-made values offered in an editable dropdown ("6-49 · why")
+    mode: str = ""                    # "finetune": shown and sent for a fine-tune only; "lora": for a LoRA only
 
     def choice_labels(self):
         return [c[0] for c in self.choices]
@@ -307,6 +308,9 @@ class FamilyDescription:
 
     # workbench tools that support this family ("repair", ...); the generic WorkbenchEngine drives them all
     workbench: tuple = ()
+    # the workbench engine class ("module:Class") when the generic WorkbenchEngine does not fit - a video family's
+    # (H3: clips, sound, keyframes, references, the render library). Built as Class(description).
+    workbench_engine: str = ""
     # Repair Studio built-ins beyond Reset All: (name, ((block id, strength), ...)) - every other block at 1.0
     repair_presets: tuple = ()
     # what each block carries, measured with the Profiler: ((block id, category), ...), category one of
@@ -355,6 +359,20 @@ class FamilyDescription:
         drv = getattr(importlib.import_module(mod), cls)()
         drv.description = self
         return drv
+
+    def make_workbench_engine(self):
+        """The family's workbench engine: its own class (workbench_engine) or the generic WorkbenchEngine."""
+        import importlib
+        if self.workbench_engine:
+            mod, _, cls = self.workbench_engine.partition(":")
+            return getattr(importlib.import_module(mod), cls)(self)
+        from fizgig.families.workbench import WorkbenchEngine
+        return WorkbenchEngine(self)
+
+    @property
+    def video_workbench(self) -> bool:
+        """The workbench tabs' clip features apply (a family with clips and its own video engine)."""
+        return "clip" in self.media and bool(self.workbench_engine)
 
     def lora_prefix(self, block: int, module: str) -> str:
         """Key stem of one wrapped module, e.g. 'transformer.transformer_blocks.3.attn.to_q'."""

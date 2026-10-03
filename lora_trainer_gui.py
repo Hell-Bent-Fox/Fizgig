@@ -428,6 +428,7 @@ def _load_described_families():
 
 
 DESCRIBED_FAMILIES = _load_described_families()
+DESCRIBED_FAMILIES_BY_KEY = {d.key: d for d in DESCRIBED_FAMILIES.values()}
 for _label, _desc in DESCRIBED_FAMILIES.items():
     ARCHITECTURES[_label] = _desc.architecture_entry()
 
@@ -7564,6 +7565,7 @@ class LoRATrainerGUI:
         if getattr(self, "_family_edit_hint", None) is None:
             return                      # a preset set the var before the rows were built
         desc = self._family_desc()
+        getattr(self, "_family_options_media_refresh", lambda: None)()   # LoRA-only / fine-tune-only option rows
         can_edit = bool(desc is not None and desc.edit_training)
         can_slider = bool(desc is not None and desc.slider_training)
         can_ft = bool(desc is not None and desc.finetune)
@@ -8714,7 +8716,8 @@ class LoRATrainerGUI:
         media = _fl.dataset_media(self.image_folder_var.get().strip())
         vals = self._family_options_values(self._family_desc())
         for opt, widgets in rows.values():
-            on = _fl.option_applies(opt, media, vals, self._family_desc().options)
+            _d = self._family_desc()
+            on = _fl.option_applies(opt, media, vals, _d.options, finetune=self._family_ft_on(_d))
             for w in widgets:
                 self._set_widget_visible(w, on)
 
@@ -17196,7 +17199,8 @@ class LoRATrainerGUI:
         # Model family selector. The non-Klein families have no DiT choice here and no ref-strength dial, so the DiT
         # radio + ref Strength hide for them.
         _xfam = str(self.last_used.get("explorer_family", "klein"))
-        if _xfam not in ("klein", "minimax") and self._explorer_desc(_xfam) is None:
+        _xfam = self._wb_key(_xfam)
+        if _xfam != "klein" and self._explorer_desc(_xfam) is None:
             _xfam = "klein"
         self.explorer_family_var = tk.StringVar(value=_xfam)
         xfam_card = self._start_section_card(
@@ -17211,8 +17215,6 @@ class LoRATrainerGUI:
                                                 foreground=COLORS["text_explain"], font=HINT_FONT)
         ttk.Radiobutton(_xf, text="Klein 9B", variable=self.explorer_family_var, value="klein",
                         command=self._on_explorer_family_changed).pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Radiobutton(_xf, text="MiniMax H3", variable=self.explorer_family_var, value="minimax",
-                        command=self._on_explorer_family_changed).pack(side=tk.LEFT)
         for _d in self._workbench_families("explorer"):
             _rb = ttk.Radiobutton(_xf, text=_d.display_name, variable=self.explorer_family_var, value=_d.key,
                                   command=self._on_explorer_family_changed)
@@ -17502,7 +17504,8 @@ class LoRATrainerGUI:
 
     def _explorer_family(self):
         fam = str(getattr(self, "explorer_family_var", None) and self.explorer_family_var.get())
-        return fam if fam in ("klein", "minimax") or self._explorer_desc(fam) is not None else "klein"
+        fam = self._wb_key(fam)
+        return fam if fam == "klein" or self._explorer_desc(fam) is not None else "klein"
 
     def _explorer_desc(self, fam=None):
         """The FamilyDescription behind the Explorer selector, or None for Klein / H3."""
@@ -17516,7 +17519,7 @@ class LoRATrainerGUI:
         fam = self._explorer_family()
         if self._explorer_desc(fam) is not None:
             return self._repair_default_state_for_desc(self._explorer_desc(fam))
-        return SliderState.default_h3() if fam == "minimax" else SliderState.default_klein9b()
+        return SliderState.default_klein9b()
 
     def _explorer_strength(self) -> float:
         """The Strength box as a float, unlimited like Repair's (1.0 on anything unparseable or not
@@ -17535,7 +17538,7 @@ class LoRATrainerGUI:
         if any(d.key == fam and d.training_ready and {"repair", "explorer"} <= set(d.workbench)
                for d in DESCRIBED_FAMILIES.values()):
             return fam
-        return fam if fam == "minimax" else "klein"
+        return "klein"
 
     def _on_explorer_strength_changed(self):
         """Strength box edited with a LoRA loaded: off Klein the baseline takes the new
@@ -17562,7 +17565,7 @@ class LoRATrainerGUI:
         Repair Studio). Klein: the old behaviour, every slider set to it (its engine has no
         load scale)."""
         v = self._explorer_strength()
-        if self._explorer_family() == "minimax" or self._explorer_desc() is not None:
+        if self._explorer_desc() is not None:
             state.primary_scale = v
             state.donor_scale = 1.0
         else:
@@ -17576,7 +17579,7 @@ class LoRATrainerGUI:
         desc = self._explorer_desc(fam)
         if desc is not None:
             return self._repair_block_groups(desc)[0].blocks[0].id   # the family's first block
-        return {"minimax": "h3blk_0"}.get(fam, "double_0")
+        return {"minimax": "h3blk_0"}.get(self._wb_legacy_name(fam), "double_0")
 
     def _on_explorer_family_changed(self):
         fam = self._explorer_family()
@@ -17630,8 +17633,6 @@ class LoRATrainerGUI:
         if self._explorer_engine is not None and self._explorer_engine.pipeline is not None and self._explorer_engine.pipeline.is_loaded:
             return True
 
-        if self._explorer_family() == "minimax":
-            return self._explorer_ensure_engine_h3()
         if self._explorer_desc() is not None:
             return self._explorer_ensure_engine_family(self._explorer_desc())
 
@@ -17687,10 +17688,8 @@ class LoRATrainerGUI:
                                               "Configure on Preferences tab.")
                 return False
         dit, speed_path, ck = self._workbench_preview_model(desc)
-        from fizgig.families.workbench import WorkbenchEngine
-        if self._explorer_engine is None or not isinstance(self._explorer_engine, WorkbenchEngine) \
-                or self._explorer_engine.desc.key != desc.key:
-            self._explorer_engine = WorkbenchEngine(desc)
+        if self._explorer_engine is None or getattr(self._explorer_engine, "desc", None) is not desc:
+            self._explorer_engine = desc.make_workbench_engine()
         if desc.workbench_follows_samples:
             self._explorer_engine.preview_settings = self._samples_settings_for(desc)
         try:
@@ -17698,47 +17697,13 @@ class LoRATrainerGUI:
             self.master.update_idletasks()
             self._explorer_engine.ensure_pipeline(
                 dit_path=dit, vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
-                speed_lora_path=speed_path, preview_sampling=ck, device="cuda", **self._family_inference_memory())
+                speed_lora_path=speed_path, preview_sampling=ck, device="cuda", **self._family_inference_memory(),
+                **(self._wb_video_kwargs(desc, audio=False) if desc.video_workbench else {}))
             self.explorer_status_var.set("Models loaded.")
             return True
         except Exception:
             import traceback
             messagebox.showerror("Error", f"Failed to load {desc.display_name}:\n{traceback.format_exc()}")
-            self.explorer_status_var.set("Error loading models.")
-            return False
-
-    def _explorer_ensure_engine_h3(self):
-        """Lazy-load the MiniMax H3 engine for the Explorer — same auto-planned base + Turbo
-        LoRA + prompt disk cache as the Repair Studio (see _ensure_repair_engine_h3)."""
-        dit_path = self.prefs_vars.get("minimax_dit", tk.StringVar()).get()
-        vae_path = self.prefs_vars.get("minimax_vae", tk.StringVar()).get()
-        te_path = self.prefs_vars.get("minimax_text_encoder", tk.StringVar()).get()
-        for label, p in (("MiniMax H3 DiT", dit_path), ("MiniMax H3 video VAE", vae_path),
-                         ("Qwen3-VL-32B text encoder", te_path)):
-            if not p or not os.path.exists(p):
-                messagebox.showerror("Error", f"{label} path not set or not found.\nConfigure on Preferences tab.")
-                return False
-        turbo_path = self.prefs_vars.get("minimax_turbo_lora", tk.StringVar()).get().strip()
-        cache_dir = self.prefs_vars.get("cache_dir", tk.StringVar()).get().strip()
-        te_cache = os.path.join(cache_dir, "te_prompts") if cache_dir else ""
-
-        import sys
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
-        from fizgig.repair_studio.h3_engine import H3RepairEngine
-        if self._explorer_engine is None or not isinstance(self._explorer_engine, H3RepairEngine):
-            self._explorer_engine = H3RepairEngine()
-        try:
-            self.explorer_status_var.set("Loading MiniMax H3 (the 33B base takes a minute)…")
-            self.master.update_idletasks()
-            self._explorer_engine.ensure_pipeline(
-                dit_path=dit_path, vae_path=vae_path, text_encoder_path=te_path,
-                device="cuda", turbo_lora_path=turbo_path,
-                turbo_lora_strength=0.75, te_cache_dir=te_cache)
-            self.explorer_status_var.set("Models loaded.")
-            return True
-        except Exception:
-            import traceback
-            messagebox.showerror("Error", f"Failed to load MiniMax H3 models:\n{traceback.format_exc()}")
             self.explorer_status_var.set("Error loading models.")
             return False
 
@@ -17756,7 +17721,7 @@ class LoRATrainerGUI:
         # the wrong family's DiT/VAE/TE. Only a genuinely unrecognized file falls through to
         # the generic error below, same as before.
         from fizgig.networks.lora import lora_family_from_file, FAMILY_DISPLAY_NAMES
-        detected = lora_family_from_file(path)
+        detected = self._wb_key(lora_family_from_file(path)) or None
         from fizgig.networks.lora import INFERENCE_FAMILIES
         if detected is None and self._workbench_families("explorer"):
             from fizgig.families.registry import family_of_lora
@@ -17765,6 +17730,10 @@ class LoRATrainerGUI:
                 detected = _dd.key
                 FAMILY_DISPLAY_NAMES = {**FAMILY_DISPLAY_NAMES, _dd.key: _dd.display_name}
                 INFERENCE_FAMILIES = tuple(INFERENCE_FAMILIES) + (_dd.key,)
+        _wd = self._explorer_desc(detected) if detected else None
+        if _wd is not None and detected not in INFERENCE_FAMILIES:
+            FAMILY_DISPLAY_NAMES = {**FAMILY_DISPLAY_NAMES, detected: _wd.display_name}
+            INFERENCE_FAMILIES = tuple(INFERENCE_FAMILIES) + (detected,)
         if detected is not None and detected not in INFERENCE_FAMILIES:
             messagebox.showerror(
                 "Unsupported family",
@@ -18515,8 +18484,8 @@ class LoRATrainerGUI:
 
         # Model family selector. Every family but Klein = pure weight SVD over all blocks (no pipeline /
         # prompt / timesteps / block presets), so those cards are hidden for them.
-        _efam = str(self.last_used.get("extract_family", "klein"))
-        if _efam not in ("klein", "minimax") and self._extract_desc(_efam) is None:
+        _efam = self._wb_key(self.last_used.get("extract_family", "klein"))
+        if _efam != "klein" and self._extract_desc(_efam) is None:
             _efam = "klein"
         self.extract_family_var = tk.StringVar(value=_efam)
         efam_card = self._start_section_card(
@@ -18528,8 +18497,6 @@ class LoRATrainerGUI:
         _ef.pack(anchor=tk.W)
         ttk.Radiobutton(_ef, text="Klein 9B", variable=self.extract_family_var, value="klein",
                         command=self._on_extract_family_changed).pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Radiobutton(_ef, text="MiniMax H3", variable=self.extract_family_var, value="minimax",
-                        command=self._on_extract_family_changed).pack(side=tk.LEFT)
         for _d in self._workbench_families("extract"):
             _rb = ttk.Radiobutton(_ef, text=_d.display_name, variable=self.extract_family_var, value=_d.key,
                                   command=self._on_extract_family_changed)
@@ -18940,12 +18907,12 @@ class LoRATrainerGUI:
             # instead of erroring at run time (same as Explorer / Profiler).
             try:
                 from fizgig.networks.lora import lora_family_from_file
-                fam = lora_family_from_file(filepath)
+                fam = self._wb_key(lora_family_from_file(filepath)) or None
                 if fam is None and self._workbench_families("extract"):
                     from fizgig.families.registry import family_of_lora
                     _dd = family_of_lora(filepath)
                     fam = _dd.key if _dd is not None and self._extract_desc(_dd.key) is not None else None
-                if (fam in ("klein", "minimax") or self._extract_desc(fam) is not None) \
+                if (fam == "klein" or self._extract_desc(fam) is not None) \
                         and fam != self.extract_family_var.get():
                     self.extract_family_var.set(fam)
                     self._on_extract_family_changed()
@@ -18969,7 +18936,7 @@ class LoRATrainerGUI:
 
     def _run_extract(self):
         """Start extraction in a background thread."""
-        if str(self.extract_family_var.get()) == "minimax" or self._extract_desc() is not None:
+        if self._extract_desc() is not None:
             self._run_extract_weight_only()   # the worker writes the family's own key format
             return
 
@@ -19178,8 +19145,8 @@ class LoRATrainerGUI:
         return next((d for d in self._workbench_families("extract") if d.key == fam), None)
 
     def _on_extract_family_changed(self):
-        fam = str(self.extract_family_var.get())
-        if fam not in ("klein", "minimax") and self._extract_desc(fam) is None:
+        fam = self._wb_key(self.extract_family_var.get())
+        if fam != "klein" and self._extract_desc(fam) is None:
             fam = "klein"
         self.last_used["extract_family"] = fam
         self._save_last_used_paths()
@@ -19209,10 +19176,11 @@ class LoRATrainerGUI:
             # Force weight-only all-blocks regardless of stale Klein selections.
             self.extract_samples_var.set("0")
             self.extract_timesteps_var.set("all")
-            if str(self.extract_family_var.get()) == "minimax":
+            _ed = self._extract_desc()
+            if _ed is not None and _ed.video_workbench:
                 self.extract_time_note_var.set(
-                    "MiniMax H3 is a 33B model - weight SVD runs over every trained module "
-                    "(208+ Linears, up to 5376 wide). Expect several minutes on a free GPU. "
+                    f"{_ed.display_name} is a big model - weight SVD runs over every trained module "
+                    "(hundreds of wide Linears). Expect several minutes on a free GPU. "
                     "If the GPU is busy (a training run, ComfyUI, another preview), each SVD "
                     "falls back to the CPU and runs much slower - free up VRAM first.")
                 return
@@ -20797,8 +20765,8 @@ class LoRATrainerGUI:
 
         # Model family selector. Klein's activation cards (DiT choice, prompt, resolution, stages) show for Klein
         # only; driver families get the "What to measure" card, MiniMax H3 neither (weights only).
-        _pfam = str(self.last_used.get("profiler_family", "klein"))
-        if _pfam not in ("klein", "minimax") and self._profiler_desc(_pfam) is None:
+        _pfam = self._wb_key(self.last_used.get("profiler_family", "klein"))
+        if _pfam != "klein" and self._profiler_desc(_pfam) is None:
             _pfam = "klein"
         self.profiler_family_var = tk.StringVar(value=_pfam)
         fam_card = self._start_section_card(
@@ -20809,8 +20777,6 @@ class LoRATrainerGUI:
         _pf.pack(anchor=tk.W)
         ttk.Radiobutton(_pf, text="Klein 9B", variable=self.profiler_family_var, value="klein",
                         command=self._on_profiler_family_changed).pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Radiobutton(_pf, text="MiniMax H3", variable=self.profiler_family_var, value="minimax",
-                        command=self._on_profiler_family_changed).pack(side=tk.LEFT)
         for _d in self._workbench_families("profiler"):
             _rb = ttk.Radiobutton(_pf, text=_d.display_name, variable=self.profiler_family_var, value=_d.key,
                                   command=self._on_profiler_family_changed)
@@ -20975,7 +20941,7 @@ class LoRATrainerGUI:
     def _apply_profiler_family_ui(self):
         """Klein's activation-probe cards (Model/Prompt/Options) for Klein only; the driver families' "What to
         measure" card for them. Re-shows use before= anchors so the cards land back in their canonical order."""
-        weight_only = self.profiler_family_var.get() == "minimax" or self._profiler_desc() is not None
+        weight_only = self._profiler_desc() is not None
 
         def _show(cont, before):
             try:
@@ -20990,7 +20956,7 @@ class LoRATrainerGUI:
         driver = self._profiler_desc() is not None
         soon = getattr(self, "_profiler_soon_label", None)
         if soon is not None:
-            name = {"klein": "Klein 9B", "minimax": "MiniMax H3"}.get(self.profiler_family_var.get())
+            name = {"klein": "Klein 9B"}.get(self.profiler_family_var.get())
             if name and not driver:
                 soon.configure(text=f"The full profile (likeness, bleed and rank, measured by rendering) is coming to "
                                     f"{name} soon. Until then {name} has its earlier "
@@ -21157,12 +21123,12 @@ class LoRATrainerGUI:
             # the wrong family Just Works instead of erroring at run time.
             try:
                 from fizgig.networks.lora import lora_family_from_file
-                fam = lora_family_from_file(filepath)
+                fam = self._wb_key(lora_family_from_file(filepath)) or None
                 if fam is None and self._workbench_families("profiler"):
                     from fizgig.families.registry import family_of_lora
                     _dd = family_of_lora(filepath)
                     fam = _dd.key if _dd is not None and self._profiler_desc(_dd.key) is not None else None
-                if (fam in ("klein", "minimax") or self._profiler_desc(fam) is not None) \
+                if (fam == "klein" or self._profiler_desc(fam) is not None) \
                         and fam != self.profiler_family_var.get():
                     self.profiler_family_var.set(fam)
                     self._on_profiler_family_changed()
@@ -21204,8 +21170,6 @@ class LoRATrainerGUI:
             messagebox.showerror("Error", "Please select a valid LoRA file.")
             return
 
-        if self.profiler_family_var.get() == "minimax":
-            return self._run_profiler_h3(lora_path)
         if self._profiler_desc() is not None:
             return self._run_profiler_family(self._profiler_desc(), lora_path)
 
@@ -21280,7 +21244,8 @@ class LoRATrainerGUI:
             dit, speed_path, ck = self._workbench_preview_model(desc)
             plan = dict(dit_path=dit, vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
                         speed_lora_path=speed_path, preview_sampling=ck, device="cuda",
-                        **self._family_inference_memory())
+                        **self._family_inference_memory(),
+                        **(self._wb_video_kwargs(desc, audio=False) if desc.video_workbench else {}))
         seeds = (1234, 5678) if mode == "thorough" else (1234,)
         size = int(self.profiler_fam_res_var.get() or 768)
         baselines = list(self._profiler_fam_baselines)
@@ -21312,7 +21277,7 @@ class LoRATrainerGUI:
                 abl = None
                 if plan is not None:
                     _ui(self.profiler_progress_var.set, f"Loading {desc.display_name}…")
-                    eng = WorkbenchEngine(desc)
+                    eng = desc.make_workbench_engine()
                     if desc.workbench_follows_samples:
                         eng.preview_settings = self._samples_settings_for(desc)
                     self._profiler_engine = eng
@@ -21406,56 +21371,6 @@ class LoRATrainerGUI:
                     self.profiler_stop_btn.configure(state="disabled")
                 self.master.after(0, _idle)
         threading.Thread(target=worker, daemon=True).start()
-
-    def _run_profiler_h3(self, lora_path):
-        """MiniMax H3 weight-only profile — no pipeline, fast. Runs in a thread."""
-        import threading
-        self.profiler_run_btn.configure(state="disabled")
-        self.profiler_open_btn.configure(state="disabled")
-        self.profiler_results.configure(state="normal")
-        self.profiler_results.delete(1.0, tk.END)
-        self.profiler_results.configure(state="disabled")
-        self.profiler_progress_var.set("Profiling (MiniMax H3, weight-only)…")
-
-        def worker():
-            try:
-                import sys
-                sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
-                from fizgig.profiler.h3_profile import profile_h3_weight_only
-                profiles_dir = (self.prefs_vars["profiles_dir"].get() if "profiles_dir" in self.prefs_vars
-                                else os.path.join(OUTPUT_LORAS_DIR, "profiles"))
-                os.makedirs(profiles_dir, exist_ok=True)
-                stem = os.path.splitext(os.path.basename(lora_path))[0]
-                out_html = os.path.join(profiles_dir, f"{stem}_h3_profile.html")
-                html, sidecar = profile_h3_weight_only(lora_path, out_html, profiles_dir=profiles_dir)
-                self._profiler_report_path = html
-                self.master.after(0, lambda: self._profiler_h3_done(html, sidecar))
-            except Exception:
-                import traceback
-                err = traceback.format_exc()
-                def _fail():
-                    self._profiler_log(err + "\n")
-                    self.profiler_progress_var.set("Error — see results.")
-                    self.profiler_run_btn.configure(state="normal")
-                self.master.after(0, _fail)
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _profiler_h3_done(self, html, sidecar):
-        try:
-            import json as _json
-            d = _json.load(open(sidecar, encoding="utf-8"))
-            lines = ["MiniMax H3 weight-only profile complete.\n",
-                     f"Report: {html}\n\nTop blocks by weight:\n"]
-            for b in d.get("top_active_blocks", []):
-                lines.append(f"  {b['name']:<12} {b['pct']:.1f}%\n")
-            lines.append("\nH3's 50 block roles aren't mapped yet — this is the weight signature "
-                         "to discover them. Found a pattern? Share it on GitHub Issues.\n")
-            self._profiler_log("".join(lines))
-        except Exception:
-            self._profiler_log(f"Profile complete: {html}\n")
-        self.profiler_progress_var.set("Done.")
-        self.profiler_run_btn.configure(state="normal")
-        self.profiler_open_btn.configure(state="normal")
 
     def _profiler_worker(self, lora_path, prompt, dit_path, vae_path, te_path, res, stages):
         """Background worker for profiling."""
@@ -21620,8 +21535,8 @@ class LoRATrainerGUI:
         # Model family (Klein 9B / MiniMax H3 / a described family), restored from last_used.
         _fam = "klein"
         try:
-            _saved = str(self.last_used.get("repair_family", "klein"))
-            if _saved == "minimax" or self._repair_desc(_saved) is not None:
+            _saved = self._wb_key(self.last_used.get("repair_family", "klein"))
+            if self._repair_desc(_saved) is not None:
                 _fam = _saved
         except Exception:
             pass
@@ -21765,8 +21680,9 @@ class LoRATrainerGUI:
         instrument). `krea2` below means "any no-map family" (historical naming)."""
         fam = self.repair_family_var.get()
         desc = self._repair_desc(fam)
-        krea2 = fam == "minimax" or (desc is not None and not desc.category_masters)
-        if desc is not None:
+        video = self._wb_video(fam)
+        krea2 = desc is not None and not desc.category_masters
+        if desc is not None and not video:
             # Standard-layer family: previews with its speed LoRA (when set in Preferences) or its default
             # sampling. Radio values stay distilled / base so the rest of the tab reads them unchanged.
             sp, ds = desc.preview_speed(), desc.default_sampling()
@@ -21784,8 +21700,8 @@ class LoRATrainerGUI:
                 self._repair_dit_radio_b.configure(text=f"Full ({ds.steps}-step, slow)", state="normal")
                 if not self._repair_dit_radio_b.winfo_manager():
                     self._repair_dit_radio_b.pack(side=tk.LEFT)
-        elif fam == "minimax":
-            # H3 has no DiT choice: base precision is auto-planned from free VRAM and the
+        elif video:
+            # a video family (H3) has no DiT choice: base precision is auto-planned from free VRAM and the
             # Turbo LoRA (6-step) applies whenever it's set in Preferences.
             self._repair_dit_radio_a.configure(text="Auto (int8/NF4 by VRAM + Turbo LoRA)",
                                                state="disabled")
@@ -21841,7 +21757,7 @@ class LoRATrainerGUI:
         # scope) — a visible row the engine ignores is a lie, and editing it forced a re-render
         # that changed nothing. The WHOLE row hides under MiniMax and under a described family that
         # takes no reference; Klein, Krea 2 and the families with a reference_kind keep it.
-        _no_ref = fam == "minimax" or (desc is not None and not desc.reference_kind)
+        _no_ref = video or (desc is not None and not desc.reference_kind)
         for _w in (getattr(self, "_repair_ref_label", None),
                    getattr(self, "_repair_ref_entry", None),
                    getattr(self, "_repair_ref_params", None)):
@@ -21865,7 +21781,7 @@ class LoRATrainerGUI:
         # H3 renders clips: its own Length/Size/Regime/Sound row replaces the square Res combo,
         # and the compare pop-out is a clip player.
         try:
-            if fam == "minimax":
+            if video:
                 self._repair_cmp_btn.configure(text="▶ Play clips + Metrics")
                 self._repair_preview_hint.configure(
                     text="▶ Click either image to play both clips side by side — sound, "
@@ -21886,7 +21802,7 @@ class LoRATrainerGUI:
         except Exception:
             pass
         try:
-            if fam == "minimax":
+            if video:
                 self._repair_res_label.pack_forget()
                 self._repair_res_combo.pack_forget()
                 self._repair_h3_label.grid()
@@ -21954,9 +21870,9 @@ class LoRATrainerGUI:
         return int(self._REPAIR_H3_LENGTHS.get(self.repair_h3_frames_var.get(), 22))
 
     def _repair_h3_audio_vae_path(self):
-        v = self.prefs_vars.get("minimax_audio_vae") if hasattr(self, "prefs_vars") else None
-        p = v.get().strip() if v is not None else ""
-        return p if p and os.path.exists(p) else ""
+        """The video family's audio decoder (Repair Studio's family, or H3's for RefMod Studio)."""
+        d = self._repair_desc() if self._repair_is_video() else DESCRIBED_FAMILIES_BY_KEY.get("minimax_driver")
+        return self._wb_model_path(d, "audio_vae", must_exist=True)
 
     def _refresh_repair_h3_sound_state(self):
         """Sound is only offerable with an audio VAE configured — grey the tick otherwise."""
@@ -22102,7 +22018,7 @@ class LoRATrainerGUI:
         except Exception:
             pass
         if on:
-            if self._repair_clips.get("nolora") is None and self._repair_is_h3():
+            if self._repair_clips.get("nolora") is None and self._repair_is_video():
                 self._on_preview_param_changed()
         else:
             self._repair_clips.pop("nolora", None)
@@ -22169,7 +22085,7 @@ class LoRATrainerGUI:
         # 512 default for Klein/Krea 2 (keeps the Turbo Preview activation cache VRAM-feasible);
         # H3 previews at 768 — its native canvas, rendered as a 22-frame clip's middle frame.
         # Standard-layer families also start at 768 (Qwen 2.1 is a 1 MP+ model).
-        self.repair_res_var.set("768" if fam == "minimax" or self._repair_desc(fam) is not None else "512")
+        self.repair_res_var.set("768" if self._repair_desc(fam) is not None else "512")
         self._build_repair_slider_panel(self._repair_sliders_parent)
         self._apply_repair_family_ui()
         try:
@@ -22260,8 +22176,6 @@ class LoRATrainerGUI:
         fam_frame.grid(row=r, column=1, columnspan=3, sticky=tk.W, padx=4, pady=2)
         ttk.Radiobutton(fam_frame, text="Klein 9B", variable=self.repair_family_var, value="klein",
                         style="Surface.TRadiobutton", command=self._on_repair_family_changed).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Radiobutton(fam_frame, text="MiniMax H3", variable=self.repair_family_var, value="minimax",
-                        style="Surface.TRadiobutton", command=self._on_repair_family_changed).pack(side=tk.LEFT)
         for _d in self._workbench_families("repair"):
             _rb = ttk.Radiobutton(fam_frame, text=_d.display_name, variable=self.repair_family_var, value=_d.key,
                                   style="Surface.TRadiobutton", command=self._on_repair_family_changed)
@@ -22984,7 +22898,7 @@ class LoRATrainerGUI:
         for child in parent.winfo_children():
             child.destroy()
         self.repair_block_vars = {}
-        if getattr(self, "repair_family_var", None) is not None and self.repair_family_var.get() == "minimax":
+        if self._repair_is_video():
             self._build_repair_slider_panel_h3(parent)
             return
         if self._repair_desc() is not None:
@@ -23422,7 +23336,7 @@ class LoRATrainerGUI:
     def _on_repair_scale_changed(self):
         """A load strength edited: the state carries it (slider × scale in the engine), the
         baseline is a different render now, so re-render — H3 and the described families."""
-        if not (self._repair_is_h3() or self._repair_desc() is not None):
+        if not (self._repair_is_video() or self._repair_desc() is not None):
             return
         ps, ds = self._repair_scale("primary"), self._repair_scale("donor")
         if (abs(getattr(self.repair_state, "primary_scale", 1.0) - ps) < 1e-9
@@ -23452,8 +23366,8 @@ class LoRATrainerGUI:
         if self.repair_engine is not None and self.repair_engine.pipeline is not None and self.repair_engine.pipeline.is_loaded:
             return {}
 
-        if self.repair_family_var.get() == "minimax":
-            return self._repair_engine_plan_h3()
+        if self._repair_is_video():
+            return self._repair_engine_plan_video(self._repair_desc())
         if self._repair_desc() is not None:
             return self._repair_engine_plan_family(self._repair_desc())
 
@@ -23507,10 +23421,8 @@ class LoRATrainerGUI:
                 return False
         follow = desc.workbench_follows_samples
         dit, speed_path, ck = self._workbench_preview_model(desc, follow or self.repair_dit_choice_var.get() != "base")
-        from fizgig.families.workbench import WorkbenchEngine
-        if self.repair_engine is None or not isinstance(self.repair_engine, WorkbenchEngine) \
-                or self.repair_engine.desc.key != desc.key:
-            self.repair_engine = WorkbenchEngine(desc)
+        if self.repair_engine is None or getattr(self.repair_engine, "desc", None) is not desc:
+            self.repair_engine = desc.make_workbench_engine()
         sp = desc.preview_speed()
         steps = ck.steps if ck else (sp.settings.steps if speed_path else desc.default_sampling().steps)
         if follow:
@@ -23549,7 +23461,7 @@ class LoRATrainerGUI:
         from fizgig.families.workbench import WorkbenchEngine
         for eng in (getattr(self, "repair_engine", None), getattr(self, "_explorer_engine", None),
                     getattr(self, "royale_engine", None)):
-            if isinstance(eng, WorkbenchEngine) and eng.desc.workbench_follows_samples:
+            if getattr(eng, "desc", None) is not None and eng.desc.workbench_follows_samples:
                 eng.preview_settings = self._samples_settings_for(eng.desc)
 
     def _show_samples_note(self, label, desc):
@@ -23584,30 +23496,27 @@ class LoRATrainerGUI:
         return {"precision": "int8" if self._get_inference_int8() else "auto",
                 "blocks_to_swap": self._get_inference_blocks_to_swap()}
 
-    def _repair_engine_plan_h3(self):
-        """Lazy-load the MiniMax H3 Repair engine. No DiT choice: base precision is planned
+    def _repair_engine_plan_video(self, desc):
+        """Lazy-load a video family's workbench engine (H3). No DiT choice: base precision is planned
         from free VRAM inside the engine (int8 on big cards, NF4-of-pruned otherwise, never
-        swapped), and the Turbo LoRA (6-step @ 75%) applies whenever it's set in Preferences.
-        Previews render a 22-frame 768x768 clip and show its middle frame."""
+        swapped), and the family's speed LoRA (H3's Turbo, 6-step @ 75%) applies whenever it's set in Preferences.
+        Previews render a clip and show its middle frame."""
         dit_path = self._repair_h3_dit_path()
-        vae_path = self.prefs_vars.get("minimax_vae", tk.StringVar()).get()
-        te_path = self.prefs_vars.get("minimax_text_encoder", tk.StringVar()).get()
-        _dit_label = ("MiniMax H3 DiT (reference) — the ref2va checkpoint the Model picker asks for"
-                      if self._repair_h3_ref_mode() else "MiniMax H3 DiT")
-        for label, p in ((_dit_label, dit_path), ("MiniMax H3 video VAE", vae_path),
-                         ("Qwen3-VL-32B text encoder", te_path)):
+        vae_path = self._wb_model_path(desc, "vae")
+        te_path = self._wb_model_path(desc, "text_encoder")
+        labels = {f.role: f.label for f in desc.model_files}
+        _dit_label = (f"{desc.display_name} {labels.get('ref_dit', 'reference DiT')} — the checkpoint the Model picker "
+                      f"asks for" if self._repair_h3_ref_mode() else f"{desc.display_name} {labels.get('dit', 'DiT')}")
+        for label, p in ((_dit_label, dit_path), (labels.get("vae", "VAE"), vae_path),
+                         (labels.get("text_encoder", "text encoder"), te_path)):
             if not p or not os.path.exists(p):
                 messagebox.showerror("Error", f"{label} path not set or not found.\nConfigure on Preferences tab.")
                 return False
-        turbo_path = self.prefs_vars.get("minimax_turbo_lora", tk.StringVar()).get().strip()
-        cache_dir = self.prefs_vars.get("cache_dir", tk.StringVar()).get().strip()
-        te_cache = os.path.join(cache_dir, "te_prompts") if cache_dir else ""
-
-        import sys
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
-        from fizgig.repair_studio.h3_engine import H3RepairEngine
-        if self.repair_engine is None or not isinstance(self.repair_engine, H3RepairEngine):
-            self.repair_engine = H3RepairEngine()
+        sp = desc.preview_speed()
+        turbo_path = self._wb_model_path(desc, "speed_lora") or (
+            self.prefs_vars.get(sp.pref_key, tk.StringVar()).get().strip() if sp else "")
+        if self.repair_engine is None or getattr(self.repair_engine, "desc", None) is not desc:
+            self.repair_engine = desc.make_workbench_engine()
         self.repair_engine.on_status = self._repair_engine_status
         # Attention runs through comfy-kitchen's INT8 kernel wherever it exists (NVIDIA,
         # RTX 20-series up) and silently through PyTorch's where it doesn't (AMD, older
@@ -23615,13 +23524,11 @@ class LoRATrainerGUI:
         self.repair_engine.int8_attention = True
         # _turbo_enabled stays False: the activation-cache resume was measured to under-apply
         # tweaks ~16x on H3 (see _apply_repair_family_ui) — previews always full-forward.
-        self.repair_status_var.set("Loading MiniMax H3 (the 33B base takes a minute)…")
-        return dict(
-            dit_path=dit_path, vae_path=vae_path, text_encoder_path=te_path,
-            device="cuda", turbo_lora_path=turbo_path,
-            turbo_lora_strength=0.75, te_cache_dir=te_cache,
-            audio_vae_path=self._repair_h3_audio_vae_path(),
-            base_mode=self._repair_h3_base_mode())
+        self.repair_status_var.set(f"Loading {desc.display_name} (the base takes a minute)…")
+        return dict(dit_path=dit_path, vae_path=vae_path, text_encoder_path=te_path, device="cuda",
+                    speed_lora_path=turbo_path,
+                    turbo_lora_strength=(desc.preview_speed_defaults() or (None, 0.75))[1],
+                    **self._wb_video_kwargs(desc, self._repair_h3_base_mode()))
 
     # ------------------------------------------------------------------
     # LoRA Royale — render every epoch on one seed, crossfade to the sweet spot
@@ -23653,7 +23560,8 @@ class LoRATrainerGUI:
         # strength travel work for both; Krea 2 travel morphs come from the seed slerp / prompt interpolation with the
         # vision-path image as the per-frame anchor (no Klein reference-latent chaining).
         _rfam = str(self.last_used.get("royale_family", "klein"))
-        if _rfam not in ("klein", "minimax") and self._royale_desc(_rfam) is None:
+        _rfam = self._wb_key(_rfam)
+        if _rfam != "klein" and self._royale_desc(_rfam) is None:
             _rfam = "klein"
         self.royale_family_var = tk.StringVar(value=_rfam)
         rfam_card = self._start_section_card(
@@ -23667,8 +23575,6 @@ class LoRATrainerGUI:
                                               foreground=COLORS["text_explain"], font=HINT_FONT)
         ttk.Radiobutton(_rf, text="Klein 9B", variable=self.royale_family_var, value="klein",
                         command=self._on_royale_family_changed).pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Radiobutton(_rf, text="MiniMax H3", variable=self.royale_family_var, value="minimax",
-                        command=self._on_royale_family_changed).pack(side=tk.LEFT)
         for _d in self._workbench_families("royale"):
             _rb = ttk.Radiobutton(_rf, text=_d.display_name, variable=self.royale_family_var, value=_d.key,
                                   command=self._on_royale_family_changed)
@@ -24833,7 +24739,8 @@ class LoRATrainerGUI:
 
     def _royale_family(self):
         fam = str(getattr(self, "royale_family_var", None) and self.royale_family_var.get())
-        return fam if fam in ("klein", "minimax") or self._royale_desc(fam) is not None else "klein"
+        fam = self._wb_key(fam)
+        return fam if fam == "klein" or self._royale_desc(fam) is not None else "klein"
 
     def _royale_desc(self, fam=None):
         """The FamilyDescription behind the Royale selector, or None for Klein / H3."""
@@ -24849,7 +24756,7 @@ class LoRATrainerGUI:
         fam = self._royale_family()
         if self._royale_desc(fam) is not None:
             return self._repair_default_state_for_desc(self._royale_desc(fam))
-        return SliderState.default_h3() if fam == "minimax" else SliderState.default_klein9b()
+        return SliderState.default_klein9b()
 
     def _on_royale_family_changed(self):
         """Family toggle: the engine type changes, so unload any loaded engine + clear rendered
@@ -24862,8 +24769,8 @@ class LoRATrainerGUI:
         self._royale_unload()
         self.royale_engine = None
         self._apply_royale_family_ui(fam != "klein")
-        _names = {"minimax": "MiniMax H3 (22-frame clip previews)",
-                  **{d.key: d.display_name for d in self._workbench_families("royale")}}
+        _names = {d.key: d.display_name + (" (clip previews)" if d.video_workbench else "")
+                  for d in self._workbench_families("royale")}
         self.royale_status_var.set(
             f"Switched to {_names.get(fam, 'Klein 9B (Distilled previews)')}. "
             f"Pick a source and render.")
@@ -24943,8 +24850,6 @@ class LoRATrainerGUI:
         to load with. Does NOT load anything (no blocking) — the worker thread does the
         heavy load via _royale_ensure_pipeline_loaded(). Shows a messagebox + returns
         False on a missing path."""
-        if self._royale_family() == "minimax":
-            return self._royale_validate_models_h3()
         if self._royale_desc() is not None:
             return self._royale_validate_models_family(self._royale_desc())
         dit_path = self.prefs_vars["distilled_dit"].get() if "distilled_dit" in self.prefs_vars else ""
@@ -24981,40 +24886,14 @@ class LoRATrainerGUI:
                                               "Configure on Preferences tab.")
                 return False
         dit, speed, ck = self._workbench_preview_model(desc)
-        from fizgig.families.workbench import WorkbenchEngine
-        if not isinstance(self.royale_engine, WorkbenchEngine) or self.royale_engine.desc.key != desc.key:
-            self.royale_engine = WorkbenchEngine(desc)
+        if getattr(self.royale_engine, "desc", None) is not desc:
+            self.royale_engine = desc.make_workbench_engine()
         if desc.workbench_follows_samples:
             self.royale_engine.preview_settings = self._samples_settings_for(desc)
         self._royale_pipeline_kwargs = dict(
             dit_path=dit, vae_path=paths["vae"], text_encoder_path=paths["text_encoder"],
-            speed_lora_path=speed, preview_sampling=ck, device="cuda", **self._family_inference_memory())
-        return True
-
-    def _royale_validate_models_h3(self):
-        """MiniMax H3 pre-flight: the H3 DiT + video VAE + Qwen3-VL-32B TE from Preferences,
-        an H3RepairEngine, and H3-shaped pipeline kwargs (auto-planned base + Turbo LoRA +
-        prompt disk cache — same recipe as the Repair Studio). Epoch previews render a
-        22-frame clip's middle frame."""
-        dit_path = self.prefs_vars.get("minimax_dit", tk.StringVar()).get()
-        vae_path = self.prefs_vars.get("minimax_vae", tk.StringVar()).get()
-        te_path = self.prefs_vars.get("minimax_text_encoder", tk.StringVar()).get()
-        for label, p in (("MiniMax H3 DiT", dit_path), ("MiniMax H3 video VAE", vae_path),
-                         ("Qwen3-VL-32B text encoder", te_path)):
-            if not p or not os.path.exists(p):
-                messagebox.showerror("Error", f"{label} path not set or not found.\nConfigure on Preferences tab.")
-                return False
-        turbo_path = self.prefs_vars.get("minimax_turbo_lora", tk.StringVar()).get().strip()
-        cache_dir = self.prefs_vars.get("cache_dir", tk.StringVar()).get().strip()
-        import sys
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
-        from fizgig.repair_studio.h3_engine import H3RepairEngine
-        if not isinstance(self.royale_engine, H3RepairEngine):
-            self.royale_engine = H3RepairEngine()
-        self._royale_pipeline_kwargs = dict(
-            dit_path=dit_path, vae_path=vae_path, text_encoder_path=te_path,
-            device="cuda", turbo_lora_path=turbo_path, turbo_lora_strength=0.75,
-            te_cache_dir=os.path.join(cache_dir, "te_prompts") if cache_dir else "")
+            speed_lora_path=speed, preview_sampling=ck, device="cuda", **self._family_inference_memory(),
+            **(self._wb_video_kwargs(desc, audio=False) if desc.video_workbench else {}))
         return True
 
     def _royale_check_lora_families(self, *paths):
@@ -25045,7 +24924,7 @@ class LoRATrainerGUI:
             if not path or path in checked:
                 continue
             checked.add(path)
-            detected = lora_family_from_file(path)
+            detected = self._wb_key(lora_family_from_file(path)) or None
             if detected is None and self._workbench_families("royale"):
                 from fizgig.families.registry import family_of_lora
                 _dd = family_of_lora(path)
@@ -25103,7 +24982,7 @@ class LoRATrainerGUI:
         already calls this one function inside its own try/except, so one guard here
         covers all of them without touching each worker."""
         from fizgig.networks.lora import assert_lora_family_matches
-        assert_lora_family_matches(path, str(self.royale_family_var.get()), "Royale")
+        assert_lora_family_matches(path, self._wb_legacy_name(self.royale_family_var.get()), "Royale")
         if eng.primary_network is None:
             eng.load_primary(path)
             return
@@ -26551,7 +26430,7 @@ class LoRATrainerGUI:
         # wrong family's DiT/VAE/TE. Only a genuinely unrecognized file falls through to the
         # generic error below, same as before.
         from fizgig.networks.lora import lora_family_from_file, FAMILY_DISPLAY_NAMES, INFERENCE_FAMILIES
-        detected = lora_family_from_file(path)
+        detected = self._wb_key(lora_family_from_file(path)) or None
         if detected is None and self._workbench_families("repair"):
             # Standard-layer families (asked only when the old detector knows nothing about the file).
             from fizgig.families.registry import family_of_lora
@@ -26562,6 +26441,10 @@ class LoRATrainerGUI:
                 INFERENCE_FAMILIES = tuple(INFERENCE_FAMILIES) + (_dd.key,)
         if self._repair_desc() is not None:
             INFERENCE_FAMILIES = tuple(INFERENCE_FAMILIES) + (self.repair_family_var.get(),)
+        _wd = self._repair_desc(detected) if detected else None
+        if _wd is not None and detected not in INFERENCE_FAMILIES:
+            FAMILY_DISPLAY_NAMES = {**FAMILY_DISPLAY_NAMES, detected: _wd.display_name}
+            INFERENCE_FAMILIES = tuple(INFERENCE_FAMILIES) + (detected,)
         if detected is not None and detected not in INFERENCE_FAMILIES:
             # Setting the var to a family with no radio leaves all radios blank instead of
             # following it (issue #62). Refuse rather than land on a family this tab has no
@@ -26765,20 +26648,18 @@ class LoRATrainerGUI:
     def _repair_h3_ref_mode(self):
         """True when the H3 studio runs the ref2va checkpoint (a plain flag, safe from a
         worker thread — set on the Tk thread whenever the picker changes)."""
-        return self._repair_is_h3() and bool(getattr(self, "_repair_h3_ref_flag", False))
+        return self._repair_is_video() and bool(getattr(self, "_repair_h3_ref_flag", False))
 
     def _repair_h3_dit_path(self):
-        """The H3 checkpoint the picker asks for: DiT (reference) for ref2va, else the DiT."""
-        key = "minimax_ref_dit" if self._repair_h3_ref_mode() else "minimax_dit"
-        v = self.prefs_vars.get(key) if hasattr(self, "prefs_vars") else None
-        return (v.get().strip() if v is not None else "")
+        """The video family's checkpoint the Model picker asks for: its reference DiT (ref2va) or its DiT."""
+        return self._wb_model_path(self._repair_desc(), "ref_dit" if self._repair_h3_ref_mode() else "dit")
 
     def _repair_h3_model_mismatch(self):
         """The loaded engine runs a different H3 checkpoint — or a different base (the Base
         picker) — than the pickers want."""
         eng = self.repair_engine
         cur = getattr(eng, "dit_path", None) if eng is not None else None
-        if not cur or not self._repair_is_h3():
+        if not cur or not self._repair_is_video():
             return False
         if getattr(eng, "base_mode", "auto") != self._repair_h3_base_mode():
             return True
@@ -26841,17 +26722,6 @@ class LoRATrainerGUI:
             self.master.after(0, lambda: self.repair_status_var.set(str(msg)))
         except Exception:
             pass
-
-    def _repair_h3_ref_mode(self):
-        """True when the H3 studio runs the ref2va checkpoint (a plain flag, safe from a
-        worker thread — set on the Tk thread whenever the picker changes)."""
-        return self._repair_is_h3() and bool(getattr(self, "_repair_h3_ref_flag", False))
-
-    def _repair_h3_dit_path(self):
-        """The H3 checkpoint the picker asks for: DiT (reference) for ref2va, else the DiT."""
-        key = "minimax_ref_dit" if self._repair_h3_ref_mode() else "minimax_dit"
-        v = self.prefs_vars.get(key) if hasattr(self, "prefs_vars") else None
-        return (v.get().strip() if v is not None else "")
 
     def _repair_mark_update_needed(self):
         """Prompt or seed changed — show 'Update' on the Start button instead of auto-regenerating."""
@@ -27075,7 +26945,7 @@ class LoRATrainerGUI:
             self.repair_state.primary_scale = self._repair_scale("primary")
             self.repair_state.donor_scale = self._repair_scale("donor")
             self._repair_refresh_baseline_title()
-        if self._repair_is_h3():
+        if self._repair_is_video():
             # H3 renders a clip on its own canvas — the Clip row, not the square Res combo.
             # Dial renders at the dial fraction of that canvas (Confirm at the full size).
             h3_opts = self._repair_h3_render_opts()
@@ -27123,10 +26993,6 @@ class LoRATrainerGUI:
                                   daemon=True)
         self._repair_preview_thread = thread
         thread.start()
-
-    def _repair_is_h3(self):
-        return (getattr(self, "repair_family_var", None) is not None
-                and self.repair_family_var.get() == "minimax")
 
     def _repair_progress_begin(self):
         """Show the render progress bar. Starts as a marquee; the first on_step report from a
@@ -27530,14 +27396,13 @@ class LoRATrainerGUI:
         if cache is not None and cache.key == key:
             return cache
         from fizgig.repair_studio.h3_render_cache import RenderCache
-        from fizgig.repair_studio.h3_blocks import all_block_ids_h3
         self._repair_cache_stop_build(wait_s=0.0)
         if self._repair_pinned_sig:
             # A pin belongs to its setup — a regime / size / prompt change drops it rather
             # than leaving "Pinned:" over a baseline that quietly reverted.
             self._repair_pinned_sig = None
             self.master.after(0, lambda: self._repair_history_pin(None, rerender=False))
-        active = [b for b in all_block_ids_h3() if b in eng.primary_block_ids]
+        active = [b for b in eng.block_ids() if b in eng.primary_block_ids]
         cache = RenderCache(self._repair_cache_root(), key, active)
         cache.set_meta(lora=os.path.basename(eng.primary_path or ""),
                        donor=os.path.basename(eng.donor_path or ""),
@@ -27610,7 +27475,7 @@ class LoRATrainerGUI:
                         self._repair_cache_current = bid
                         try:
                             eng.clear_cancel()
-                            st = SliderState.default_h3()
+                            st = eng.default_state()
                             st.seed, st.prompt = snapshot.seed, snapshot.prompt
                             st.preview_width = snapshot.preview_width
                             st.preview_height = snapshot.preview_height
@@ -27792,8 +27657,7 @@ class LoRATrainerGUI:
         """The state a library entry was rendered from: every row at its default, the given
         blocks' primary ticks OFF (a disabled block and a block at 0 are the same render and
         the same cache signature; the tick is what a person means by off)."""
-        from fizgig.repair_studio.state import SliderState
-        st = SliderState.default_h3()
+        st = self.repair_engine.default_state()
         for b in block_ids:
             if b in st.blocks:
                 st.blocks[b].primary_enabled = False
@@ -28200,50 +28064,6 @@ class LoRATrainerGUI:
             refs.append(pair)
         return None, (refs or None)
 
-    def _repair_h3_prepare_cond(self, width, height, frames):
-        """Worker thread, under the engine lock: (keyframes, references) for a render at this
-        canvas — keyframes under fl2va, references under ref2va (each photo's crop sized to
-        the clip's pixel budget and VAE-encoded, cached per slot / path / crop / canvas)."""
-        if not self._repair_h3_ref_mode():
-            return self._repair_h3_prepare_keyframes(width, height, frames), None
-        spec = self._repair_h3_keyframe_spec()
-        eng = self.repair_engine
-        if not spec or eng is None or not hasattr(eng, "encode_reference_image"):
-            return None, None
-        from PIL import Image as _PILImage
-        refs = []
-        for slot, path, rect in spec:
-            key = ("ref", slot, path, rect, int(width), int(height))
-            pair = self._repair_h3_kf_latents.get(key)
-            if pair is None:
-                img = _PILImage.open(path).convert("RGB").crop(rect)
-                pair = eng.encode_reference_image(img, width, height)
-                self._repair_h3_kf_latents[key] = pair
-            refs.append(pair)
-        return None, (refs or None)
-
-    def _repair_h3_prepare_cond(self, width, height, frames):
-        """Worker thread, under the engine lock: (keyframes, references) for a render at this
-        canvas — keyframes under fl2va, references under ref2va (each photo's crop sized to
-        the clip's pixel budget and VAE-encoded, cached per slot / path / crop / canvas)."""
-        if not self._repair_h3_ref_mode():
-            return self._repair_h3_prepare_keyframes(width, height, frames), None
-        spec = self._repair_h3_keyframe_spec()
-        eng = self.repair_engine
-        if not spec or eng is None or not hasattr(eng, "encode_reference_image"):
-            return None, None
-        from PIL import Image as _PILImage
-        refs = []
-        for slot, path, rect in spec:
-            key = ("ref", slot, path, rect, int(width), int(height))
-            pair = self._repair_h3_kf_latents.get(key)
-            if pair is None:
-                img = _PILImage.open(path).convert("RGB").crop(rect)
-                pair = eng.encode_reference_image(img, width, height)
-                self._repair_h3_kf_latents[key] = pair
-            refs.append(pair)
-        return None, (refs or None)
-
     def _repair_h3_prepare_keyframes(self, width, height, frames):
         """Worker thread, under the engine lock: the keyframe list for a render at this
         canvas, encoding (and caching) each photo's crop as needed. None when no photo is
@@ -28380,7 +28200,7 @@ class LoRATrainerGUI:
         # "off:<block>" = that block unticked (the builder rendered it at strength 0 —
         # the same render, the same signature; the tick is what a person means by "off").
         if sig == BASE_SIG:
-            return SliderState.default_h3()
+            return self.repair_engine.default_state()
         if sig.startswith("off:"):
             return self._repair_blocks_off_state([sig[4:]])
         if sig.startswith("bank:"):
@@ -29063,7 +28883,7 @@ class LoRATrainerGUI:
 
     def _repair_popout_preview(self):
         """Open (or raise) a resizable pop-out showing baseline and tweaked side by side."""
-        if self._repair_is_h3() and self._repair_clips.get("tweaked") is not None:
+        if self._repair_is_video() and self._repair_clips.get("tweaked") is not None:
             self._repair_clip_player_open()
             return
         if self._repair_popout_window is not None:
@@ -29248,7 +29068,7 @@ class LoRATrainerGUI:
             ref_emb = (self._ff_embed_cached(ref_path)
                        if ref_path and os.path.isfile(ref_path) else None)
             m = compare(np.array(base.convert("RGB")), np.array(tweak.convert("RGB")),
-                        PATCH_PITCH.get(fam, 16), base_bbox, tweak_bbox)
+                        PATCH_PITCH.get(self._wb_legacy_name(fam), 16), base_bbox, tweak_bbox)
             m["ref_set"] = bool(ref_path)
             m["ref_face"] = ref_emb is not None
             m["like_base"] = (float(np.dot(ref_emb, base_emb))
@@ -29369,7 +29189,7 @@ class LoRATrainerGUI:
             elif summary.get('lycoris_converted'):
                 msg += (f"\n\n{summary['lycoris_converted']} blended LyCORIS module(s) were "
                         f"converted to standard LoRA via SVD; everything else stayed native.")
-            if summary.get("use_at") is not None and (self._repair_is_h3() or self._repair_desc() is not None):
+            if summary.get("use_at") is not None and (self._repair_is_video() or self._repair_desc() is not None):
                 msg += (f"\n\nUse it at strength {summary['use_at']:g}"
                         + (" - the primary's and donor's strengths are baked in, so it looks as previewed."
                            if summary.get('strengths_baked') else " (the primary's strength), and it looks as previewed."))
@@ -30705,9 +30525,11 @@ class LoRATrainerGUI:
     def _rms_model_dit_path(self):
         """The DiT the Model picker names: the reference (ref2va) checkpoint or the standard
         first/last-frame (fl2va) one, from Preferences."""
-        pv = self.prefs_vars if hasattr(self, "prefs_vars") else {}
-        key = "minimax_dit" if self._rms_model_is_fl2va() else "minimax_ref_dit"
-        return pv.get(key, tk.StringVar()).get().strip()
+        return self._wb_model_path(self._rms_desc(), "dit" if self._rms_model_is_fl2va() else "ref_dit")
+
+    def _rms_desc(self):
+        """RefMod Studio is H3's own tool (H7): it runs on the MiniMax H3 family's files and workbench engine."""
+        return DESCRIBED_FAMILIES_BY_KEY.get("minimax_driver")
 
     def _rms_model_changed(self):
         self._rms_persist()
@@ -30722,24 +30544,21 @@ class LoRATrainerGUI:
 
     def _rms_engine_plan(self):
         """ensure_pipeline kwargs for the picked H3 model, or None after a messagebox."""
-        pv = self.prefs_vars if hasattr(self, "prefs_vars") else {}
+        desc = self._rms_desc()
         dit_path = self._rms_model_dit_path()
         _dit_label = ("MiniMax H3 DiT (first/last frame / fl2va)" if self._rms_model_is_fl2va()
                       else "MiniMax H3 DiT (reference / ref2va)")
-        vae_path = pv.get("minimax_vae", tk.StringVar()).get().strip()
-        te_path = pv.get("minimax_text_encoder", tk.StringVar()).get().strip()
+        vae_path = self._wb_model_path(desc, "vae")
+        te_path = self._wb_model_path(desc, "text_encoder")
         for label, p in ((_dit_label, dit_path), ("MiniMax H3 video VAE", vae_path),
                          ("Qwen3-VL-32B text encoder", te_path)):
             if not p or not os.path.exists(p):
                 messagebox.showerror("RefMod Studio", f"{label} path not set or not found.\n"
                                                       "Set it on the Preferences tab.")
                 return None
-        turbo_path = pv.get("minimax_turbo_lora", tk.StringVar()).get().strip()
-        cache_dir = pv.get("cache_dir", tk.StringVar()).get().strip()
         return dict(dit_path=dit_path, vae_path=vae_path, text_encoder_path=te_path, device="cuda",
-                    turbo_lora_path=turbo_path, turbo_lora_strength=0.75,
-                    te_cache_dir=os.path.join(cache_dir, "te_prompts") if cache_dir else "",
-                    audio_vae_path=self._repair_h3_audio_vae_path(), base_mode=self._rms_base_mode())
+                    speed_lora_path=self._wb_model_path(desc, "speed_lora"), turbo_lora_strength=0.75,
+                    **self._wb_video_kwargs(desc, self._rms_base_mode()))
 
     def _rms_engine_status(self, msg):
         try:
@@ -30811,11 +30630,8 @@ class LoRATrainerGUI:
         plan = self._rms_engine_plan()
         if plan is None:
             return
-        import sys
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
-        from fizgig.repair_studio.h3_engine import H3RepairEngine
         if self.rms_engine is None:
-            self.rms_engine = H3RepairEngine()
+            self.rms_engine = self._rms_desc().make_workbench_engine()
             self.rms_engine.on_status = self._rms_engine_status
             self.rms_engine.int8_attention = True
         eng = self.rms_engine
@@ -31763,7 +31579,7 @@ class LoRATrainerGUI:
         dropdown honest."""
         fam = (self.repair_family_var.get()
                if getattr(self, "repair_family_var", None) is not None else "klein")
-        d = os.path.join(os.path.dirname(__file__), "presets", "repair_studio", fam)
+        d = os.path.join(os.path.dirname(__file__), "presets", "repair_studio", self._wb_legacy_name(fam))
         os.makedirs(d, exist_ok=True)
         return d
 
@@ -31779,11 +31595,55 @@ class LoRATrainerGUI:
         if getattr(self, "repair_family_var", None) is None:
             return False
         _d = self._repair_desc()
-        return self.repair_family_var.get() == "minimax" or (_d is not None and not _d.category_masters)
+        return _d is not None and not _d.category_masters
 
     def _workbench_families(self, tool):
         """Standard-layer families a workbench tool offers (the description's `workbench` names the tool)."""
         return [d for d in DESCRIBED_FAMILIES.values() if d.training_ready and tool in d.workbench]
+
+    # an old saved / detected workbench family value -> the description key that now carries it
+    _WB_LEGACY_KEYS = {"minimax": "minimax_driver"}
+
+    def _wb_key(self, fam):
+        """A workbench family value as the pickers now hold it: an old one (last_used, a LoRA file's detected family)
+        mapped to its description's key."""
+        fam = str(fam or "")
+        k = self._WB_LEGACY_KEYS.get(fam)
+        return k if k and DESCRIBED_FAMILIES_BY_KEY.get(k) is not None else fam
+
+    def _wb_desc(self, fam):
+        """The description behind a workbench family value (old or new), or None for Klein."""
+        return DESCRIBED_FAMILIES_BY_KEY.get(self._wb_key(fam))
+
+    def _wb_video(self, fam):
+        """The family's workbench is a video one (clips, sound, keyframes, references, the render library)."""
+        d = self._wb_desc(fam)
+        return bool(d is not None and d.video_workbench)
+
+    def _wb_legacy_name(self, fam):
+        """The name a family's workbench files were kept under before it moved to the family layer (its presets
+        folder, its metrics table entry): the description's shares_prefs_with, else its key."""
+        d = self._wb_desc(fam)
+        return (d.shares_prefs_with or d.key) if d is not None else str(fam)
+
+    def _wb_model_path(self, desc, role, must_exist=False):
+        """A description's model file (by role) from Preferences."""
+        key = desc.pref_for(role) if desc is not None else ""
+        v = self.prefs_vars.get(key) if (key and hasattr(self, "prefs_vars")) else None
+        p = v.get().strip() if v is not None else ""
+        return p if (p and (not must_exist or os.path.exists(p))) else ""
+
+    def _wb_video_kwargs(self, desc, base_mode="auto", audio=True):
+        """A video workbench engine's extra loading arguments: the prompt-cache folder, the audio decoder (the tabs
+        that play clips with sound), the base precision mode."""
+        cache_dir = self.prefs_vars.get("cache_dir", tk.StringVar()).get().strip()
+        return dict(te_cache_dir=os.path.join(cache_dir, "te_prompts") if cache_dir else "",
+                    audio_vae_path=self._wb_model_path(desc, "audio_vae", must_exist=True) if audio else "",
+                    base_mode=base_mode)
+
+    def _repair_is_video(self):
+        var = getattr(self, "repair_family_var", None)
+        return var is not None and self._wb_video(var.get())
 
     def _repair_desc(self, fam=None):
         """The FamilyDescription behind the Repair Studio selector, or None for Klein / Krea 2 / H3."""
@@ -31810,7 +31670,7 @@ class LoRATrainerGUI:
         desc = self._repair_desc(fam)
         if desc is not None:
             return self._repair_default_state_for_desc(desc)
-        return SliderState.default_h3() if fam == "minimax" else SliderState.default_klein9b()
+        return SliderState.default_klein9b()
 
     def _repair_builtin_presets(self) -> dict:
         """name -> kind of the selected family's built-in presets: Klein's category presets; for a no-map family,
@@ -31919,7 +31779,7 @@ class LoRATrainerGUI:
                 _d = {"blocks": self.repair_state.to_json()["blocks"]}
                 # Self-describing: which family's block ids these are. The folder already
                 # scopes the dropdown; this makes a shared/copied file readable on its own.
-                _d["family"] = (self.repair_family_var.get()
+                _d["family"] = (self._wb_legacy_name(self.repair_family_var.get())
                                 if getattr(self, "repair_family_var", None) is not None
                                 else "klein")
                 _json.dump(_d, f, indent=2)

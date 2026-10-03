@@ -568,23 +568,20 @@ class _FineTune:
     whole-rotation length and cadence, a fresh optimizer per window, and the full-checkpoint save."""
 
     def __init__(self, driver, desc, dit, net, dit_path, device, *, max_train_epochs, rotations, save_every_rotations,
-                 rotate_every, start_window, epochs_done, fused, lr, master_dir, mp=None):
+                 rotate_every, start_window, epochs_done, fused, lr, master_dir, mp=None, group=None):
         from fizgig.families import ft
         from fizgig.utils.device import plannable_free_vram
         self.ft, self.driver, self.desc, self.dit, self.src, self.lr = ft, driver, desc, dit, dit_path, lr
-        spec = driver.ft_spec(dit)
-        if spec is None:
-            raise RuntimeError(f"{desc.display_name}'s driver declares no fine-tune (ft_spec)")
-        self.rot = ft.Rotator(dit, spec, device)
+        self.be = driver.ft_backend(dit, device, dit_path, group) or ft.SharedBackend(driver, dit, device, dit_path,
+                                                                                         group)
         where = os.environ.get("FIZGIG_FT_MASTER", "auto")
         self.scratch = os.path.join(master_dir, ".fizgig_ft_master")
-        gb, where = self.rot.build_master(dit_path, where, self.scratch)
-        n_always = self.rot.start_always()
-        logger.info(f"[finetune] bf16 master: {len(self.rot.master)} weights, {gb:.1f} GB "
-                    + ("in system RAM" if where == "ram" else f"ON DISK at {self.scratch} (system memory can't "
-                       f"comfortably hold it; untouched weights read from the model file, trained ones spill there)")
-                    + f"; {n_always} always-on Linears ({', '.join(spec.always_on) or 'none'}) train all run; "
-                      f"biases frozen")
+        gb, where = self.be.build_master(where, self.scratch)
+        n_always = self.be.start_always()
+        logger.info(f"[finetune] bf16 master: {len(list(self.be.master.keys()))} weights, {gb:.1f} GB "
+                    + ("in system RAM" if where == "ram" else f"ON DISK (system memory can't comfortably hold it; "
+                       f"untouched weights read from the model file, trained ones spill there)")
+                    + f"; {n_always} always-on Linears ({self.be.always_label}) train all run")
         if where == "ram":
             try:
                 import psutil
@@ -594,12 +591,11 @@ class _FineTune:
                                    f"FIZGIG_FT_MASTER=disk keeps the master on disk instead")
             except Exception:
                 pass
-        n_blocks = len(self.rot.blocks)
+        n_blocks = self.be.cycle_len()
         logger.info(f"[finetune] planning with {torch.cuda.memory_allocated() / 1e9:.2f} GB allocated, "
                     f"{plannable_free_vram():.2f} GB free")
-        windows, stream, why, usable = ft.plan_windows(
-            dit, spec, self.rot, plannable_free_vram(), allow_stream=os.environ.get("FIZGIG_NO_FT_STREAM") != "1",
-            mp=mp)
+        windows, stream, why, usable = self.be.plan(
+            plannable_free_vram(), allow_stream=os.environ.get("FIZGIG_NO_FT_STREAM") != "1", mp=mp)
         for line in why:
             logger.info(f"[finetune] {line}")
         if windows is None:
@@ -611,13 +607,8 @@ class _FineTune:
         self.epochs = max(1, int(rotations)) * self.cycle
         self.save_every = max(1, int(save_every_rotations)) * self.cycle
         self.epochs_done = int(epochs_done)
-        self.streamer = None
-        if stream and any(isinstance(w, tuple) for w in windows):
-            from fizgig.krea2.rotation import RotationOffloader
-            self.streamer = RotationOffloader(self.rot.blocks, torch.device(device), range(n_blocks))
-            driver.install_ft_streamer(dit, self.streamer)
-            self.streamer.set_resident(self.rot.resident_blocks(self.sched.active_at(0)))
-            logger.info("[finetune] frozen blocks outside the window stream from CPU")
+        self.streamer = getattr(self.be, "streamer", None) or (True if stream else None)
+        driver.ft_cycle(self.cycle, self.epochs_done, self.epochs)
         self.fused = ft.FusedSteps(lr) if fused else None
         self.opt_label = ("per-parameter " if fused else "") + ft.make_optimizer([torch.zeros(1)], lr)[1] + " (fine-tune)"
         logger.info(f"[finetune] FULL FINE-TUNE - {self.sched.describe()}")
@@ -639,7 +630,7 @@ class _FineTune:
 
     def needs_window(self, epoch):
         """A new window this epoch - or the same one after a save parked it."""
-        return self.sched.active_at(epoch) != self.rot.active
+        return list(self.sched.active_at(epoch)) != list(self.be.active)
 
     def enter(self, epoch):
         """The epoch's window trainable, with a fresh optimizer (the old one's state belonged to the outgoing
@@ -650,11 +641,9 @@ class _FineTune:
             self.fused.detach()
         gc.collect()
         torch.cuda.empty_cache()
-        if self.streamer is not None:
-            self.streamer.set_resident(self.rot.resident_blocks(want))
-        n = self.rot.rotate_to(want)
+        n = self.be.rotate(want)
         torch.cuda.reset_peak_memory_stats()
-        params = self.rot.trainable_params()
+        params = self.be.trainable_params()
         logger.info(f"[finetune] epoch {epoch + 1 + self.epochs_done}: window {self.sched.window_at(epoch) + 1}/"
                     f"{self.sched.n_windows} {want} - {n} Linears trainable, "
                     f"{sum(p.numel() for p in params) / 1e9:.2f}B parameters")
@@ -668,7 +657,7 @@ class _FineTune:
         if self.fused is not None:
             self.fused.detach()
         gc.collect()
-        self.rot.rotate_to([])
+        self.be.park()
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -680,8 +669,8 @@ class _FineTune:
                 self.desc.modelspec_arch if hasattr(self.desc, "modelspec_arch") else self.desc.key}
         logger.info(f"[finetune] saving the full checkpoint at epoch {n_ep} -> {os.path.basename(path)} "
                     f"(~{os.path.getsize(self.src) / 1e9:.0f} GB; training waits for it)")
-        replaced, total = self.ft.save_checkpoint(self.rot.state_dict(), self.src, path, meta)
-        logger.info(f"[save] {path} ({replaced}/{total} tensors trained)")
+        replaced, total = self.be.save(path, meta)
+        logger.info(f"[save] {path} ({replaced}{'/' + str(total) if total else ''} tensors trained)")
 
 
 def train_family(family, dit_path, dataset_config, output_dir, output_name, *, network_dim=32, network_alpha=32,
@@ -784,11 +773,9 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         if resume_state_dir:
             raise RuntimeError("[finetune] a fine-tune continues from its saved checkpoint (the Model / --dit), not a "
                                "state folder")
-        from fizgig.families import ft as _ft
-        _why = _ft.source_unfit_reason(dit_path)
+        _why = driver.ft_source_unfit(dit_path)
         if _why:
-            raise RuntimeError(f"[finetune] {os.path.basename(dit_path)} {_why} - a fine-tune trains from, and "
-                               f"saves over, a bf16 model file")
+            raise RuntimeError(f"[finetune] {os.path.basename(dit_path)} {_why}")
         if precision != "nf4" or blocks_to_swap:
             logger.info(f"[finetune] frozen base: NF4 (asked {precision}, swap {blocks_to_swap}) - the fine-tune "
                         f"trunk is always 4-bit, and blocks outside the window stream only if the plan needs it")
@@ -989,7 +976,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         ftr = _FineTune(driver, desc, dit, net, dit_path, device, max_train_epochs=None, rotations=ft_rotations,
                         save_every_rotations=ft_save_every_rotations, rotate_every=ft_rotate_every,
                         start_window=ft_start_window, epochs_done=ft_epochs_done, fused=ft_fused_backward,
-                        lr=learning_rate, master_dir=output_dir, mp=_largest_bucket_mp(group))
+                        lr=learning_rate, master_dir=output_dir, mp=_largest_bucket_mp(group), group=group)
         max_train_epochs, save_every_n_epochs = ftr.epochs, ftr.save_every
         if ftr.streamer is not None:
             swapped = 1          # blocks stream: previews and caption re-encodes must not park + restore the whole DiT
@@ -1283,9 +1270,15 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     _block_params = {}
 
     def _step_freeze(blocks):
-        """requires_grad off for the trainable adapter's parameters in `blocks` (block ids); returns them."""
+        """requires_grad off for the trainable adapter's parameters in `blocks` (block ids) - under a fine-tune, the
+        active window's weights in those blocks; returns them."""
         if not blocks:
             return []
+        if ftr is not None:
+            out = [p for p in ftr.be.params_in_blocks(blocks) if p.requires_grad]
+            for p in out:
+                p.requires_grad_(False)
+            return out
         if not _block_params:
             from fizgig.families.lora import TRAINABLE as _TR
             for _full, _w in net.wrapped.items():
@@ -1480,8 +1473,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         optimizer = params = None
         ftr.park()
         save_lora(final, max_train_epochs)
-        if hasattr(ftr.rot.master, "cleanup"):
-            ftr.rot.master.cleanup()          # the final checkpoint holds everything the scratch did
+        ftr.be.cleanup()                  # the final checkpoint holds everything the scratch did
         if sample_every_n_epochs:
             previews(max_train_epochs + ftr.epochs_done)
         logger.info(f"Fine-tune complete -> {final}")

@@ -50,7 +50,7 @@ OPTIONS = (
     FamilyOption("H3_TREAD", "TREAD token routing — on clip steps, half the video tokens skip the middle blocks",
                  kind="check", tokens="tread=0.5@2-47", default="1",
                  hint="Faster clip steps; photos and clip stills always run in full; previews and the saved LoRA are "
-                      "untouched.", setting="MINIMAX_TREAD", show_if_media="clip"),
+                      "untouched.", mode="lora", setting="MINIMAX_TREAD", show_if_media="clip"),
     FamilyOption("H3_CLIP_STILL", "Also train each clip's sharpest face frame as a photo", kind="check",
                  tokens="clip_still_as_photo=1 aux:clip_still=1", default="1",
                  hint="Picked at caching; clips cached with this off use frame 0 until re-cached.",
@@ -99,6 +99,16 @@ OPTIONS = (
         ("22 frames with sound (~1s)", "preview_frames=22 preview_audio=1"),
         ("56 frames with sound (~2.3s)", "preview_frames=56 preview_audio=1"),
         ("124 frames with sound (~5s)", "preview_frames=124 preview_audio=1")), setting="SAMPLE_FRAMES"),
+    FamilyOption("H3_FT_SCOPE", "Train on", choices=(("All media", ""), ("Photos only", "ft_scope=photo")),
+                 hint="A dataset FILTER, not a mode. All media fine-tunes on everything in the folder - photos, clips, "
+                      "voice. Photos only skips the clips and voice of a mixed folder (with Training mode on Default "
+                      "the cycle then tightens to the identity blocks).",
+                 setting="MINIMAX_FT_SCOPE", mode="finetune"),
+    FamilyOption("H3_FT_BLOCKS", "Fine-tune blocks", kind="entry", tokens="ft_blocks={}",
+                 hint="Optional: restrict the rotation cycle to a block range - the whole fine-tune touches only these "
+                      "blocks. 20-49 is the measured likeness recipe (protects the fragile 0-19 trunk) and roughly "
+                      "halves the system-RAM master copy. Empty = the full model.",
+                 setting="MINIMAX_FT_BLOCKSPEC", mode="finetune"),
     FamilyOption("AUDIO_VAE", "", kind="fixed", tokens="audio_vae=pref:minimax_audio_vae aux:audio_vae=pref:minimax_audio_vae"),
 )
 
@@ -131,6 +141,9 @@ MINIMAX = FamilyDescription(
     vae_label="MiniMax H3 Video VAE",
 
     options=OPTIONS,
+    workbench=("repair", "explorer", "profiler", "extract", "royale"),
+    workbench_engine="fizgig.minimax.workbench:H3WorkbenchEngine",
+    finetune=True,                    # the old rotation FT (component windows on an NF4 trunk, int8 ConvRot saves)
     media=("photo", "clip", "voice"),
     preview_park_optimizer=True,      # the old previews' optimizer-state park (~2.5 GB back for the render)
     clip_spec=ClipSpec(fps=24, frame_step=17, frame_offset=5, edge_multiple=32, audio_rate=32000, audio_channels=2,

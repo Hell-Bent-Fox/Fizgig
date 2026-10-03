@@ -586,6 +586,10 @@ class WorkbenchEngine:
                 "strengths_baked": bool(blended)}
 
     # ---- teardown -----------------------------------------------------------------------------------
+    def forget_prompts(self):
+        """Drop the cached prompt conditioning (a new prompt was applied)."""
+        self._prompt_cache.clear()
+
     def reset(self):
         from fizgig.utils.device import release_module_tensors
         for m in (self.dit, self.vae):

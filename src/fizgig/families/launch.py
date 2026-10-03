@@ -303,11 +303,13 @@ def dataset_media(folder):
     return kinds
 
 
-def option_applies(opt, media, values=None, options=()):
+def option_applies(opt, media, values=None, options=(), finetune=None):
     """Whether a FamilyOption is live for a dataset with these media kinds: a clip-only option without clips, or a
     mixed-dataset one on a dataset that is not mixed, is neither shown nor sent (#136: a retired category restored
     from a mixed run must not reach a photo-only run)."""
     if opt.show_if_media and opt.show_if_media not in media:
+        return False
+    if finetune is not None and opt.mode and (opt.mode == "finetune") != bool(finetune):
         return False
     if opt.mixed_only and not ("voice" in media and media & {"photo", "clip"}):
         return False
@@ -350,7 +352,7 @@ def option_tokens(desc, inputs):
     train, aux = [], []
     media = dataset_media(_s(inputs.get("image_folder")))
     for opt in desc.options:
-        if not option_applies(opt, media, vals, desc.options):
+        if not option_applies(opt, media, vals, desc.options, finetune=ft_on(desc, inputs)):
             continue
         for tok in opt.resolve(vals.get(opt.key, opt.default)):
             if tok.startswith("aux:"):

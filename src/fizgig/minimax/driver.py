@@ -254,7 +254,15 @@ class MiniMaxDriver(FamilyDriver):
 
     def step_frozen_blocks(self, batch):
         """A routed step's out-of-window blocks, and the token refiner with them: its text rows enter at block 0, so
-        a trainable refiner would drag the backward through every block (the old backward cut froze it too)."""
+        a trainable refiner would drag the backward through every block (the old backward cut froze it too). Under
+        a fine-tune, the modality's route over the cycle (the old _ft_freeze): the always-on refiner trains on
+        every modality."""
+        ftb = getattr(self, "_ftb", None)
+        if ftb is not None:
+            cat = {"audio": "voice"}.get(self._modality(batch), self._modality(batch))
+            route = ftb.routes.get(cat)
+            return () if route is None else tuple(f"h3blk_{i}" for i in range(self.description.n_blocks)
+                                                  if i not in route)
         allowed = self._allowed.get(self._modality(batch))
         if not allowed:
             return ()
@@ -349,12 +357,16 @@ class MiniMaxDriver(FamilyDriver):
         the shared adapters) or are skipped outright (stop - faster epochs)."""
         from fizgig.minimax.trainer import _P1_LR_SCALE, ANCHOR_LR_SCALE
         self._epoch = epoch
+        if getattr(self, "_ftb", None) is not None and self.options.get("ft_scope") == "photo" and (
+                self._modality(batch) != "photo"):
+            return True, 1.0              # 'Train on: Photos only': clip and voice batches are skipped outright
         phase = _P1_LR_SCALE if self._teacher_phase() else 1.0      # identity-first: the whole phase-1 epoch
         if getattr(self, "_ramp", None) is not None:
             phase *= self._ramp.mult
         voice = self._modality(batch) == "audio"
         spec = self.options.get("audio_stop" if voice else "visual_stop")
-        if not spec and self.options.get("stop_epoch") and self.options.get("stop_category") == (
+        if not spec and not getattr(self, "_ftb", None) and self.options.get("stop_epoch") and self.options.get(
+                "stop_category") == (
                 "audio" if voice else "visual"):
             spec = f"{self.options['stop_epoch']}:{self.options.get('stop_mode') or 'anchor'}"     # the GUI's three rows
         if not spec:
@@ -714,6 +726,52 @@ class MiniMaxDriver(FamilyDriver):
         if spec:
             ids += [f"h3blk_{i}" for i in parse_block_spec(",".join(spec), self.description.n_blocks)]
         return ids or None
+
+    # ---- the fine-tune (the old rotation FT, through the shared runner) ------------------------------------------
+    def ft_spec(self, dit):
+        """H3's component windows - the shared runner's checks and the Training tab's plan line read this; the work
+        itself is H3FTBackend's."""
+        from fizgig.families.ft import FTSpec
+        from fizgig.minimax.rotation_ft import H3_COMPONENT_PREFIXES
+        return FTSpec(blocks="blocks", components=H3_COMPONENT_PREFIXES, overhead_gb=14.5, trunk_gb_per_block=0.21,
+                      slots_gb=2.0)
+
+    def ft_source_unfit(self, path):
+        from fizgig.minimax.ft_backend import source_unfit_reason
+        return source_unfit_reason(path)
+
+    def ft_backend(self, dit, device, src, group):
+        from fizgig.minimax.ft_backend import H3FTBackend
+        if getattr(dit, "_tread", None):
+            logging.getLogger(__name__).info("[h3-ft] TREAD token routing is LoRA-only - off for this fine-tune")
+            dit._tread = None
+        self._ftb = H3FTBackend(self, dit, device, src, group)
+        return self._ftb
+
+    def ft_cycle(self, cycle, offset, total):
+        """Retirement under a fine-tune: stop mode only (the anchor rides optimizer machinery the per-tensor steps
+        don't have) and the epoch snapped to rotation-cycle boundaries, cumulative across continuations - the old
+        _snap_stop."""
+        from fizgig.minimax.trainer import snap_ft_stop
+        log = logging.getLogger(__name__)
+        for k, label in (("visual_stop", "photos & clips"), ("audio_stop", "voice")):
+            spec = self.options.get(k)
+            if not spec and self.options.get("stop_epoch") and self.options.get("stop_category") == k.split("_")[0]:
+                spec = str(self.options["stop_epoch"])
+            n = int(str(spec or "0").partition(":")[0] or 0)
+            if not n:
+                continue
+            v, kind = snap_ft_stop(n, cycle, offset, total)
+            if kind == "past":
+                log.info("[h3-ft] %s retirement at epoch %d is already behind this run (continuing from epoch %d) - "
+                         "retired from the start.", label, v, offset)
+            elif kind == "snapped":
+                log.info("[h3-ft] %s retirement lands at rotation-cycle boundaries - epoch %d snaps to %d (%d-epoch "
+                         "cycle).", label, n, v, cycle)
+            elif kind == "never":
+                log.warning("[h3-ft] %s retirement at epoch %d is at or past the run's end (epoch %d) - it will never "
+                            "fire.", label, v, total + offset)
+            self.options[k] = f"{v}:stop"
 
     def legacy_state_order(self, dit):
         """The old H3 trainer's parameter order: its network walked named_modules - the token refiner (registered
