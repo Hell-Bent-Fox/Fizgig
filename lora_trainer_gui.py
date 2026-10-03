@@ -22778,9 +22778,12 @@ class LoRATrainerGUI:
         status_row = tk.Frame(parent, bg=COLORS["bg_surface"])
         status_row.grid(row=r, column=0, columnspan=4, sticky=tk.EW, pady=(6, 0))
         self.repair_status_var = tk.StringVar(value="Set a LoRA path and prompt, then click Start.")
-        tk.Label(status_row, textvariable=self.repair_status_var,
-                 font=(FONT_FAMILY, 10, "italic"),
-                 fg=COLORS["accent"], bg=COLORS["bg_surface"]).pack(side=tk.LEFT)
+        # packed AFTER the buttons (below): the buttons keep their width and a long status wraps in what is left
+        self._repair_status_label = tk.Label(status_row, textvariable=self.repair_status_var,
+                                             font=(FONT_FAMILY, 10, "italic"), anchor=tk.W, justify=tk.LEFT,
+                                             fg=COLORS["accent"], bg=COLORS["bg_surface"])
+        self._repair_status_label.bind(
+            "<Configure>", lambda e: e.widget.configure(wraplength=max(200, e.width - 4)))
         self._repair_start_btn = tk.Button(
             status_row, text="Start", font=(FONT_FAMILY, 11, "bold"),
             fg="#FFFFFF", bg="#2E8B57", activeforeground="#FFFFFF", activebackground="#256F46",
@@ -22803,6 +22806,7 @@ class LoRATrainerGUI:
         ToolTip(_cmp_btn, "Full-size side-by-side of baseline vs tweaked, with likeness and "
                           "quality metrics. Clicking either preview image opens it too.")
         self._repair_cmp_btn = _cmp_btn
+        self._repair_status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
         # Render progress. H3 and Krea 2 report real denoising steps (determinate); Klein's
         # denoise loop has no hook, so the bar sweeps as a marquee there — and everywhere
         # until the first step lands, so model loads and TE encodes still show life.
@@ -27302,7 +27306,7 @@ class LoRATrainerGUI:
         bar = self._repair_progress
         self._repair_progress_det = False
         if not bar.winfo_manager():
-            bar.pack(side=tk.RIGHT, padx=(12, 12))
+            bar.pack(side=tk.RIGHT, padx=(12, 12), before=self._repair_status_label)
         bar.configure(mode="indeterminate")
         bar.start(60)
         eng = self.repair_engine
@@ -27398,7 +27402,7 @@ class LoRATrainerGUI:
         bar = self._repair_progress
         self._repair_progress_det = False
         if not bar.winfo_manager():
-            bar.pack(side=tk.RIGHT, padx=(12, 12))
+            bar.pack(side=tk.RIGHT, padx=(12, 12), before=self._repair_status_label)
         bar.configure(mode="indeterminate")
         bar.start(60)
 
