@@ -34,6 +34,17 @@ def _mu(n_tokens):
     return m * n_tokens + (0.5 - m * 256)
 
 
+def _is_fp8_file(path) -> bool:
+    """True when the DiT file stores weights in fp8 (BFL's / Comfy-Org's pre-quantised Klein files - BFL's base
+    keeps the attention weights bf16 and the MLPs fp8)."""
+    try:
+        from safetensors import safe_open
+        with safe_open(path, framework="pt") as f:
+            return any(f.get_slice(k).get_dtype().startswith("F8") for k in f.keys() if k.endswith(".weight"))
+    except Exception:
+        return False
+
+
 class KleinDriver(FamilyDriver):
 
     # ---- models ---------------------------------------------------------------------------------
@@ -44,6 +55,13 @@ class KleinDriver(FamilyDriver):
         dit = load_dit(device=device, model_version_info=KLEIN_MODEL_INFO["klein-base-9b"], dit_path=path,
                        attn_mode="torch", split_attn=False, loading_device=device, dit_weight_dtype=DTYPE)
         return dit.eval().requires_grad_(False)
+
+    def auto_uncompiled_precision(self, dit_path, precision):
+        # measured 3 Oct 2026: uncompiled, BFL's fp8 file as it is beats requantising it to INT8 (0.77 vs 1.14 s/step
+        # on a 5090, 439 vs ~688 s on a 4090 laptop) at less memory (11.1 vs 12.8 GB) - compiled INT8 is the fastest
+        if precision != "int8" or not _is_fp8_file(dit_path):
+            return None
+        return "bf16"
 
     def max_blocks_to_swap(self, dit=None):
         # the old Training tab's maximum: KleinDiT.enable_block_swap splits 16 into 6 double + 18 single streamed

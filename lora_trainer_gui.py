@@ -9195,10 +9195,11 @@ class LoRATrainerGUI:
             self._set_widget_visible(w, many)
         if many:
             opts = ["auto"] + [p for p in ("bf16", "int8", "nf4") if p in desc.precisions]
-            self.entries["FAMILY_PRECISION"].configure(values=[self._FAMILY_PRECISION_LABELS[p] for p in opts])
+            labels = {**self._FAMILY_PRECISION_LABELS, **desc.precision_labels}
+            self.entries["FAMILY_PRECISION"].configure(values=[labels[p] for p in opts])
             if self.entries["FAMILY_PRECISION"].get() not in self.entries["FAMILY_PRECISION"].cget("values"):
                 self.entries["FAMILY_PRECISION"].set(self._FAMILY_PRECISION_LABELS["auto"])
-            self._family_precision_hint.config(text=(
+            self._family_precision_hint.config(text=desc.precision_hint or (
                 "Auto (recommended) picks at launch from your FREE VRAM: bf16 if it fits, else INT8 (8-bit, about "
                 "half the size and the fastest), else 4-bit NF4 (smallest, slower). Only when none of those fit does "
                 "it stream blocks between CPU and GPU (Blocks Swap), which is much slower. Blocks Swap on Auto sizes "

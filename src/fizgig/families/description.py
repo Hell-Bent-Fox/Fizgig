@@ -155,6 +155,10 @@ class FamilyDescription:
     # what Auto may choose, in order ((): every offered precision, most precise first). Krea 2: INT8, then NF4 - its
     # original trainer's order; bf16 stays a manual choice
     auto_precisions: tuple = ()
+    # the Training tab's names for the precision choices where the shared ones mislead (Klein: "bf16" loads the file
+    # as it is, which for BFL's fp8 file trains in fp8), and the hint under the dropdown ("" = the shared hint)
+    precision_labels: dict = field(default_factory=dict)
+    precision_hint: str = ""
     # the driver can torch.compile its blocks (FamilyDriver.compile_blocks); the Training tab's Compile Blocks
     # control shows and the launch sends --compile_blocks
     compiles: bool = False

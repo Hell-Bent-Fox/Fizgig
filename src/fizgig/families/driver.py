@@ -265,6 +265,11 @@ class FamilyDriver:
         compile_blocks(dit, self.compile_targets(dit), blocks_to_swap, boundary=boundary,
                        fullgraph=self.description.compile_fullgraph)
 
+    def auto_uncompiled_precision(self, dit_path: str, precision: str) -> Optional[str]:
+        """A precision that beats Auto's pick when this run is not compiled, or None. Klein: its INT8 base is slower
+        than BFL's fp8 file uncompiled, so an fp8 file trains as it is (the old Klein trainer's behaviour)."""
+        return None
+
     def compile_plan(self, mode: str, total_steps: int, precision: str, blocks_to_swap: int,
                      mp: float = 0.25) -> tuple:
         """(False | "inside" | "outside", why) for Compile Blocks `mode` ("auto" / "on" / "outside"). On always

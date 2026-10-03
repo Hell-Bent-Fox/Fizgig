@@ -365,7 +365,8 @@ def train_command(desc, inputs, plan):
         pass
     if len(desc.precisions) > 1:
         lab = str(st.get("FAMILY_PRECISION", "") or "")
-        prec = next((k for k, v in PRECISION_LABELS.items() if v == lab), "auto")
+        labels = {**PRECISION_LABELS, **desc.precision_labels}
+        prec = next((k for k, v in labels.items() if v == lab), "auto")
         cmd += ["--precision", prec if prec == "auto" or prec in desc.precisions else "auto"]
     if ft_on(desc, st):
         # the length and cadence in whole rotations; a continuation starts from the paused run's checkpoint

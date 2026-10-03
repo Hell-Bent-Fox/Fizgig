@@ -99,6 +99,11 @@ KLEIN = FamilyDescription(
     ema_default="Off",                # the doc's K10: available, off until an A/B says otherwise
     precisions=("bf16", "int8", "nf4"),
     auto_precisions=("int8", "nf4"),
+    precision_labels={"bf16": "As the file (bf16 or fp8)"},
+    precision_hint=("Auto (recommended) picks at launch: INT8 compiled when torch.compile can run and the run is long "
+                    "enough (the fastest Klein setup), otherwise your Base file as it is - BFL's fp8 file trains in "
+                    "fp8, as Klein always has. Too little free VRAM for those: 4-bit NF4. \"As the file\" never "
+                    "requantises; INT8 and NF4 requantise from the file."),
     # Measured 3 Oct 2026 on a 5090, full model, rank 32, adamw8bit, gradient checkpointing, BFL's fp8 base file, peak
     # reserved over the first epoch (24 photos): INT8 12.6 GB at 0.25 MP / 17.1 GB at 1 MP (1.18 / 2.51 s/step); NF4 7.9 /
     # 9.9 GB (1.06 / 2.02 s/step). Swapped-block savings not measured yet (0 = Auto does not plan a swap)

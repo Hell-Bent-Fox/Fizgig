@@ -821,6 +821,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                        "train as ordinary images at full LR; remove the is_reg block if that is not what you want")
 
     # ---- Auto precision / swap: planned on an empty card (the description's figures include the preview VAE)
+    auto_precision = precision == "auto"
     if precision == "auto" or blocks_to_swap < 0:
         req = (precision, blocks_to_swap)
         res = user_config.get("general", {}).get("resolution") or [1024, 1024]
@@ -847,6 +848,12 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                         else ("ENABLED" if do_compile else "off"), why)
         elif why:
             logger.info("[compile] %s", why)
+    if auto_precision and not do_compile:
+        alt = driver.auto_uncompiled_precision(dit_path, precision)
+        if alt and alt != precision:
+            logger.info(f"[precision] Auto: {desc.precision_labels.get(alt, alt)} instead of {precision} - this run "
+                        "is not compiled, and uncompiled that is the faster base for this file")
+            precision = alt
 
     # ---- previews: encode prompts once, keep the VAE ---------------------------------------------
     encoded = neg = vae = ref_imgs = ref_latents = None
