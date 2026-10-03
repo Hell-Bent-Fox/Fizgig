@@ -378,6 +378,20 @@ class KleinDriver(FamilyDriver):
             quant.move(dit, device)
         dit.switch_block_swap_for_training()
 
+    # ---- full fine-tune (families/ft.py) ------------------------------------------------------------------------
+    def ft_spec(self, dit):
+        # the double blocks then the single blocks as one cycle; each stream's attention and MLP a window, the single
+        # blocks' fused linear1 (qkv + MLP in) and linear2 (attention out + MLP out) theirs (linear1 is the largest:
+        # the planner splits it by depth where it does not fit). The modulation, embedders and final layer stay frozen.
+        from fizgig.families.ft import FTSpec
+        return FTSpec(blocks=("double_blocks", "single_blocks"),
+                      components=("img_attn", "img_mlp", "txt_attn", "txt_mlp", "linear1", "linear2"))
+
+    def install_ft_streamer(self, dit, streamer):
+        # Klein's forward swaps double and single blocks through its own two offloaders, not the one-list streamer
+        raise RuntimeError("Klein fine-tunes with every window resident - this card has too little free VRAM for "
+                           "the smallest window plan")
+
     # ---- LoRA and the block map -------------------------------------------------------------------
     def convert_lora_state_dict(self, sd):
         """Every Klein LoRA layout the old loaders took (networks/lora.py ensure_kohya_lora_state_dict): kohya,

@@ -666,7 +666,9 @@ class ImageDirectoryDatasource:
             self.control_paths: dict[str, list[str]] = {}
 
             sorted_by_len = sorted(self.image_paths, key=lambda p: len(os.path.basename(p)), reverse=True)
-            all_ctrl = set(glob_images(self.control_directory))
+            # a dataset that globs clips (H3) pairs a clip with a clip: a clip-pair slider's other pole
+            _vid = tuple(e for e in self.extra_extensions if e in VIDEO_EXTENSIONS)
+            all_ctrl = set(glob_images(self.control_directory, extra_extensions=_vid))
 
             for img_path in sorted_by_len:
                 base_no_ext = os.path.splitext(os.path.basename(img_path))[0].casefold()   # IMG_1 pairs with img_1
@@ -722,7 +724,25 @@ class ImageDirectoryDatasource:
             validate(image_path, frames=len(frames))
             imgs = [Image.fromarray(f) for f in frames]
             _, caption = self.get_caption(idx)
-            return image_path, imgs, caption, None
+            controls = None
+            if self.has_control:
+                # a clip-pair slider: the other pole is a clip (any length - an edit may drop frames), its frames the
+                # controls
+                cps = self.control_paths[image_path]
+                if len(cps) != 1 or os.path.splitext(cps[0])[1].lower() not in {e.lower() for e in VIDEO_EXTENSIONS}:
+                    raise ValueError(f"{os.path.basename(image_path)}: a clip pairs with exactly one clip of the same "
+                                     f"name in the second folder (found: {[os.path.basename(p) for p in cps]})")
+                pf = read_frames(cps[0])
+                from fizgig.minimax.clip import GRID_FRAMES
+                if len(pf) not in GRID_FRAMES:
+                    # the VAE encodes 17n+5 frames only: an edit that dropped frames is held on its last frame up to
+                    # the next length it can encode
+                    want = next((g for g in GRID_FRAMES if g >= len(pf)), GRID_FRAMES[-1])
+                    logger.info(f"[slider] {os.path.basename(cps[0])}: {len(pf)} frames -> {want} (last frame held; "
+                                f"H3 encodes 5, 22, 39, 56 ... frames)")
+                    pf = (list(pf) + [pf[-1]] * want)[:want]
+                controls = [Image.fromarray(f) for f in pf]
+            return image_path, imgs, caption, controls
 
         img = Image.open(image_path)
         if img.mode not in ("RGB", "RGBA"):

@@ -5459,6 +5459,14 @@ class LoRATrainerGUI:
         _block("2. -1 end folder", "The same shots showing the -1 end, e.g. not smiling, each with the same file "
                                    "name as its +1 photo. No captions in this folder.")
         _path_row("FAMILY_SLIDER_DIR", self._browse_family_slider_dir)
+        # a family that trains clips (MiniMax H3) pairs clips too: what only exists in motion
+        self._family_slider_clip_note = _block(
+            "Clips work too",
+            "A pair can be two clips with the same file name: the +1 clip, and the same clip with the look you want "
+            "at the other end - e.g. a frame-skip look, a visual effect or a rendering style. Looks that only exist in motion train this way. The previews then play -1, 0 and +1 "
+            "side by side as one clip.")
+        self._family_slider_clip_head = self._family_slider_clip_note.master.grid_slaves(
+            row=int(self._family_slider_clip_note.grid_info()["row"]) - 1, column=0)[0]
         _block("3. Captions (one line, used for every pair)",
                "Describe what the two photos of a pair have in common, and leave out the difference. For a smile "
                "dial, where each +1 photo shows someone smiling and its -1 photo shows the same person not smiling, "
@@ -7510,7 +7518,7 @@ class LoRATrainerGUI:
         "SAMPLE_SEED", "SAMPLE_EVERY_N_EPOCHS", "SAMPLE_EVERY_N_STEPS",
         "SAMPLE_AT_FIRST", "SAMPLE_FLOW_SHIFT",
         "SAMPLE_NEGATIVE", "SAMPLE_CFG_SCALE", "SAMPLE_FRAMES",
-        "MINIMAX_TURBO_STEPS", "MINIMAX_TURBO_STRENGTH", "FAMILY_TURBO_STRENGTH",
+        "MINIMAX_TURBO_STEPS", "MINIMAX_TURBO_STRENGTH",
         "RESUME_TRAINING",
     }
 
@@ -7686,6 +7694,9 @@ class LoRATrainerGUI:
                          "(values 2 to 9 tested).")
             prompts = self.entries["FAMILY_SLIDER_SOURCE"].get() == "prompts"
             self._set_widget_visible(self._family_slider_pairs, slider_on and not prompts)
+            _clips = "clip" in getattr(desc, "media", ())
+            for _w in (self._family_slider_clip_head, self._family_slider_clip_note):
+                self._set_widget_visible(_w, _clips)
             self._set_widget_visible(self._family_slider_prompts, slider_on and prompts)
             self._set_widget_visible(self._family_ft_frame, kind == "finetune")
             # a fine-tune counts in rotations: the epoch boxes stand down while it is chosen
@@ -33208,8 +33219,9 @@ class LoRATrainerGUI:
                 "FAMILY_EMA": self.entries["FAMILY_EMA"].get(),
                 "FAMILY_PRECISION": self.entries["FAMILY_PRECISION"].get(),
                 "FAMILY_TURBO_STRENGTH": self.entries["FAMILY_TURBO_STRENGTH"].get(),
-                "MINIMAX_TURBO_STEPS": self.entries["MINIMAX_TURBO_STEPS"].get(),
-                "MINIMAX_TURBO_STRENGTH": self.entries["MINIMAX_TURBO_STRENGTH"].get(),
+                **({"MINIMAX_TURBO_STEPS": self.entries["MINIMAX_TURBO_STEPS"].get(),       # H3's Turbo preview row
+                    "MINIMAX_TURBO_STRENGTH": self.entries["MINIMAX_TURBO_STRENGTH"].get()}
+                   if self._family_desc().samples_turbo_pace else {}),
                 "FAMILY_EDIT": self._family_edit_on(),
                 "FAMILY_EDIT_DIR": self.entries["FAMILY_EDIT_DIR"].get().strip(),
                 "FAMILY_EDIT_REF": self.entries["FAMILY_EDIT_REF"].get().strip(),

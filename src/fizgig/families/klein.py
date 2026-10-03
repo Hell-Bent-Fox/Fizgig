@@ -98,6 +98,7 @@ KLEIN = FamilyDescription(
     implementation="https://github.com/black-forest-labs/flux2",
     ema_default="Off",                # the doc's K10: available, off until an A/B says otherwise
     precisions=("bf16", "int8", "nf4"),
+    finetune=True,                    # the driver's ft_spec: double then single blocks, NF4 trunk (families/ft.py)
     auto_precisions=("int8", "nf4"),
     precision_labels={"bf16": "As the file (bf16 or fp8)"},
     precision_hint=("Auto (recommended) picks at launch: INT8 compiled when torch.compile can run and the run is long "

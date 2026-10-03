@@ -20,13 +20,14 @@ _STRUCTURE = (
 )
 
 
-def _preset(rank, epochs, clip_still=True):
+def _preset(rank, epochs, clip_still=True, slider=False, lr=1e-6, optimizer="automagic3"):
     """The old H3 built-ins (lora_trainer_gui.py MINIMAX_BUILT_IN_PRESETS), values unchanged, in the standard layer's
-    keys and this family's option keys."""
+    keys and this family's option keys; slider=True the Slider preset (adamw8bit, as every slider trains)."""
     return {
         "NETWORK_DIM": rank, "NETWORK_ALPHA": rank, "NETWORK_TYPE": "LoRA (standard)", "LOKR_FACTOR": 8,
-        "LEARNING_RATE": 1e-6, "MAX_TRAIN_EPOCHS": epochs, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42,
-        "ADAPTIVE_LR": False, "ADAPTIVE_LR_MIN": "1e-5", "ADAPTIVE_LR_MAX": "4e-4", "OPTIMIZER_TYPE": "automagic3",
+        "LEARNING_RATE": lr, "MAX_TRAIN_EPOCHS": epochs, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42,
+        "FAMILY_SLIDER": slider, "FAMILY_SLIDER_GUIDANCE": "2",
+        "ADAPTIVE_LR": False, "ADAPTIVE_LR_MIN": "1e-5", "ADAPTIVE_LR_MAX": "4e-4", "OPTIMIZER_TYPE": optimizer,
         "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0, "DATASET_MEGAPIXELS": "0.25",
         "FAMILY_PRECISION": "Auto (recommended)", "BLOCKS_SWAP": "Auto (detect from GPU)",
         "FAMILY_EMA": "0.98 (recommended)",
@@ -42,6 +43,10 @@ PRESETS = (
     ("✨ MiniMax H3 Fast (LoRA 8, 50 epochs)", _preset(8, 50)),
     ("✨ MiniMax H3 (rank 16, 60 epochs)", _preset(16, 60)),
     ("✨ MiniMax H3 Style (LoRA 8)", _preset(8, 50, clip_still=False)),
+    # Slider (3 Oct): rank 4 at 2e-4 for ~160 steps, as the other families' sliders; a prompt smile slider at push 2
+    # was clear by epoch 5 of 10 (16 practice pictures an epoch)
+    ("✨ MiniMax H3 Slider (rank 4, 2e-4)", _preset(4, 16, clip_still=False, slider=True, lr=2e-4,
+                                                     optimizer="adamw8bit")),
 )
 
 OPTIONS = (
@@ -204,6 +209,7 @@ MINIMAX = FamilyDescription(
     media=("photo", "clip", "voice"),
     multi_concept=True,
     adaptive_lr=False,
+    slider_training=True,             # prompt pairs, photo pairs and clip pairs (driver: _slider_loss / predict)
     loss_watch=False,
     network_hint="LoRA recommended for MiniMax",
     ema_hint="A smoothed average of the weights, leading to better and more reliable previews.",

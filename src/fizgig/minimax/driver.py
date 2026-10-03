@@ -357,6 +357,8 @@ class MiniMaxDriver(FamilyDriver):
         the shared adapters) or are skipped outright (stop - faster epochs)."""
         from fizgig.minimax.common import _P1_LR_SCALE, ANCHOR_LR_SCALE
         self._epoch = epoch
+        if getattr(self, "_slider_pairs", False) and "latents_control_0" not in batch:
+            return True, 1.0              # a pair slider: a clip's derived still has no pair, so it sits out
         if getattr(self, "_ftb", None) is not None and self.options.get("ft_scope") == "photo" and (
                 self._modality(batch) != "photo"):
             return True, 1.0              # 'Train on: Photos only': clip and voice batches are skipped outright
@@ -407,6 +409,8 @@ class MiniMaxDriver(FamilyDriver):
     def training_loss(self, dit, latents, cond, generator, *, min_t=0.0, max_t=1.0, refs=None, diff_ref=None,
                       diff_weight=0.0):
         from fizgig.minimax.common import compute_distill_loss, compute_loss, sample_sigmas
+        if diff_ref is not None and diff_weight > 0.0:
+            return self._slider_loss(dit, latents, cond, generator, min_t, max_t, diff_ref, diff_weight)
         teacher = self._teacher_phase()
         if (getattr(self, "_distill", False) and (teacher or not self._p1) and "ref_hidden_states" in cond
                 and not cond.get("audio_only")):
@@ -444,6 +448,116 @@ class MiniMaxDriver(FamilyDriver):
             info["lr_mult"] = hn if float(s) >= MINIMAX_LOWNOISE_SIGMA else 1.0
         return loss, info
 
+    # ---- sliders (families/train.py): image / clip pairs through training_loss's diff_ref, prompt pairs through
+    #      noise_latents / predict. compute_loss's still / clip path, video only (a pole's sound is not the dial) ----
+    def _noised(self, latents, generator, min_t, max_t):
+        """compute_loss's training input in training_loss's draw order: the latent cropped to the patch grid, the
+        run's sigma, the noise. -> (x0, noise, sigma (1,))."""
+        from fizgig.minimax.common import sample_sigmas
+        lat = latents["latent"] if isinstance(latents, dict) else latents
+        lat = lat if lat.dim() == 5 else lat.unsqueeze(2)                     # (1, 24, T, H, W)
+        _pt, ph, pw = getattr(self, "_patch", (1, 2, 2))
+        x0 = lat[..., :(lat.shape[-2] // ph) * ph, :(lat.shape[-1] // pw) * pw].float()
+        sigma = sample_sigmas(1, "cpu", shift=self._shift(), generator=generator,
+                              image_tokens=(x0.shape[-2] // ph) * (x0.shape[-1] // pw))
+        if min_t > 0.0 or max_t < 1.0:
+            sigma = min_t + (max_t - min_t) * sigma
+        noise = torch.randn(x0.shape, generator=generator, dtype=torch.float32).to(x0.device)
+        return x0, noise, sigma
+
+    def _slider_loss(self, dit, latents, cond, generator, min_t, max_t, diff_ref, diff_weight):
+        """An image- or clip-pair slider step: the plain flow loss with each patch token weighted by how much the two
+        poles differ there (the Krea 2 / Qwen formula), over every frame of a clip pair; poles of different lengths
+        weigh every token the same."""
+        import torch.nn.functional as F
+        self._patch = getattr(dit, "patch_size", (1, 2, 2))
+        _pt, ph, pw = self._patch
+        x0, noise, sigma = self._noised(latents, generator, min_t, max_t)
+        s = float(sigma.reshape(-1)[0])
+        noised = (1.0 - s) * x0 + s * noise
+        txt = cond["hidden_states"]
+        txt = (txt[None] if txt.dim() == 2 else txt).to(x0.device, DTYPE)
+        pred = dit(noised.to(DTYPE), (1.0 - sigma).to(x0.device), txt).float()
+        ref = diff_ref if diff_ref.dim() == 5 else diff_ref.unsqueeze(2)
+        ref = ref[..., :x0.shape[-2], :x0.shape[-1]].to(x0.device).float()
+        if ref.shape != x0.shape:            # poles of different lengths (an edit that drops frames): even weights
+            se = (pred - (x0 - noise)).pow(2)
+            return se.mean(), {"t": s}
+        d = (x0 - ref).abs().mean(dim=1)                                       # (1, T, H, W)
+        b, t_, h, w = d.shape
+        d = F.interpolate(F.avg_pool2d(d.reshape(b * t_, 1, h, w), (ph, pw)), scale_factor=(ph, pw),
+                          mode="nearest").reshape(b, t_, h, w)                 # one value per patch token
+        dm = d.mean()
+        if float(dm) > 1e-6:
+            wt = (1.0 - float(diff_weight)) + float(diff_weight) * (d / dm).clamp(max=8.0)
+            wt = wt / wt.mean().clamp_min(1e-8)
+        else:
+            wt = torch.ones_like(d)                                            # identical pair: uniform
+        se = (pred - (x0 - noise)).pow(2).mean(dim=1)
+        return (se * wt).mean(), {"t": s}
+
+    def noise_latents(self, latents, generator, *, min_t=0.0, max_t=1.0):
+        x0, noise, sigma = self._noised(latents, generator, min_t, max_t)
+        s = float(sigma.reshape(-1)[0])
+        return {"x": ((1.0 - s) * x0 + s * noise).to(DTYPE), "tt": (1.0 - sigma).to(x0.device), "t": s}
+
+    def predict(self, dit, state, cond):
+        txt = cond["hidden_states"]
+        txt = (txt[None] if txt.dim() == 2 else txt).to(state["x"].device, DTYPE)
+        return dit(state["x"], state["tt"], txt)
+
+    def encode_images(self, vae, images):
+        """uint8 (H, W, 3) arrays -> (24, h, w) latents through the H3 VAE encoder, loaded on first use (the
+        previews' VAE is the decoder only) - a prompt slider's practice renders are re-encoded here."""
+        import numpy as np
+        from safetensors import safe_open
+        from fizgig.minimax.vae import MiniMaxH3VideoVAEEncoder
+        enc = vae.get("encoder")
+        if enc is None:
+            enc = MiniMaxH3VideoVAEEncoder()
+            with safe_open(vae["path"], framework="pt", device="cpu") as f:
+                enc.load_state_dict({k: f.get_tensor(k) for k in f.keys()}, strict=False)
+            vae["encoder"] = enc = enc.to(torch.float32).eval()
+        device = vae["device"]
+        enc.to(device)
+        try:
+            x = torch.from_numpy(np.stack([np.asarray(im)[..., :3] for im in images])).permute(0, 3, 1, 2)
+            with torch.no_grad():
+                z = enc.encode(x.float().div(127.5).sub(1.0).to(device, torch.float32))   # (B, 24, 1, h, w)
+            return [(zi.squeeze(1) if zi.dim() == 4 else zi).cpu() for zi in z]
+        finally:
+            enc.to("cpu")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+    def slider_setup(self, group):
+        """The dial's previews: stills for photo pairs and prompt sliders (three clips a prompt would cost minutes to
+        show a still's worth), clips at the Samples tab's length for clip pairs - that look lives in the motion."""
+        from fizgig.minimax.clip import is_video
+        clips = any(is_video(p) for ds in getattr(group, "datasets", [])
+                    for p in getattr(getattr(ds, "datasource", None), "image_paths", None) or [])
+        self._slider_pairs = any(getattr(ds, "has_control", False) for ds in getattr(group, "datasets", []))
+        if not clips:
+            self.options["preview_frames"] = 1
+        logger.info("[slider] previews: %s", "clips side by side (clip pairs)" if clips else "stills side by side")
+
+    def slider_preview(self, frames, multipliers):
+        """Clip previews at -1 / 0 / +1 laid side by side as one clip (the PNG is the labelled middle-frame strip);
+        stills take the shared strip."""
+        if not frames or not isinstance(frames[0], dict):
+            return None
+        from fizgig.families.train import _slider_strip
+        n = min(f["frames"].shape[1] for f in frames)
+        h = frames[0]["frames"].shape[2]
+        gap = torch.zeros(3, n, h, 8)
+        parts = []
+        for k, f in enumerate(frames):
+            if k:
+                parts.append(gap)
+            parts.append(f["frames"][:, :n, :h])
+        return {"frames": torch.cat(parts, dim=3), "image": _slider_strip([f["image"] for f in frames], multipliers),
+                "wave": None, "every_frame": True}    # every frame + an mp4: a frame-skip dial shows in the motion
+
     # ---- previews (first stage: the reference sampler, the old clip contract) -----------------------
     #   options: preview_frames (1 = a still; 22 / 39 / 56 ... clips), preview_audio=1 (a clip's sound),
     #            audio_vae=PATH (the decoder for that sound)
@@ -475,7 +589,7 @@ class MiniMaxDriver(FamilyDriver):
         if apath:
             from fizgig.minimax.audio_vae import load_minimax_h3_audio_vae_decoder
             audio = load_minimax_h3_audio_vae_decoder(apath, device="cpu")
-        return {"video": dec.to(torch.float16).eval(), "audio": audio, "device": device}
+        return {"video": dec.to(torch.float16).eval(), "audio": audio, "device": device, "path": path}
 
     def initial_noise(self, seed, width, height):
         raise NotImplementedError("H3 travel previews come with the workbench wrap")
@@ -681,7 +795,7 @@ class MiniMaxDriver(FamilyDriver):
         px, out = result["frames"], []
         clip_dir = stem + ".clip"
         os.makedirs(clip_dir, exist_ok=True)
-        keep = list(range(0, px.shape[1], 2))
+        keep = list(range(0, px.shape[1], 1 if result.get("every_frame") else 2))
         if keep[-1] != px.shape[1] - 1:
             keep.append(px.shape[1] - 1)
         for k in keep:
@@ -696,6 +810,14 @@ class MiniMaxDriver(FamilyDriver):
                 out.append(stem + ".mp4")
             except Exception:
                 pass                                     # the wav and the scrub frames still work
+        elif result.get("every_frame"):
+            # a clip slider's strip: the motion is the dial, so a playable mp4 at the true frame rate, silent
+            from fizgig.minimax.common import write_preview_mp4
+            try:
+                write_preview_mp4(stem + ".mp4", px, None)
+                out.append(stem + ".mp4")
+            except Exception:
+                pass
         result["image"].save(path)
         return out + [path]
 

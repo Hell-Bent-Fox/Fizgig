@@ -442,7 +442,12 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
         for i in range(len(lats) // per):
             p = os.path.join(out_dir, f"{output_name}_e{epoch:06d}_{i:02d}_{ts}_{seed + i}.png")
             frames = [driver.decode(vae, lat, width, height) for lat in lats[i * per:(i + 1) * per]]
-            paths += driver.save_preview(_slider_strip(frames, SLIDER_PREVIEW_MULTIPLIERS) if slider else frames[0], p)
+            if slider:
+                strip = driver.slider_preview(frames, SLIDER_PREVIEW_MULTIPLIERS)
+                paths += driver.save_preview(_slider_strip(frames, SLIDER_PREVIEW_MULTIPLIERS) if strip is None
+                                             else strip, p)
+            else:
+                paths += driver.save_preview(frames[0], p)
     finally:
         if slider:
             net.set_trainable_multiplier(1.0)  # a preview that failed mid-dial must not leave the LoRA scaled
@@ -816,6 +821,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         if shared:                           # the dial is shown on what both ends of a pair have in common
             sample_prompts = [shared]
             logger.info("[slider] previews use the pairs' caption: '%s'", shared)
+    if slider:
+        driver.slider_setup(group)           # e.g. H3: still previews unless the pairs are clips
     for ds in group.datasets:
         if getattr(ds, "batch_size", 1) != 1:
             raise RuntimeError(f"{desc.display_name} trains at batch size 1 here (conditioning lengths differ per "

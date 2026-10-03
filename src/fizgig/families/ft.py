@@ -36,7 +36,9 @@ logger = logging.getLogger(__name__)
 class FTSpec:
     """What a driver declares to offer a full fine-tune.
 
-    blocks: the DiT attribute holding the numbered blocks (an nn.ModuleList).
+    blocks: the DiT attribute holding the numbered blocks (an nn.ModuleList), or a tuple of them numbered one after
+        another as one cycle (Klein: double_blocks then single_blocks; a component names Linears in whichever
+        blocks have them).
     components: Linear-name prefixes within a block, in rotation order; each is one window spanning every block (the
         planner depth-splits a window that doesn't fit). Balance them by size - a window's bf16 weights, grads and
         optimizer state are what the card holds.
@@ -69,6 +71,11 @@ class FTSpec:
 
 
 _PREFIX = "diffusion_model."
+
+
+def _lists(spec: FTSpec) -> tuple:
+    """The spec's block lists in cycle order."""
+    return (spec.blocks,) if isinstance(spec.blocks, str) else tuple(spec.blocks)
 
 
 def _file_loc(spec: FTSpec, mkey: str, have) -> Optional[tuple]:
@@ -266,16 +273,20 @@ class Rotator:
         self.dit = dit
         self.spec = spec
         self.device = torch.device(device)
-        self.blocks = dit.get_submodule(spec.blocks)
+        # the blocks in cycle order and where each lives ((list name, index in it)); one list is its ModuleList
+        self._where = [(name, li) for name in _lists(spec) for li in range(len(dit.get_submodule(name)))]
+        self.blocks = (dit.get_submodule(spec.blocks) if isinstance(spec.blocks, str)
+                       else [dit.get_submodule(name)[li] for name, li in self._where])
         # every NF4 Linear in the blocks under a component prefix: (model key, linear, block index, name in block),
         # found once while everything is still frozen
         self.targets = []
         for bi, block in enumerate(self.blocks):
+            name, li = self._where[bi]
             for lname, m in model_linears(block):
                 if not getattr(m, "_is_nf4", False):
                     continue
                 if any(lname.startswith(p) for p in spec.components):
-                    self.targets.append((f"{spec.blocks}.{bi}.{lname}.weight", m, bi, lname))
+                    self.targets.append((f"{name}.{li}.{lname}.weight", m, bi, lname))
         self.always = []                      # (model key, linear): dense bf16, trainable all run
         for mod_name in spec.always_on:
             mod = dit.get_submodule(mod_name)
@@ -416,14 +427,25 @@ def _plan(comp_gb, n_blocks, trunk, spec: FTSpec, usable, allow_stream=True, mp=
 def plan_windows(dit, spec: FTSpec, rotator: Rotator, free_gb: float, allow_stream: bool = True, mp=None):
     """(windows, stream, reasons, usable GB) for this card, with the model loaded: component sizes measured from it,
     `free_gb` read after the NF4 trunk landed (so the trunk is added back into the budget)."""
-    block0 = dit.get_submodule(spec.blocks)[0]
     comp_gb = {p: 0.0 for p in spec.components}
-    for ln, m in model_linears(block0):
-        for p in spec.components:
-            if ln.startswith(p):
-                comp_gb[p] += m.out_features * m.in_features * 2 / 1e9     # logical size: NF4 empties .weight
-                break
-    n = len(dit.get_submodule(spec.blocks))
+    if isinstance(spec.blocks, str):
+        block0 = dit.get_submodule(spec.blocks)[0]
+        for ln, m in model_linears(block0):
+            for p in spec.components:
+                if ln.startswith(p):
+                    comp_gb[p] += m.out_features * m.in_features * 2 / 1e9     # logical size: NF4 empties .weight
+                    break
+        n = len(dit.get_submodule(spec.blocks))
+    else:
+        # blocks that differ (Klein's double and single): the mean block, so a window across all of them is exact
+        n = len(rotator.blocks)
+        for blk in rotator.blocks:
+            for ln, m in model_linears(blk):
+                for p in spec.components:
+                    if ln.startswith(p):
+                        comp_gb[p] += m.out_features * m.in_features * 2 / 1e9
+                        break
+        comp_gb = {p: v / n for p, v in comp_gb.items()}
     if spec.trunk_gb_per_block is not None:
         trunk = float(spec.trunk_gb_per_block)
     else:
@@ -444,6 +466,8 @@ def plan_from_file(path: str, spec: FTSpec, free_gb: float, mp=None):
     import re
     with MemoryEfficientSafeOpen(path) as f:
         hdr = {(k[len(_PREFIX):] if k.startswith(_PREFIX) else k): f.header[k] for k in f.keys()}
+    if not isinstance(spec.blocks, str):
+        return _plan_from_header_lists(hdr, spec, free_gb, mp)
     pat = re.compile(rf"^{re.escape(spec.blocks)}\.(\d+)\.(.+)$")
     blocks, comp_gb, block0_params, nonblock = set(), {p: 0.0 for p in spec.components}, 0, 0.0
     for k, info in hdr.items():
@@ -471,6 +495,48 @@ def plan_from_file(path: str, spec: FTSpec, free_gb: float, mp=None):
         return None
     n = len(blocks)
     trunk = float(spec.trunk_gb_per_block) if spec.trunk_gb_per_block is not None else block0_params * 0.53 / 1e9
+    usable = free_gb - nonblock - 1.05 - 1.5
+    windows, stream, _why = _plan(comp_gb, n, trunk, spec, usable, mp=mp)
+    return windows, stream, usable
+
+
+def _plan_from_header_lists(hdr, spec: FTSpec, free_gb: float, mp=None):
+    """plan_from_file for several block lists: component sizes as the mean block over all of them."""
+    import re
+    pats = [re.compile(rf"^{re.escape(name)}\.(\d+)\.(.+)$") for name in _lists(spec)]
+    seen, comp_gb, params, nonblock = set(), {p: 0.0 for p in spec.components}, 0, 0.0
+    for k, info in hdr.items():
+        shape = info.get("shape") or []
+        numel = 1
+        for d in shape:
+            numel *= int(d)
+        hit = None
+        for li, pat in enumerate(pats):
+            m = pat.match(k)
+            if m:
+                hit = (li, m)
+                break
+        if hit is None:
+            nonblock += numel * 2 / 1e9
+            continue
+        li, m = hit
+        seen.add((li, int(m.group(1))))
+        if len(shape) != 2 or not k.endswith(".weight"):
+            continue
+        params += numel
+        rest = m.group(2)
+        names = [(rest[:-len(fsuf)] + msuf, numel / n) for msuf, fsuf, _pt, n in spec.file_layout
+                 if rest.endswith(fsuf)] or [(rest, numel)]
+        for name, n_el in names:
+            for p in spec.components:
+                if name.startswith(p):
+                    comp_gb[p] += n_el * 2 / 1e9
+                    break
+    n = len(seen)
+    if not n or not all(comp_gb.values()):
+        return None
+    comp_gb = {p: v / n for p, v in comp_gb.items()}
+    trunk = float(spec.trunk_gb_per_block) if spec.trunk_gb_per_block is not None else params * 0.53 / 1e9 / n
     usable = free_gb - nonblock - 1.05 - 1.5
     windows, stream, _why = _plan(comp_gb, n, trunk, spec, usable, mp=mp)
     return windows, stream, usable
@@ -623,7 +689,7 @@ class SharedBackend:
     def params_in_blocks(self, block_ids):
         want = set(block_ids)
         return [lin.weight for k, lin, bi, ln in self.rot.targets
-                if self.driver.block_of(f"{self.spec.blocks}.{bi}.{ln}") in want and lin.weight.requires_grad]
+                if self.driver.block_of(k[:-len(".weight")]) in want and lin.weight.requires_grad]
 
     def save(self, path, meta):
         return save_checkpoint(self.rot.state_dict(), self.src, path, meta)

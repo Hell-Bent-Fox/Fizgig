@@ -1086,7 +1086,7 @@ def _find_ffmpeg():
 
 
 def write_preview_mp4(path, frames, wav_path, fps=24):
-    """Mux decoded preview frames [3, F, H, W] in [0,1] with their wav into a playable mp4.
+    """Mux decoded preview frames [3, F, H, W] in [0,1] with their wav into a playable mp4 (wav_path None: silent).
 
     The gallery plays THIS for samples with sound — a real clip at the true frame rate with
     its soundtrack, instead of a scrub slider plus a separate audio player. Raises on any
@@ -1099,9 +1099,9 @@ def write_preview_mp4(path, frames, wav_path, fps=24):
     raw = (frames.permute(1, 2, 3, 0).clamp(0, 1) * 255).byte().cpu().numpy().tobytes()
     cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps), "-i", "-",
-           "-i", wav_path,
+           *(["-i", wav_path] if wav_path else []),
            "-c:v", "libx264", "-crf", "18", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-           "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", path]
+           *(["-c:a", "aac", "-b:a", "192k", "-shortest"] if wav_path else []), "-movflags", "+faststart", path]
     p = subprocess.run(cmd, input=raw, capture_output=True,
                        creationflags=0x08000000 if os.name == "nt" else 0)
     if p.returncode != 0 or not os.path.isfile(path):

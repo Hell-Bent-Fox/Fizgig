@@ -137,15 +137,15 @@ def caches(desc, inputs):
 
 
 # ---------------------------------------------------------------------------------------------------- pairs
-def pairs(after_dir, before_dir):
+def pairs(after_dir, before_dir, exts=PAIR_EXTS):
     """(photos without a partner, photos with more than one, first partner's path) for an edit's or a slider's
     two folders, matched the way the dataset loader matches them: a partner of photo.png is photo.<ext> or
-    photo_<anything>.<ext>, ignoring case."""
-    befores = sorted(f for f in os.listdir(before_dir) if os.path.splitext(f)[1].lower() in PAIR_EXTS)
+    photo_<anything>.<ext>, ignoring case. exts: what counts as an item (a clip family's sliders add .mp4)."""
+    befores = sorted(f for f in os.listdir(before_dir) if os.path.splitext(f)[1].lower() in exts)
     missing, multiple, first = [], [], None
     for f in sorted(os.listdir(after_dir)):
         b, e = os.path.splitext(f)
-        if e.lower() not in PAIR_EXTS:
+        if e.lower() not in exts:
             continue
         m = [x for x in befores if x.casefold().startswith(b.casefold() + ".")    # IMG_1 pairs with img_1
              or x.casefold().startswith(b.casefold() + "_")]
@@ -157,20 +157,21 @@ def pairs(after_dir, before_dir):
     return missing, multiple, first
 
 
-def pair_problems(after_dir, before_dir, caption_ext=".txt"):
-    """(photos in after_dir without a caption, pairs whose shapes differ)."""
+def pair_problems(after_dir, before_dir, caption_ext=".txt", exts=PAIR_EXTS):
+    """(photos in after_dir without a caption, pairs whose shapes differ - photos only; a clip pair's size and
+    length are checked when it is cached)."""
     from PIL import Image
-    befores = sorted(f for f in os.listdir(before_dir) if os.path.splitext(f)[1].lower() in PAIR_EXTS)
+    befores = sorted(f for f in os.listdir(before_dir) if os.path.splitext(f)[1].lower() in exts)
     uncaptioned, shapes = [], []
     for f in sorted(os.listdir(after_dir)):
         b, e = os.path.splitext(f)
-        if e.lower() not in PAIR_EXTS:
+        if e.lower() not in exts:
             continue
         if not os.path.exists(os.path.join(after_dir, b + caption_ext)):
             uncaptioned.append(f)
         m = [x for x in befores if x.casefold().startswith(b.casefold() + ".")
              or x.casefold().startswith(b.casefold() + "_")]
-        if len(m) == 1:
+        if len(m) == 1 and e.lower() in PAIR_EXTS:
             try:
                 with Image.open(os.path.join(after_dir, f)) as ia, Image.open(os.path.join(before_dir, m[0])) as ib:
                     ra, rb = ia.width / ia.height, ib.width / ib.height
@@ -247,17 +248,18 @@ def problems(desc, inputs):
             errors.append(f"Edit LoRA test photo for previews does not exist: {ref}")
     if slider_on(desc, inputs, "pairs"):
         other = _s(inputs.get("FAMILY_SLIDER_DIR"))
+        _ex = PAIR_EXTS | ({".mp4"} if "clip" in desc.media else set())    # H3: clip pairs too
         if not other or not os.path.isdir(other):
             errors.append("Slider: set the -1 end folder (Training tab, Training Parameters)")
         elif os.path.isdir(folder):
-            missing, multiple, _ = pairs(folder, other)
+            missing, multiple, _ = pairs(folder, other, _ex)
             if missing:
                 errors.append(f"Slider: {len(missing)} +1 photo(s) have no -1 photo with the same file name in "
                               f"{other} (e.g. {', '.join(missing[:3])})")
             if multiple:
                 errors.append(f"Slider: {len(multiple)} +1 photo(s) match more than one -1 photo (e.g. "
                               f"{', '.join(multiple[:3])}) - keep one per photo, with the same file name")
-            uncaptioned, shapes = pair_problems(folder, other, ext)
+            uncaptioned, shapes = pair_problems(folder, other, ext, _ex)
             if uncaptioned:
                 errors.append(f"Slider: {len(uncaptioned)} photo(s) have no caption (e.g. "
                               f"{', '.join(uncaptioned[:3])}) - type what both ends share and press Write "
@@ -591,10 +593,10 @@ def _preview_flags(desc, st, plan, cmd):
             ts = dflt
         if ts > 0:                              # strength 0 = previews without the turbo: don't load it
             out += ["--speed_lora", speed_path]
-        else:
-            turbo_steps = None
             if abs(ts - dflt) > 1e-9:
                 out += ["--speed_lora_strength", f"{max(0.0, min(2.0, ts)):g}"]
+        else:
+            turbo_steps = None
     samples_dir = st.get("samples_dir") or os.path.join(_s(st.get("LORA_OUTPUT_DIR")), "sample")
     prompts = None
     if edit_on(desc, st):              # edit previews: the edit instruction, not the Samples-tab prompts
@@ -661,7 +663,8 @@ def _preview_flags(desc, st, plan, cmd):
             if ref:
                 out += ["--sample_reference", ref]
         ck = desc.preview_checkpoint()
-        if desc.train_preview_checkpoint and ck and sm.get("checkpoint") and not slider_on(desc, st):
+        if (desc.train_preview_checkpoint and ck and sm.get("checkpoint") and not slider_on(desc, st)
+                and not ft_on(desc, st)):      # a fine-tune previews the model it trains, not the Distilled
             path = _s((st.get("models") or {}).get(ck[0].pref_key))
             if path and os.path.exists(path):        # Klein's "Use Distilled model for samples"
                 out += ["--preview_checkpoint", path,

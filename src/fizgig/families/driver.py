@@ -159,6 +159,15 @@ class FamilyDriver:
         raise NotImplementedError
 
     # ---- prompt-pair sliders (optional) ------------------------------------------------------------
+    def slider_setup(self, group) -> None:
+        """A slider run's data is known (an image-pair group, or a prompt slider's practice bank): a family whose
+        previews are clips decides here whether the dial's previews are stills (H3)."""
+
+    def slider_preview(self, frames, multipliers):
+        """One preview's decoded results at each strength -> what save_preview writes, or None for the shared
+        side-by-side still strip (a clip family lays its clips side by side)."""
+        return None
+
     def noise_latents(self, latents, generator, *, min_t: float = 0.0, max_t: float = 1.0) -> dict:
         """A noised training input for latents (1, C, h, w), drawn by the family's own timestep rule. Opaque to
         the caller; handed back to predict()."""
