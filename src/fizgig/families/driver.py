@@ -107,6 +107,19 @@ class FamilyDriver:
         """Block ids whose trainable weights sit out this item's step (per-modality routing). Default: none."""
         return ()
 
+    def after_optimizer_step(self) -> None:
+        """Called after every optimizer step (the H3 adapter-relative LR ramp reads the adapter's new size)."""
+
+    def run_metadata(self) -> dict:
+        """Extra ss_* keys this run's family options put in every saved LoRA. Default: none."""
+        return {}
+
+    def step_policy(self, batch: dict, epoch: int) -> tuple:
+        """(skip, lr_multiplier) for this item's step in 1-based `epoch`: skip = no forward, no loss, no record
+        (H3's per-category retirement, "stop"); the multiplier scales the optimizer LR for the step (H3's "anchor",
+        10%), averaged over an accumulation window. Default: (False, 1.0)."""
+        return False, 1.0
+
     def batch_cond(self, batch: dict, device) -> dict:
         """The conditioning dict training_loss gets for one loaded item: the cached `cond__` entries, batched. A
         family that keeps its own cache layout (H3's hidden_states + audio rows) maps its keys here."""
@@ -239,7 +252,8 @@ class FamilyDriver:
         dit.blocks_to_swap = 1
 
     def frozen_file_added(self, dit, path: str, strength: float, role: str) -> None:
-        """A frozen LoRA file (role "adapter": on for training, off in previews; "context": on for both) has been
+        """A frozen LoRA file (role "adapter": on for training, off in previews; "context": on for both; "speed": the
+        preview speed LoRA, on for previews only) has been
         added to the family LoRA. A family whose LoRAs carry weights the family LoRA cannot wrap (H3's AdaLN rows on
         the pruned base, injected at run time) applies them here."""
 

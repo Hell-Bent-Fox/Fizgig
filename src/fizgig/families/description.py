@@ -103,6 +103,56 @@ class ClipSpec:
 
 
 @dataclass(frozen=True)
+class FamilyOption:
+    """A family's own control on the Training (or Samples) tab: a dropdown, an entry or a tick whose value becomes
+    launch tokens. A token is "name=value" (the driver's --family_option), "--flag=value" or "--flag" (a trainer
+    flag), or "aux:name=value" (the cache stages' --aux). "{}" in a token is the entry's text; "pref:KEY" in a value
+    is that Preferences file's path. A family with clips, sound or several bases (H3) declares what has no generic
+    home this way, and a future family declares its own the same way."""
+    key: str                          # where the GUI keeps the value (and the old setting it maps, via `setting`)
+    label: str
+    kind: str = "choice"              # "choice" | "entry" | "check" | "fixed" (always sent, no control)
+    choices: tuple = ()               # choice: (label, tokens) pairs, the first the default
+    tokens: str = ""                  # entry: tokens with "{}" for the text (sent only when the text is set);
+    #                                   check: tokens sent when ticked
+    default: str = ""                 # entry text / "1" for a ticked check; a choice defaults to its first label
+    hint: str = ""                    # the grey line under the control
+    choice_hints: tuple = ()          # (label, amber line) shown while that choice is picked
+    tab: str = "training"             # "training" | "samples"
+    setting: str = ""                 # the old settings key this option's value is read from on first use
+    show_if_media: str = ""           # shown only when the dataset holds this media kind ("clip", "voice")
+    mixed_only: bool = False          # shown only when the dataset mixes voice with photos or clips
+    requires: str = ""                # shown (and sent) only while the check option with this key is ticked
+
+    def choice_labels(self):
+        return [c[0] for c in self.choices]
+
+    def pick(self, value):
+        """The choice label for a stored value: itself, else the label that contains it (an old setting's value -
+        "ref2va" -> "Reference (ref2va)") or that it starts with, else the first (the default)."""
+        v = str(value or "").strip()
+        labels = self.choice_labels()
+        if v in labels:
+            return v
+        low = v.lower()
+        for lab in labels:
+            if low and (low in lab.lower() or lab.lower().startswith(low.split(" ")[0])):
+                return lab
+        return labels[0] if labels else ""
+
+    def resolve(self, value):
+        """The tokens this option sends for `value` (a choice label, entry text or "1"/"" for a check)."""
+        if self.kind == "choice":
+            return dict(self.choices).get(self.pick(value), "").split()
+        if self.kind == "fixed":
+            return self.tokens.split()
+        if self.kind == "check":
+            return self.tokens.split() if str(value) in ("1", "True", "true") else []
+        text = str(value or "").strip()
+        return [t.replace("{}", text) for t in self.tokens.split()] if text else []
+
+
+@dataclass(frozen=True)
 class FamilyDescription:
     # identity
     key: str                          # family key (the workbench vocabulary), e.g. "qwen_image21"
@@ -150,6 +200,7 @@ class FamilyDescription:
     training_adapter: str = ""        # pref key of the family's frozen training adapter ("" = none)
     training_adapter_note: str = ""   # one line for the Training tab under the adapter toggle
     ema_default: str = ""             # default EMA decay for the Training tab ("0.98", "Off"); "" = no EMA control
+    ema_short_run: bool = False       # the EMA dropdown also offers "Short run" (decay sized to the run - H3's)
     implementation: str = ""          # SAI modelspec.implementation (reference repo URL)
     precisions: tuple = ("bf16",)     # base precisions offered for training: any of "bf16", "int8", "nf4"
     # what Auto may choose, in order ((): every offered precision, most precise first). Krea 2: INT8, then NF4 - its
@@ -270,6 +321,7 @@ class FamilyDescription:
 
     # things a user or a later session must know, with sources
     notes: tuple = ()
+    options: tuple = ()               # FamilyOption controls (the family's own settings, as launch tokens)
 
     # ---- derived ------------------------------------------------------------------------------
     # generic entry points shared by every described family (the standard layer)

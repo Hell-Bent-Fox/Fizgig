@@ -1946,6 +1946,7 @@ class LoRATrainerGUI:
         # Image Prep tab exists during startup, and _update_prep_note no-ops then.
         self.image_folder_var.trace_add("write", self._update_prep_note)
         self.image_folder_var.trace_add("write", self._refresh_audio_only_ui)
+        self.image_folder_var.trace_add("write", self._family_options_media_refresh)
         # Auto-save the dataset TOML on every relevant change (no Save button needed)
         def _auto_save_ds(*_a):
             if hasattr(self, "auto_save_dataset_config_silent"):
@@ -5285,6 +5286,13 @@ class LoRATrainerGUI:
                  "an A/B.",
             foreground=COLORS["text_explain"], font=(FONT_FAMILY, 9, "italic"), justify=tk.LEFT, wraplength=720)
         self._family_ema_hint.grid(row=53, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(0, 4))
+        # --- Family options - a described family's own controls (description.options, FamilyOption) ---------
+        # Rebuilt per family by _family_options_rows; each control reads and writes the setting of the same key
+        # (H3's are the old MINIMAX_* keys), so presets, queued runs and Last Train carry them unchanged.
+        self._family_options_frame = ttk.Frame(training_content)
+        self._family_options_frame.grid(row=60, column=0, columnspan=3, sticky=tk.W, padx=0, pady=(4, 0))
+        self._family_opt_vars = {}
+        self._family_opt_rows = {}
         # --- Edit LoRA — standard-layer families whose model edits images (description.edit_training) ----
         self.entries["FAMILY_EDIT"] = tk.BooleanVar(value=bool(self.settings.get("FAMILY_EDIT", False)))
         self.entries["FAMILY_SLIDER"] = tk.BooleanVar(value=bool(self.settings.get("FAMILY_SLIDER", False)))
@@ -6414,6 +6422,14 @@ class LoRATrainerGUI:
         try:
             return self._apply_preset_values_inner(preset)
         finally:
+            _desc = self._family_desc()
+            if _desc is not None and _desc.options:      # the family options' controls re-read their settings
+                for _o in _desc.options:
+                    if _o.key in preset:
+                        self.settings[_o.key] = preset[_o.key]
+                    elif _o.setting in preset:      # an old preset: its MINIMAX_* value seeds the option
+                        self.settings.pop(_o.key, None)
+                self._family_options_rows(_desc)
             getattr(self, "_refmod_audio_opts_refresh", lambda: None)()
             getattr(self, "_refresh_automagic_gating", lambda: None)()
 
@@ -7431,6 +7447,7 @@ class LoRATrainerGUI:
                                     "FAMILY_FT_ROTATE_EVERY", "FAMILY_FT_FUSED", "FAMILY_FT_REG_DIR",
                                     "FAMILY_FT_REG_MULT"})
     from fizgig.families.launch import PRECISION_LABELS as _FAMILY_PRECISION_LABELS
+    _FAMILY_EMA_SHORT = "Short run (window = ¼ of the run)"
 
     def _family_edit_on(self, desc=None):
         desc = desc if desc is not None else self._family_desc()
@@ -7693,6 +7710,10 @@ class LoRATrainerGUI:
             keys.add(sp.pref_key)
         if desc.training_adapter:
             keys.add(desc.training_adapter)
+        import re as _re_opt
+        for _o in desc.options:                 # the Preferences files an option names (pref:KEY, ...->ALT)
+            for _tok in [t for c in _o.choices for t in c[1].split()] + _o.tokens.split():
+                keys.update(_re_opt.findall(r"pref:([A-Za-z0-9_]+)", _tok) + _re_opt.findall(r"->([A-Za-z0-9_]+)", _tok))
         d.update(
             python=self._venv_python(), repo_dir=FIZGIG_DIR,
             models={k: self._krea2_pref(k) for k in keys},
@@ -7728,6 +7749,7 @@ class LoRATrainerGUI:
                          "int8": bool(self._get_inference_int8())} if desc.train_preview_checkpoint else {})},
             samples_dir=self.get_samples_dir(),
             edit_caption=self.entries["FAMILY_EDIT_CAPTION"].get() if "FAMILY_EDIT_CAPTION" in self.entries else "",
+            FAMILY_OPTIONS=self._family_options_values(desc),
         )
         return d
 
@@ -7776,6 +7798,10 @@ class LoRATrainerGUI:
         if getattr(self, "_concept_folder_vars", None):
             preset["MINIMAX_CONCEPT_DIRS"] = [v.get().strip()
                                               for v in self._concept_folder_vars]
+        # a described family's own options (keys that have no old widget travel this way)
+        if _described:
+            for _k, _v in self._family_options_values(self._family_desc()).items():
+                preset.setdefault(_k, _v)
 
         _grab("preserve_dist_var", "PRESERVE_DISTRIBUTION")
         _grab("fp8_var", "FP8")
@@ -8573,6 +8599,123 @@ class LoRATrainerGUI:
         except Exception:
             pass
 
+    def _family_option_value(self, opt):
+        """An option's current value: its own setting once set, else the old setting it maps (the old widget first),
+        else its default - a Samples-tab option always reads that tab's live control. Checks read as "1" / ""."""
+        e = self.entries.get(opt.setting) if opt.setting else None
+        v = None
+        if opt.tab == "samples" and e is not None:
+            try:
+                v = e.get()
+            except Exception:
+                v = None
+        elif opt.key in self.settings:
+            v = self.settings[opt.key]
+        elif e is not None:
+            try:
+                v = e.get()
+            except Exception:
+                v = None
+        elif opt.setting and opt.setting in self.settings:
+            v = self.settings[opt.setting]
+        if v is None:
+            v = opt.default
+        if opt.kind == "check":
+            return "1" if str(v) in ("1", "True", "true") or v is True else ""
+        if opt.kind == "choice":
+            return opt.pick(v)
+        return str(v)
+
+    def _family_option_store(self, opt, value):
+        """An option's value into its own setting (never the old key it was seeded from: the old H3 path reads
+        those with its own meanings while both exist)."""
+        self.settings[opt.key] = value
+
+    def _family_options_values(self, desc):
+        """{key: value} of the family's options as the controls hold them now (the launch's FAMILY_OPTIONS)."""
+        out = {}
+        for opt in (desc.options if desc is not None else ()):
+            if opt.kind == "fixed":
+                continue
+            var = self._family_opt_vars.get(opt.key)
+            out[opt.key] = ((("1" if var.get() else "") if isinstance(var, tk.BooleanVar) else str(var.get()))
+                            if var is not None else self._family_option_value(opt))
+        return out
+
+    def _family_options_rows(self, desc):
+        """Build the Training tab's card of the family's own controls (none for a family without options), each row
+        shown only where it applies to the dataset in the training folder (clips, a mixed voice + picture set)."""
+        from fizgig.families import launch as _fl
+        frame = self._family_options_frame
+        for w in frame.winfo_children():
+            w.destroy()
+        self._family_opt_vars, self._family_opt_rows = {}, {}
+        opts = [o for o in (desc.options if desc is not None else ()) if o.tab == "training" and o.kind != "fixed"]
+        self._set_widget_visible(frame, bool(opts))
+        if not opts:
+            return
+        r = 0
+        for opt in opts:
+            val = self._family_option_value(opt)
+            row = []
+            if opt.kind == "check":
+                var = tk.BooleanVar(value=val == "1")
+                w = ttk.Checkbutton(frame, text=opt.label, variable=var)
+                w.grid(row=r, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(8, 0))
+                row.append(w)
+            else:
+                lab = ttk.Label(frame, text=f"{opt.label}:")
+                lab.grid(row=r, column=0, sticky=tk.W, padx=5, pady=(8, 0))
+                var = tk.StringVar(value=val)
+                if opt.kind == "choice":
+                    w = ttk.Combobox(frame, values=opt.choice_labels(), textvariable=var, state="readonly",
+                                     width=max(24, max(len(x) for x in opt.choice_labels()) + 2))
+                else:
+                    w = ttk.Entry(frame, textvariable=var, width=10)
+                w.grid(row=r, column=1, sticky=tk.W, padx=5, pady=(8, 0))
+                row += [lab, w]
+            r += 1
+            hint = ttk.Label(frame, text=opt.hint, foreground=COLORS["text_explain"], font=HINT_FONT,
+                             justify=tk.LEFT, wraplength=720)
+            if opt.hint:
+                hint.grid(row=r, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(0, 2))
+                row.append(hint)
+            r += 1
+            if opt.choice_hints:
+                amber = ttk.Label(frame, text="", foreground=COLORS["warning"],
+                                  font=(FONT_FAMILY, HINT_FONT[1] + 1, "italic"), justify=tk.LEFT, wraplength=720)
+                amber.grid(row=r, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(0, 4))
+                row.append(amber)
+                r += 1
+
+                def _amber(*_a, o=opt, v=var, a=amber):
+                    a.config(text=dict(o.choice_hints).get(v.get(), ""))
+                var.trace_add("write", _amber)
+                _amber()
+
+            def _store(*_a, o=opt, v=var):
+                self._family_option_store(o, ("1" if v.get() else "") if isinstance(v, tk.BooleanVar) else v.get())
+                if any(x.requires == o.key for x in desc.options):
+                    self._family_options_media_refresh()        # a tick that shows / hides its sub-rows
+            var.trace_add("write", _store)
+            self._family_opt_vars[opt.key] = var
+            self._family_opt_rows[opt.key] = (opt, row)
+        self._family_options_media_refresh()
+
+    def _family_options_media_refresh(self, *_a):
+        """Show each option row only where it applies to the training folder's media (FamilyOption.show_if_media /
+        mixed_only - the launch applies the same rule, so a hidden row never sends anything)."""
+        rows = getattr(self, "_family_opt_rows", None)
+        if not rows:
+            return
+        from fizgig.families import launch as _fl
+        media = _fl.dataset_media(self.image_folder_var.get().strip())
+        vals = self._family_options_values(self._family_desc())
+        for opt, widgets in rows.values():
+            on = _fl.option_applies(opt, media, vals)
+            for w in widgets:
+                self._set_widget_visible(w, on)
+
     def _set_widget_visible(self, w, show: bool):
         """Show/hide a single widget, working for both grid- and pack-managed widgets.
         grid widgets use grid_remove()/grid() (position preserved); pack widgets stash their
@@ -9190,6 +9333,13 @@ class LoRATrainerGUI:
         has_ema = bool(desc is not None and desc.ema_default)
         for w in (self._family_ema_label, self._family_ema_frame, self._family_ema_hint):
             self._set_widget_visible(w, has_ema)
+        if has_ema:
+            _ev = ["Off", "0.98 (recommended)", "0.99 (stronger)", "0.995 (long runs only)"]
+            if desc.ema_short_run:
+                _ev.append(self._FAMILY_EMA_SHORT)
+            self.entries["FAMILY_EMA"].configure(values=_ev)
+            if self.entries["FAMILY_EMA"].get() not in _ev:
+                self.entries["FAMILY_EMA"].set("0.98 (recommended)")
         many = bool(desc is not None and len(desc.precisions) > 1)
         for w in (self._family_precision_label, self.entries["FAMILY_PRECISION"], self._family_precision_hint):
             self._set_widget_visible(w, many)
@@ -9209,6 +9359,7 @@ class LoRATrainerGUI:
                 self._set_widget_visible(w, False)
         self._family_edit_rows()
         self._family_train_area_rows(desc)
+        self._family_options_rows(desc)
 
     def _family_train_area_rows(self, desc):
         """Model Area to Train and the Timestep Range for a family whose description has train_areas (Klein): the
@@ -13482,8 +13633,10 @@ class LoRATrainerGUI:
             self._on_distilled_samples_toggled()        # Klein's Distilled tick greys its fields; a no-op elsewhere
 
             # Sample length (clip) row — MiniMax only: the other families' preview stacks are
-            # image pipelines with no frames axis.
-            _mm = bool(config.get("is_minimax"))
+            # image pipelines with no frames axis (a described family shows it when one of its options reads it).
+            _fd = self._family_desc()
+            _mm = bool(config.get("is_minimax")) or bool(
+                _fd is not None and any(o.setting == "SAMPLE_FRAMES" for o in _fd.options))
             for _w in (getattr(self, "sample_frames_label", None),
                        getattr(self, "sample_frames_combo", None),
                        getattr(self, "_sample_frames_hint", None),

@@ -288,11 +288,101 @@ def problems(desc, inputs):
 
 
 # ---------------------------------------------------------------------------------------------------- commands
+def dataset_media(folder):
+    """The media kinds in a training folder: {"photo", "clip", "voice"} (the dataset layer's extensions)."""
+    from fizgig.dataset.image_dataset import AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+    kinds = set()
+    try:
+        names = os.listdir(folder) if folder and os.path.isdir(folder) else []
+    except OSError:
+        names = []
+    img, vid, aud = ({e.lower() for e in x} for x in (IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, AUDIO_EXTENSIONS))
+    for n in names:
+        ext = os.path.splitext(n)[1].lower()
+        kinds |= {"photo"} if ext in img else {"clip"} if ext in vid else {"voice"} if ext in aud else set()
+    return kinds
+
+
+def option_applies(opt, media, values=None):
+    """Whether a FamilyOption is live for a dataset with these media kinds: a clip-only option without clips, or a
+    mixed-dataset one on a dataset that is not mixed, is neither shown nor sent (#136: a retired category restored
+    from a mixed run must not reach a photo-only run)."""
+    if opt.show_if_media and opt.show_if_media not in media:
+        return False
+    if opt.mixed_only and not ("voice" in media and media & {"photo", "clip"}):
+        return False
+    if opt.requires and values is not None and str(values.get(opt.requires, "")) not in ("1", "True", "true"):
+        return False
+    return True
+
+
+def option_tokens(desc, inputs):
+    """(trainer args, cache --aux args) from the family's FamilyOption values (inputs["FAMILY_OPTIONS"]: key ->
+    value; an unset key takes the option's default). "pref:KEY" becomes that Preferences file's path."""
+    vals = inputs.get("FAMILY_OPTIONS") or {}
+    models = inputs.get("models") or {}
+
+    def path(v):
+        """'pref:KEY' -> the file; 'pref:KEY[OPT=LABEL|OPT2=1->ALT]' -> ALT's file when any condition holds."""
+        if not v.startswith("pref:"):
+            return v
+        key, _, cond = v[5:].partition("[")
+        if cond:
+            tests, _, alt = cond.rstrip("]").partition("->")
+            for t in tests.split("|"):
+                ok, _, want = t.partition("=")
+                o = next((x for x in desc.options if x.key == ok), None)
+                have = vals.get(ok, o.default if o else "")
+                if o is not None and o.kind == "choice":
+                    have, want = o.pick(have), o.pick(want)
+                if str(have) == want or (want == "1" and str(have) in ("True", "true")):
+                    key = alt
+                    break
+        return models.get(key, "")
+
+    train, aux = [], []
+    media = dataset_media(_s(inputs.get("image_folder")))
+    for opt in desc.options:
+        if not option_applies(opt, media, vals):
+            continue
+        for tok in opt.resolve(vals.get(opt.key, opt.default)):
+            if tok.startswith("aux:"):
+                k, _, v = tok[4:].partition("=")
+                aux += ["--aux", f"{k}={path(v)}"]
+            elif tok.startswith("--"):
+                k, eq, v = tok.partition("=")
+                train += [k, path(v)] if eq else [k]
+            else:
+                k, _, v = tok.partition("=")
+                train += ["--family_option", f"{k}={path(v)}"]
+    return train, aux
+
+
+def _dedupe_flags(cmd):
+    """A flag an option sets (--dit, --training_adapter) replaces the one the generic builder put earlier: the last
+    occurrence of a valued flag wins and the earlier pair goes."""
+    valued = {"--dit", "--training_adapter", "--train_blocks", "--ema_decay", "--optimizer_type"}
+    out, seen = [], set()
+    i = len(cmd) - 1
+    while i >= 0:
+        tok = cmd[i]
+        if i > 0 and cmd[i - 1] in valued:
+            if cmd[i - 1] not in seen:
+                out += [tok, cmd[i - 1]]
+                seen.add(cmd[i - 1])
+            i -= 2
+            continue
+        out.append(tok)
+        i -= 1
+    return out[::-1]
+
+
 def cache_command(desc, inputs, stage):
     """families/cache.py: latents with the family's VAE, text with its text encoder."""
     model = _model(inputs, desc, "vae" if stage == "latents" else "text_encoder")
     cmd = [inputs["python"], os.path.join(inputs["repo_dir"], desc.cache_script), "--family", desc.key,
            "--stage", stage, "--dataset_config", inputs["DATASET_CONFIG"], "--model", model]
+    cmd += option_tokens(desc, inputs)[1]
     if stage == "latents":
         cmd.append("--skip_existing")   # validated against the current bucket
     if slider_on(desc, inputs, "pairs"):
@@ -466,6 +556,8 @@ def train_command(desc, inputs, plan):
                     cmd += [flag, _model(st, desc, role)]
         else:
             cmd.append("--slider_pairs")
+    if desc.options:
+        cmd = _dedupe_flags(cmd + option_tokens(desc, st)[0])
     return cmd
 
 

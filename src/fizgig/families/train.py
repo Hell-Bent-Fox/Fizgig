@@ -838,7 +838,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         own = driver.plan_run(precision, blocks_to_swap, group=group, run=dict(
             dit_path=dit_path, network_type=network_type, network_dim=network_dim, lokr_factor=lokr_factor,
             optimizer_type=optimizer_type, training_adapter=training_adapter, context_lora_path=context_lora_path,
-            ema_decay=ema_decay))
+            ema_decay=0.98 if str(ema_decay).lower().startswith("short") else ema_decay))
         if own is not None:
             precision, blocks_to_swap, why = own
         else:
@@ -939,7 +939,9 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         logger.info(f"[context] {os.path.basename(context_lora_path)} frozen + active at {context_lora_strength:g} "
                     f"({n} Linears)")
     if speed_lora and encoded is not None:
-        n = net.add_file(speed_lora, SPEED, speed_desc.strength if speed_lora_strength is None else speed_lora_strength)
+        _ss = speed_desc.strength if speed_lora_strength is None else speed_lora_strength
+        n = net.add_file(speed_lora, SPEED, _ss)
+        driver.frozen_file_added(dit, speed_lora, _ss, "speed")
     if speed_lora and encoded is not None and n == 0:
         net.remove(SPEED)
         logger.warning(f"[sample] {os.path.basename(speed_lora)} matched no {desc.display_name} layers "
@@ -1053,10 +1055,19 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     adaptive = (AdaptiveLR(adaptive_lr_min, adaptive_lr_max, clip_signal=desc.adaptive_lr_clip_signal)
                 if adaptive_lr else None)
     ema = None
-    if ema_decay and ema_decay > 0:
+    if str(ema_decay).lower().startswith("short"):
+        # short-run mode (from H3): the normal ramp never reaches 0.98 on a short run, so the window is sized to the
+        # run instead - decay 1 - 4/steps (about the last quarter), fast ramp
+        from fizgig.training.ema import EMAWeights
+        _total = max(1, int(group.num_train_items) * max(1, int(max_train_epochs)))
+        ema_decay = min(0.995, max(0.5, 1.0 - 4.0 / _total))
+        ema = EMAWeights(net, ema_decay, ramp=2)
+        logger.info(f"[ema] SHORT-RUN mode: {_total} steps -> decay {ema_decay:.3f} (window ~ a quarter of the run), "
+                    f"fast ramp - checkpoints and previews use the average")
+    elif ema_decay and float(ema_decay) > 0:
         from fizgig.training.ema import EMAWeights
         ema = EMAWeights(net, float(ema_decay))
-        logger.info(f"[ema] ON at decay {ema_decay:g} - checkpoints and previews use the running average")
+        logger.info(f"[ema] ON at decay {float(ema_decay):g} - checkpoints and previews use the running average")
 
     start_epoch = global_step = 0
     if resume_state_dir:
@@ -1129,6 +1140,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                 md.update({"ss_slider_diff_weight": f"{float(slider_diff_weight):g}"})
         if train_blocks:
             md.update({"ss_train_blocks": ",".join(train_blocks)})
+        md.update(driver.run_metadata())
         return md
 
     def save_lora(path, epoch):
@@ -1231,6 +1243,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     progress = tqdm(total=steps_per_epoch * max_train_epochs, initial=global_step, desc="steps", smoothing=0)
     dit.train()
     pending = 0                            # micro-batches backpropagated since the last optimizer step
+    lr_acc = []                            # this window's per-step LR multipliers (driver.step_policy)
 
     _block_params = {}
 
@@ -1252,12 +1265,25 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         nonlocal pending
         if ftr is not None and ftr.fused is not None:
             pending = 0                    # every parameter already stepped from its own gradient hook
+            lr_acc.clear()
             return
         if max_grad_norm:
             pre = torch.nn.utils.clip_grad_norm_(params, max_grad_norm)
             if adaptive is not None and adaptive.clip_signal:
                 adaptive.record_clip(pre, max_grad_norm)
+        m = sum(lr_acc) / len(lr_acc) if lr_acc else 1.0
+        lr_acc.clear()
+        if optimizer.__class__.__name__ == "Automagic3":
+            m = 1.0                        # Automagic v3 owns the rate (as on the old H3 trainer)
+        if m != 1.0:                       # the window's mean, composed into the LR for this step only (never the loss:
+            held = [g["lr"] for g in optimizer.param_groups]        # Adam is invariant to a constant on the gradient)
+            for g in optimizer.param_groups:
+                g["lr"] = g["lr"] * m
         optimizer.step()
+        if m != 1.0:
+            for g, lr in zip(optimizer.param_groups, held):
+                g["lr"] = lr
+        driver.after_optimizer_step()
         if scheduler is not None:
             scheduler.step()
         if ema is not None:
@@ -1286,6 +1312,13 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                 global_step += 1
                 progress.update(1)
                 continue
+            _skip, _lrm = driver.step_policy(batch, epoch + 1 + (ftr.epochs_done if ftr is not None else 0))
+            if _skip:                          # a retired category ("stop"): no forward, no loss, no record
+                recorder.drop(step=i)
+                global_step += 1
+                progress.update(1)
+                continue
+            lr_acc.append(_lrm)
             latents = batch["latents"].to(device)
             if slider:
                 # both poles backpropagate before the strength flips: checkpointed blocks recompute their forward
@@ -1323,6 +1356,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                 _frozen_now = _step_freeze(driver.step_frozen_blocks(batch))
                 loss, _info = driver.training_loss(dit, latents, cond, gen, min_t=min_timestep, max_t=max_timestep,
                                                    **({"refs": refs} if refs else {}))
+                if "lr_mult" in _info and lr_acc:
+                    lr_acc[-1] *= _info["lr_mult"]     # where the step landed (the H3 noise-band LR)
                 if pending == 0 and optimizer is not None:
                     optimizer.zero_grad(set_to_none=True)
                 if reg_keys and all(str(k) in reg_keys for k in batch.get("item_keys") or [None]):
@@ -1526,7 +1561,8 @@ def setup_parser():
                    help="fine-tune: LR multiplier for images in a dataset block marked is_reg = true")
     p.add_argument("--compile_blocks", default="auto", choices=("auto", "on", "outside", "off"),
                    help="torch.compile the DiT blocks (families with compiles=True); auto weighs warm-up vs run length")
-    p.add_argument("--ema_decay", type=float, default=0.0)
+    p.add_argument("--ema_decay", type=lambda v: v if str(v).lower().startswith("short") else float(v), default=0.0,
+                   help="EMA decay (0.98), 0 = off, or 'short' (sized to the run)")
     p.add_argument("--optimizer_type", default="adamw")
     p.add_argument("--optimizer_args", default="")
     p.add_argument("--lr_scheduler", default="constant",

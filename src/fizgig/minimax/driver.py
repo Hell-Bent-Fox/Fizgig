@@ -23,8 +23,29 @@ from fizgig.families.driver import Block, BlockGroup, FamilyDriver
 logger = logging.getLogger(__name__)
 
 DTYPE = torch.bfloat16
-TURBO = "h3_turbo"                     # the preview Turbo LoRA's adapter name
 _BLOCK_MODULES = ("attn.qkv_proj", "attn.out_proj", "mlp.fc1", "mlp.fc2")
+
+
+class _TrainableOff:
+    """compute_distill_loss's teacher switch (its lora_disabled zeroes `unet_loras` multipliers): here the family
+    LoRA's trainable scale goes to 0 for the teacher pass - the frozen adapter and context stay on, as before."""
+
+    def __init__(self, net):
+        self.unet_loras = [_Mult(net)]
+
+
+class _Mult:
+    def __init__(self, net):
+        self.net, self._m = net, 1.0
+
+    @property
+    def multiplier(self):
+        return self._m
+
+    @multiplier.setter
+    def multiplier(self, v):
+        self._m = float(v)
+        self.net.set_trainable_multiplier(self._m)
 
 
 class MiniMaxDriver(FamilyDriver):
@@ -63,7 +84,8 @@ class MiniMaxDriver(FamilyDriver):
         if clip_t > 1:
             logger.info(f"[vram] the heaviest item is a {clip_t}-latent-frame clip - planning against its effective "
                         f"{mp:.2f} MP (spatial size x frames).")
-        pats = [x for x in T.DEFAULT_INCLUDE_PATTERNS if "token_refiner" not in x]   # the LoRA's 200 block Linears
+        pats = [x for x in T.DEFAULT_INCLUDE_PATTERNS
+                if "token_refiner" not in x or self.options.get("train_token_refiner") == "1"]
         params = T.adapter_param_count(path, pats,
                                        network_type=run.get("network_type") or "lora",
                                        network_dim=int(run.get("network_dim") or 16),
@@ -157,7 +179,9 @@ class MiniMaxDriver(FamilyDriver):
                                              **common), datasets, device)
         else:
             from fizgig.scripts.minimax_cache_text import cache_text
-            cache_text(argparse.Namespace(text_encoder=args.model, reference_count=int(aux.get("reference_count", 0)),
+            # --aux reference_count=K directly, or the GUI's pair: distill_refs=K counted only with distill=1
+            refs = int(aux.get("reference_count") or (aux.get("distill_refs", 0) if aux.get("distill") == "1" else 0))
+            cache_text(argparse.Namespace(text_encoder=args.model, reference_count=refs,
                                           no_quantize=aux.get("no_quantize") == "1",
                                           batch_size=args.batch_size or 16, **common), datasets, device)
         return True
@@ -193,17 +217,12 @@ class MiniMaxDriver(FamilyDriver):
         import logging
         import os
         log = logging.getLogger(__name__)
-        tpath = self.options.get("turbo_lora")
-        if tpath and net is not None:
-            # the old previews' Turbo: wired once, OFF and on the CPU between previews; its Linears ride the family
-            # LoRA, its full-model AdaLN rows the pruned base's run-time injection (turbo_adaln_patch)
-            strength = float(self.options.get("turbo_strength") or 0.75)
-            n = net.add_file(tpath, TURBO, strength)
-            net.set_enabled(TURBO, False)
-            net.move_adapter(TURBO, "cpu")
-            self._net, self._turbo_pairs = net, self._adaln_pairs(dit, tpath, strength)
-            log.info(f"[turbo] {n} modules at strength {strength:g} + {len(self._turbo_pairs)} adaln via run-time "
-                     f"injection; previews {int(self.options.get('turbo_steps') or 6)} steps")
+        self._net = net
+        self._distill_setup(group, log)
+        self._ramp_setup(log)
+        hn = self.options.get("highnoise_lr_pct") or (float(self.options.get("highnoise_lr") or 1.0) * 100)
+        if abs(float(str(hn).rstrip("%")) - 100.0) > 1e-9:
+            log.info(f"[lr] steps above sigma 0.5 train at {float(str(hn).rstrip('%')):.0f}% of the learning rate.")
         tread = self.options.get("tread")
         if tread:
             ratio, span = tread.split("@")
@@ -234,10 +253,104 @@ class MiniMaxDriver(FamilyDriver):
         return "photo" if batch["latents"].dim() == 4 else "clip"
 
     def step_frozen_blocks(self, batch):
+        """A routed step's out-of-window blocks, and the token refiner with them: its text rows enter at block 0, so
+        a trainable refiner would drag the backward through every block (the old backward cut froze it too)."""
         allowed = self._allowed.get(self._modality(batch))
         if not allowed:
             return ()
-        return tuple(f"h3blk_{i}" for i in range(self.description.n_blocks) if i not in allowed)
+        return tuple(f"h3blk_{i}" for i in range(self.description.n_blocks) if i not in allowed) + ("h3_rf_0", "h3_rf_1")
+
+    def _ramp_setup(self, log):
+        """The old adapter-relative LR ramp (option adapter_ramp=R, off by default): each step held at fraction R of
+        the adapter's current size, starting at 10% of the LR and climbing as the adapter grows. The old AdapterRamp
+        controller, reading the family LoRA's ||dW||."""
+        try:
+            r = float(self.options.get("adapter_ramp") or 0)
+        except ValueError:
+            r = 0.0
+        self._ramp = None
+        if r > 0:
+            from fizgig.minimax.trainer import AdapterRamp
+            ramp = AdapterRamp.__new__(AdapterRamp)
+            ramp.target, ramp.mult, ramp._smooth, ramp._prev = r, 0.1, None, None
+            ramp._size = self._adapter_size
+            self._ramp = ramp
+            log.info(f"[ramp] adapter-relative LR ON - each step held at {100 * r:.3f}% of the adapter's current size")
+
+    @torch.no_grad()
+    def _adapter_size(self):
+        from fizgig.families.lora import TRAINABLE
+        tot = 0.0
+        for w in self._net.wrapped.values():
+            m = w.adapters[TRAINABLE] if TRAINABLE in w.adapters else None
+            if m is None:
+                continue
+            if hasattr(m, "lokr_w1"):
+                n = (m.lokr_w1.float().norm() * m.lokr_w2.float().norm()) ** 2
+            else:
+                a, b = m[0].weight.float(), m[1].weight.float()
+                n = torch.trace((a @ a.T) @ (b.T @ b)).clamp(min=0)
+            tot += float(n) * w.scales[TRAINABLE] ** 2
+        return tot ** 0.5
+
+    def after_optimizer_step(self):
+        if getattr(self, "_ramp", None) is not None:
+            self._ramp.step()
+
+    def run_metadata(self):
+        def stop(k):
+            spec = self.options.get(k)
+            if not spec and self.options.get("stop_epoch") and self.options.get("stop_category") == k.split("_")[0]:
+                spec = f"{self.options['stop_epoch']}:{self.options.get('stop_mode') or 'anchor'}"
+            n, _, mode = str(spec or "").partition(":")
+            return f"{int(n)}:{mode or 'anchor'}" if n.strip().isdigit() and int(n) else "off"
+        return {"ss_visual_stop": stop("visual_stop"), "ss_audio_stop": stop("audio_stop")}
+
+    def _distill_setup(self, group, log):
+        """Reference distillation (options distill=1, distill_weight 0.8, distill_phase1 -1 = auto): the cached r2v
+        conditioning (--aux reference_count=K) is the teacher. Identity-first (the old default): epochs 1..P train
+        against the teacher ONLY at a third of the LR, then the photos alone; P auto = ~650 steps."""
+        import math
+        self._distill = self.options.get("distill") == "1"
+        self._p1 = 0
+        if not self._distill:
+            return
+        self._dw = float(self.options.get("distill_weight") or 0.8)
+        p1 = int(self.options.get("distill_phase1") or -1)
+        steps = max(1, int(getattr(group, "num_train_items", 1)))
+        self._p1 = max(1, math.ceil(650 / steps)) if p1 < 0 else p1
+        if self._p1:
+            log.info(f"[distill] IDENTITY-FIRST: the first {self._p1} epoch(s) (~{self._p1 * steps} steps, or the whole "
+                     f"run if shorter) train against the teacher ONLY at a third of the LR, then the photographs alone "
+                     f"at the full LR.")
+        else:
+            log.info(f"[distill] reference distillation ON - teacher weight {self._dw:.2f}, photo {1 - self._dw:.2f}")
+
+    def _teacher_phase(self):
+        return bool(getattr(self, "_distill", False) and self._p1 and getattr(self, "_epoch", 1) <= self._p1)
+
+    def step_policy(self, batch, epoch):
+        """Per-category retirement, as the old trainer: past its stop epoch (options visual_stop / audio_stop,
+        "N:anchor" or "N:stop") photos & clips or voice items either train on at 10% LR (anchor - a drift guard on
+        the shared adapters) or are skipped outright (stop - faster epochs)."""
+        from fizgig.minimax.trainer import _P1_LR_SCALE, ANCHOR_LR_SCALE
+        self._epoch = epoch
+        phase = _P1_LR_SCALE if self._teacher_phase() else 1.0      # identity-first: the whole phase-1 epoch
+        if getattr(self, "_ramp", None) is not None:
+            phase *= self._ramp.mult
+        voice = self._modality(batch) == "audio"
+        spec = self.options.get("audio_stop" if voice else "visual_stop")
+        if not spec and self.options.get("stop_epoch") and self.options.get("stop_category") == (
+                "audio" if voice else "visual"):
+            spec = f"{self.options['stop_epoch']}:{self.options.get('stop_mode') or 'anchor'}"     # the GUI's three rows
+        if not spec:
+            return False, phase
+        n, _, mode = str(spec).partition(":")
+        if not int(n or 0) or epoch <= int(n):
+            return False, phase
+        if (mode or "anchor") == "anchor":
+            return False, phase * ANCHOR_LR_SCALE
+        return True, 1.0
 
     def batch_cond(self, batch, device):
         import random
@@ -245,21 +358,45 @@ class MiniMaxDriver(FamilyDriver):
         if self._uncond is not None and random.random() < float(self.options.get("caption_dropout") or 0):
             text = self._uncond                                               # caption dropout step
         cond = {"hidden_states": text.to(device)}
+        if "ref_hidden_states" in batch:          # reference distillation's teacher conditioning
+            cond.update(ref_hidden_states=batch["ref_hidden_states"].to(device), ref_latent=batch["ref_latent"],
+                        ref_token_tags=batch["ref_token_tags"][0])
         if batch.get("audio_latent") is not None:
             cond["audio_latent"] = batch["audio_latent"].to(device)
         if batch.get("audio_only") is not None and bool(batch["audio_only"].any()):
             cond["audio_only"] = True
         return cond
 
+    def _shift(self):
+        """shift=X, or lownoise_pct=P (the share of steps below sigma 0.5: shift = (1 - p) / p, the old GUI's rule)."""
+        pct = self.options.get("lownoise_pct")
+        if pct not in (None, ""):
+            p = float(str(pct).rstrip("%")) / 100.0
+            if 0.0 < p < 1.0:
+                return (1.0 - p) / p
+        shift = self.options.get("shift")
+        return float(shift) if shift not in (None, "", "sigmoid", "resolution") else (shift or None)
+
     # ---- training: the old compute_loss ------------------------------------------------------------
     def training_loss(self, dit, latents, cond, generator, *, min_t=0.0, max_t=1.0, refs=None, diff_ref=None,
                       diff_weight=0.0):
-        from fizgig.minimax.trainer import compute_loss, sample_sigmas
+        from fizgig.minimax.trainer import compute_distill_loss, compute_loss, sample_sigmas
+        teacher = self._teacher_phase()
+        if (getattr(self, "_distill", False) and (teacher or not self._p1) and "ref_hidden_states" in cond
+                and not cond.get("audio_only")):
+            # the old distillation step: teacher = base + frozen adapters WITH the reference, trainable LoRA off;
+            # student = the LoRA from text alone (a voice has no face to distill - it takes the plain path)
+            rz = cond["ref_latent"].to(latents.device, DTYPE)
+            rz = rz.unsqueeze(2) if rz.dim() == 4 else rz
+            loss, s = compute_distill_loss(dit, _TrainableOff(self._net), latents, cond["hidden_states"].to(DTYPE),
+                                           text_ref=cond["ref_hidden_states"].to(DTYPE), ref_latents=[rz],
+                                           text_token_tags=cond["ref_token_tags"],
+                                           distill_weight=1.0 if teacher else self._dw, shift=self._shift())
+            return loss, {"t": float(s)}
         lat = latents if latents.dim() == 5 else latents.unsqueeze(2)          # (1, 24, T, H, W)
         _pt, ph, pw = getattr(dit, "patch_size", (1, 2, 2))
         tokens = (lat.shape[-2] // ph) * (lat.shape[-1] // pw)
-        shift = self.options.get("shift")
-        shift = float(shift) if shift not in (None, "", "sigmoid", "resolution") else (shift or None)
+        shift = self._shift()
         sigma = sample_sigmas(1, "cpu", shift=shift, generator=generator, image_tokens=tokens)
         if min_t > 0.0 or max_t < 1.0:
             sigma = min_t + (max_t - min_t) * sigma
@@ -270,7 +407,16 @@ class MiniMaxDriver(FamilyDriver):
         loss, s = compute_loss(dit, lat.to(DTYPE), cond["hidden_states"].to(DTYPE), sigma=sigma.to(lat.device),
                                noise=noise, audio_latent=audio,
                                video_weight=0.0 if cond.get("audio_only") else 1.0)
-        return loss, {"t": float(s)}
+        info = {"t": float(s)}
+        hn = float(self.options.get("highnoise_lr") or 1.0)
+        if self.options.get("highnoise_lr_pct") not in (None, ""):
+            hn = max(0.0, min(1.0, float(str(self.options["highnoise_lr_pct"]).rstrip("%")) / 100.0))
+        if hn != 1.0 and not cond.get("audio_only"):
+            # the old noise-band LR: steps drawn above sigma 0.5 train at this share (a voice step's gradient lives on
+            # the audio schedule, which this classification does not describe - it sits out)
+            from fizgig.minimax.trainer import MINIMAX_LOWNOISE_SIGMA
+            info["lr_mult"] = hn if float(s) >= MINIMAX_LOWNOISE_SIGMA else 1.0
+        return loss, info
 
     # ---- previews (first stage: the reference sampler, the old clip contract) -----------------------
     #   options: preview_frames (1 = a still; 22 / 39 / 56 ... clips), preview_audio=1 (a clip's sound),
@@ -346,7 +492,7 @@ class MiniMaxDriver(FamilyDriver):
         wholesale, so every set on a module goes in together)."""
         from fizgig.minimax.trainer import turbo_adaln_patch, turbo_adaln_unpatch
         held = getattr(self, "_frozen_adaln", {})
-        turbo_adaln_unpatch([p for v in held.values() for p in v] + list(getattr(self, "_turbo_pairs", None) or []))
+        turbo_adaln_unpatch([p for v in held.values() for p in v])
         pairs = [p for r in roles for p in held.get(r, [])] + list(extra)
         if pairs:
             device = next(p for p in dit.parameters() if p.device.type == "cuda").device
@@ -355,25 +501,16 @@ class MiniMaxDriver(FamilyDriver):
     @torch.no_grad()
     def generate(self, dit, cond, width, height, *, steps, seed, cfg=1.0, neg_cond=None, sigmas=None, options=(),
                  noise=None, on_step=None, refs=None, frames=None, audio=None):
-        turbo = getattr(self, "_turbo_pairs", None) is not None
-        frozen = bool(getattr(self, "_frozen_adaln", None))
-        if not turbo and not frozen:
+        """A preview render. The shared trainer has the Turbo (the family's speed LoRA) switched on around this call
+        and passes its steps and CFG; its full-model AdaLN rows, and a context LoRA's, are injected for the render,
+        the training adapter's taken off - and the training set put back after."""
+        if not getattr(self, "_frozen_adaln", None):
             return self._generate(dit, cond, width, height, steps, seed, cfg, neg_cond, frames, audio)
-        device = next(p for p in dit.parameters() if p.device.type != "meta").device
         try:
-            if turbo:
-                self._net.move_adapter(TURBO, device)
-                self._net.set_enabled(TURBO, True)
-            self._patch_adaln(dit, ("context",), self._turbo_pairs if turbo else ())
-            if not turbo:
-                return self._generate(dit, cond, width, height, steps, seed, cfg, neg_cond, frames, audio)
-            return self._generate(dit, cond, width, height, int(self.options.get("turbo_steps") or 6), seed, 1.0,
-                                  None, frames, audio)
+            self._patch_adaln(dit, ("context", "speed"))
+            return self._generate(dit, cond, width, height, steps, seed, cfg, neg_cond, frames, audio)
         finally:
             self._patch_adaln(dit, ("adapter", "context"))     # the training set back (nothing if none)
-            if turbo:
-                self._net.set_enabled(TURBO, False)
-                self._net.move_adapter(TURBO, "cpu")
 
     def _generate(self, dit, cond, width, height, steps, seed, cfg, neg_cond, frames, audio):
         from fizgig.minimax import sampling
@@ -549,5 +686,8 @@ class MiniMaxDriver(FamilyDriver):
         return [BlockGroup("Blocks", main), BlockGroup("Token refiner", refiner)]
 
     def lora_target_names(self, dit):
-        """The 50 main blocks (the old default; the token refiner trains only on request)."""
-        return [m for b in self.block_map(dit)[0].blocks for m in b.modules]
+        """The 50 main blocks (the old default); the token refiner too with option train_token_refiner=1."""
+        groups = self.block_map(dit)
+        if self.options.get("train_token_refiner") == "1":
+            return [m for g in groups for b in g.blocks for m in b.modules]
+        return [m for b in groups[0].blocks for m in b.modules]

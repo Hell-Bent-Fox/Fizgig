@@ -4,7 +4,93 @@ arch id and cache layout (minimaxh3 - the dataset layer's clip / voice discovery
 are reused), kohya LoRA keys as the old trainer writes them. Facts are the old trainer's (src/fizgig/minimax/), cited
 per value.
 """
-from fizgig.families.description import ClipSpec, FamilyDescription, LoRAFormat, ModelFile, SamplingSettings
+from fizgig.families.description import (ClipSpec, FamilyDescription, FamilyOption, LoRAFormat, ModelFile,
+                                        SamplingSettings, SpeedLoRA)
+
+# The old H3 Training-tab controls as family options (lora_trainer_gui.py's MiniMax rows and _build_minimax_command),
+# their old settings keys kept so presets, queued runs and Last Train carry across.
+_MORE_BLOCKS = ",".join(f"h3blk_{i}" for i in range(6, 50))
+_OSTRIS = "pref:minimax_training_adapter[H3_TRAIN_BASE=ref2va|H3_DISTILL=1->minimax_ref_training_adapter]"
+OPTIONS = (
+    FamilyOption("H3_LIKENESS_MODE", "Training mode", choices=(
+        ("Default", "photo_blocks=20-49 clip_blocks=20-49 audio_blocks=20-49"),
+        ("More Blocks", f"--train_blocks={_MORE_BLOCKS}"),
+        ("All 50 blocks (experiments)", "")),
+        choice_hints=(
+            ("Default", "Photos, clips and voice train blocks 20-49, and each step's backward stops there: the "
+                        "versatile recipe - best for characters and styles alike, and the quickest."),
+            ("More Blocks", "Blocks 6-49 for every step type: holds the dataset's global look (colour, grain) out "
+                            "of the LoRA longer and helps motion, at a slower step. Not a likeness upgrade."),
+            ("All 50 blocks (experiments)", "Blocks 0-5 deform anatomy and pull the dataset's colour into every "
+                                            "render - for experiments only.")),
+        setting="MINIMAX_LIKENESS_MODE"),
+    FamilyOption("H3_TRAIN_BASE", "Base model", choices=(
+        ("First/last frame (fl2va) — standard", ""),
+        ("Reference (ref2va)", "--dit=pref:minimax_ref_dit")),
+        hint="Reference (ref2va) if the LoRA lives in the r2v workflow; needs DiT (reference) in Preferences.",
+        setting="MINIMAX_TRAIN_BASE"),
+    FamilyOption("H3_ADAPTER", "Training adapter", choices=(
+        ("Circlestone — best for photos", "--training_adapter=pref:minimax_circlestone_adapter"),
+        ("Ostris — best for videos", f"--training_adapter={_OSTRIS}"),
+        ("Off", "")),
+        hint="De-distills the base while your LoRA learns: frozen at 1.0 for every training step, off for previews "
+             "and never in your saved file. Circlestone (one file for fl2va and ref2va) trains sharper LoRAs from "
+             "photos; Ostris learns a video look faster.",
+        setting="MINIMAX_ADAPTER"),
+    FamilyOption("H3_TREAD", "TREAD token routing — on clip steps, half the video tokens skip the middle blocks",
+                 kind="check", tokens="tread=0.5@2-47", default="1",
+                 hint="Faster clip steps; photos and clip stills always run in full; previews and the saved LoRA are "
+                      "untouched.", setting="MINIMAX_TREAD", show_if_media="clip"),
+    FamilyOption("H3_CLIP_STILL", "Also train each clip's sharpest face frame as a photo", kind="check",
+                 tokens="clip_still_as_photo=1 aux:clip_still=1", default="1",
+                 hint="Picked at caching; clips cached with this off use frame 0 until re-cached.",
+                 setting="MINIMAX_CLIP_STILL", show_if_media="clip"),
+    FamilyOption("H3_CAPTION_DROPOUT", "Caption dropout", kind="entry", tokens="caption_dropout={}",
+                 default="0.05", hint="Share of steps trained with an empty caption (0 = off).",
+                 setting="MINIMAX_CAPTION_DROPOUT"),
+    FamilyOption("H3_LOWNOISE_PCT", "Low-noise share (%)", kind="entry", tokens="lownoise_pct={}", default="60",
+                 hint="Share of training steps drawn below sigma 0.5 (the detail end). 60 is the reference.",
+                 setting="MINIMAX_LOWNOISE_PCT"),
+    FamilyOption("H3_HIGHNOISE_LR_PCT", "Medium-to-high noise LR (%)", kind="entry",
+                 tokens="highnoise_lr_pct={}", default="100",
+                 hint="Steps drawn above sigma 0.5 train at this share of the LR (100 = unchanged).",
+                 setting="MINIMAX_HIGHNOISE_LR_PCT"),
+    FamilyOption("H3_ADAPTER_RAMP", "Adapter-relative LR", kind="choice", choices=(
+        ("Off", ""), ("0.003 (slow build)", "adapter_ramp=0.003"), ("0.005 (recommended)", "adapter_ramp=0.005"),
+        ("0.01 (fast build)", "adapter_ramp=0.01")),
+        hint="Holds each step at a fraction of the adapter's current size: the LR starts low and climbs as the "
+             "adapter grows.", setting="MINIMAX_ADAPTER_RAMP"),
+    FamilyOption("H3_TRAIN_REFINER", "Train the text token refiner", kind="check", tokens="train_token_refiner=1",
+                 setting="MINIMAX_TRAIN_REFINER"),
+    FamilyOption("H3_MIXED_STOP_EPOCH", "Retire one category after epoch", kind="entry", tokens="stop_epoch={}",
+                 hint="Mixed voice + picture datasets: the chosen category stops (or anchors at 10% LR) after this "
+                      "epoch while the other trains on. Empty = never.", setting="MIXED_STOP_EPOCH", mixed_only=True),
+    FamilyOption("H3_MIXED_STOP_CATEGORY", "Category to retire", choices=(
+        ("voice", "stop_category=audio"), ("photos & clips", "stop_category=visual")),
+        setting="MIXED_STOP_CATEGORY", mixed_only=True),
+    FamilyOption("H3_MIXED_STOP_MODE", "Retired category", choices=(
+        ("anchor at 10% LR (recommended)", "stop_mode=anchor"), ("stop completely (faster)", "stop_mode=stop")),
+        setting="MIXED_STOP_MODE", mixed_only=True),
+    FamilyOption("H3_DISTILL", "Learn identity from references (ref2va teacher)", kind="check",
+                 tokens="distill=1 aux:distill=1 --dit=pref:minimax_ref_dit",
+                 hint="Each photo is also shown to the ref2va model as a reference; the LoRA learns to produce that "
+                      "identity from text alone. Runs on the ref2va DiT.", setting="MINIMAX_DISTILL"),
+    FamilyOption("H3_DISTILL_REFS", "References per photo", choices=(
+        ("2", "aux:distill_refs=2"), ("1", "aux:distill_refs=1"), ("3", "aux:distill_refs=3"),
+        ("4", "aux:distill_refs=4")), requires="H3_DISTILL", setting="MINIMAX_DISTILL_REFS"),
+    FamilyOption("H3_DISTILL_WEIGHT", "Teacher weight", kind="entry", tokens="distill_weight={}", default="0.8",
+                 requires="H3_DISTILL", setting="MINIMAX_DISTILL_WEIGHT"),
+    FamilyOption("H3_DISTILL_PHASE1", "Identity-first phase", choices=(
+        ("Auto (from dataset size)", "distill_phase1=-1"), ("Off — blend throughout", "distill_phase1=0"),
+        ("2 epochs", "distill_phase1=2"), ("4 epochs", "distill_phase1=4"), ("8 epochs", "distill_phase1=8"),
+        ("16 epochs", "distill_phase1=16"), ("30 epochs", "distill_phase1=30")), requires="H3_DISTILL", setting="MINIMAX_DISTILL_PHASE1"),
+    FamilyOption("H3_SAMPLE_FRAMES", "Sample length", tab="samples", choices=(
+        ("Still (1 frame)", "preview_frames=1"),
+        ("22 frames with sound (~1s)", "preview_frames=22 preview_audio=1"),
+        ("56 frames with sound (~2.3s)", "preview_frames=56 preview_audio=1"),
+        ("124 frames with sound (~5s)", "preview_frames=124 preview_audio=1")), setting="SAMPLE_FRAMES"),
+    FamilyOption("AUDIO_VAE", "", kind="fixed", tokens="audio_vae=pref:minimax_audio_vae aux:audio_vae=pref:minimax_audio_vae"),
+)
 
 MINIMAX = FamilyDescription(
     key="minimax_driver",
@@ -13,7 +99,7 @@ MINIMAX = FamilyDescription(
     gui_label="MiniMax H3 (driver)",
     lora_name_suffix="mmh3",
     experimental=True,
-    hidden=True,                      # not offered in the GUI until the driver trains and previews
+    hidden=False,
 
     # the MiniMax H3 Preferences rows (lora_trainer_gui.py DEFAULT_PREFS minimax_*); download links stay on that card
     model_files=(
@@ -34,6 +120,7 @@ MINIMAX = FamilyDescription(
     text_encoder_label="Qwen3-VL-32B",
     vae_label="MiniMax H3 Video VAE",
 
+    options=OPTIONS,
     media=("photo", "clip", "voice"),
     preview_park_optimizer=True,      # the old previews' optimizer-state park (~2.5 GB back for the render)
     clip_spec=ClipSpec(fps=24, frame_step=17, frame_offset=5, edge_multiple=32, audio_rate=32000, audio_channels=2,
@@ -65,16 +152,15 @@ MINIMAX = FamilyDescription(
     modelspec_arch="MiniMax-H3",
     implementation="https://github.com/MiniMax-AI/MiniMax-H3",
     ema_default="0.98",               # the old H3 default (v5.4.1)
-    training_adapter="minimax_circlestone_adapter",    # the old default for photos (v6.3.0); Ostris for clips comes later
-    training_adapter_note=("Keeps H3 LoRA training stable: frozen at 1.0 for every training step, off for previews "
-                           "and never in your saved file."),
+    ema_short_run=True,
+    # the training adapter is the MINIMAX_ADAPTER option (Circlestone / Ostris per base / Off), not the generic tick
     # the checkpoint's own int8 ConvRot codes, or a 4-bit base (NF4, HQQ); Auto is the driver's plan_run (the old
     # planner), which streams blocks H2D rather than giving up the int8 base
     precisions=("int8", "nf4", "hqq"),
     optimizers=("automagic3", "adamw8bit", "adamw"),
     optimizer_weight_decay=1e-4,      # the old trainer's (ai-toolkit's job template); bnb's default is 1e-2
     optimizer_eps_floor_8bit=True,
-    trainable_dtype="bf16",           # the old trainer: network.to(device, dtype=bfloat16)    # the old trainer's 8-bit Adam eps 1e-6 (minimax/trainer.py create_optimizer)
+    trainable_dtype="bf16",           # the old trainer: network.to(device, dtype=bfloat16)
     network_types=("lora", "lokr"),
 
     sampling=(
@@ -82,6 +168,22 @@ MINIMAX = FamilyDescription(
                          note="CFG-free on the fixed shift-12 schedule, as the shipped ComfyUI workflows.",
                          source="lora_trainer_gui.py ARCHITECTURES['MiniMax H3'] sample defaults"),
     ),
+    speed_loras=(
+        SpeedLoRA(
+            name="H3 Turbo LoRA (6-step)",
+            repo="larryvrh/MiniMax-H3-Turbo-Lora",
+            file="minimax_h3_turbo_v4_step600.safetensors",
+            pairs_with="MiniMax H3 fl2va",
+            strength=0.75,
+            settings=SamplingSettings("Turbo 6-step", steps=6, cfg=1.0, sampler="euler", scheduler="simple",
+                                      note="CFG-free; the old previews' 6 steps at 0.75.",
+                                      source="src/fizgig/minimax/trainer.py load_preview_turbo"),
+            load_unmerged=True,
+            pref_key="minimax_turbo_lora",
+            source="https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora",
+        ),
+    ),
+    preview_speed_lora="H3 Turbo LoRA (6-step)",
     preview_steps=20,
     preview_cfg=1.0,
     preview_width=768,
