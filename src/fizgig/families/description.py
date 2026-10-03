@@ -179,6 +179,9 @@ class FamilyDescription:
 
     # what one training item may be: "photo", "clip" (frames + optional sound), "voice" (sound only)
     media: tuple = ("photo",)
+    # Multi Concept: extra subject folders, each its own dataset block (H3: reference distillation pairs each image
+    # only with others of its own subject - the reference rotation runs per block)
+    multi_concept: bool = False
     clip_spec: Optional[ClipSpec] = None
 
     # latent rules

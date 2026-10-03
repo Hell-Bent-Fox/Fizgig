@@ -691,12 +691,19 @@ def dataset_toml(desc, inputs):
     side = int((mp * 1_000_000) ** 0.5) // 16 * 16
     batch = int(inputs.get("batch_size"))
     folder = _s(inputs.get("image_folder"))
+    extra = [_s(f) for f in (inputs.get("extra_folders") or []) if _s(f)] if desc.multi_concept else []
     lines = ["[general]", f"resolution = [{side}, {side}]",
              f'caption_extension = "{_s(inputs.get("caption_ext", ".txt"))}"',
              f"batch_size = {batch}", "num_repeats = 1",
              f"enable_bucket = {'true' if inputs.get('enable_bucket', True) else 'false'}",
-             f"bucket_no_upscale = {'true' if inputs.get('no_upscale', True) else 'false'}",
-             "", "[[datasets]]", f'image_directory = "{folder.replace(chr(92), "/")}"']
+             f"bucket_no_upscale = {'true' if inputs.get('no_upscale', True) else 'false'}"]
+    try:
+        cmp_ = float(inputs.get("clip_megapixels") or 0)
+    except (TypeError, ValueError):
+        cmp_ = 0.0
+    if cmp_ > 0 and "clip" in desc.media and any("clip" in dataset_media(f) for f in [folder] + extra):
+        lines.append(f"clip_megapixels = {cmp_:g}")      # clips cache and train at their own size
+    lines += ["", "[[datasets]]", f'image_directory = "{folder.replace(chr(92), "/")}"']
     if edit_on(desc, inputs):
         lines.append(f'control_directory = "{_s(inputs.get("FAMILY_EDIT_DIR")).replace(chr(92), "/")}"')
     elif slider_on(desc, inputs, "pairs"):
@@ -704,6 +711,10 @@ def dataset_toml(desc, inputs):
     root = _s(inputs.get("cache_root"))
     if root and folder:
         lines.append(f'cache_directory = "{cache_dir_for(root, folder).replace(chr(92), "/")}"')
+    for f in extra:                      # Multi Concept: each subject its own block and cache folder
+        lines += ["", "[[datasets]]", f'image_directory = "{f.replace(chr(92), "/")}"']
+        if root:
+            lines.append(f'cache_directory = "{cache_dir_for(root, f).replace(chr(92), "/")}"')
     reg = ft_reg_dir(desc, inputs)
     if reg:                              # a fine-tune's regularisation set: its own block (and cache folder)
         lines += ["", "[[datasets]]", f'image_directory = "{reg.replace(chr(92), "/")}"']

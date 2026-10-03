@@ -4212,7 +4212,7 @@ class LoRATrainerGUI:
         one folder WITH dropout beat two folders without it. Whatever dropout costs in bleed, it
         appears to be worth more as regularisation at this scale. The dial goes back to the user
         rather than being locked to a theory the data does not support."""
-        on = bool(self.minimax_multiconcept_var.get()) and self._is_minimax_arch()
+        on = bool(self.minimax_multiconcept_var.get()) and self._multiconcept_arch()
         for w in (getattr(self, "_minimax_mc_dir_frame", None),
                   getattr(self, "_minimax_mc_hint", None)):
             if w is not None:
@@ -7758,6 +7758,8 @@ class LoRATrainerGUI:
             samples_dir=self.get_samples_dir(),
             edit_caption=self.entries["FAMILY_EDIT_CAPTION"].get() if "FAMILY_EDIT_CAPTION" in self.entries else "",
             FAMILY_OPTIONS=self._family_options_values(desc),
+            clip_megapixels=self._clip_megapixels(),
+            extra_folders=self._dataset_folders()[1:],
         )
         return d
 
@@ -8506,6 +8508,18 @@ class LoRATrainerGUI:
     def _is_minimax_arch(self) -> bool:
         return ARCHITECTURES.get(self.architecture_var.get(), {}).get("is_minimax", False)
 
+    def _arch_media(self) -> set:
+        """The media kinds the selected Base Model trains: old H3 / RefMod all three, a described family what its
+        description lists, everything else photos."""
+        if self._is_minimax_arch():
+            return {"photo", "clip", "voice"}
+        d = self._family_desc()
+        return set(d.media) if d is not None else {"photo"}
+
+    def _multiconcept_arch(self) -> bool:
+        d = self._family_desc()
+        return self._is_minimax_arch() or bool(d is not None and d.multi_concept)
+
     def _is_refmod_arch(self) -> bool:
         return ARCHITECTURES.get(self.architecture_var.get(), {}).get("is_refmod", False)
 
@@ -9253,9 +9267,13 @@ class LoRATrainerGUI:
         self._sync_minimax_likeness_state()
         # The clips-only adapter advice shows and hides itself (text only under MiniMax).
         self._refresh_minimax_adapter_hint()
+        # Multi Concept also for a described family that offers it (MiniMax H3 through the driver)
+        _fdm = self._family_desc()
+        if _fdm is not None and _fdm.multi_concept:
+            self._set_widget_visible(self._minimax_mc_frame, True)
         # The Multi Concept sub-rows are owned by its own toggle handler (they are hidden even
         # under MiniMax until the box is ticked), so route them through it rather than the loop.
-        if is_minimax:
+        if is_minimax or (_fdm is not None and _fdm.multi_concept):
             self._on_minimax_multiconcept_toggle()
             self._sync_distill_weight_state()
         else:
@@ -11112,7 +11130,7 @@ class LoRATrainerGUI:
     def _count_training_audio_files(self):
         """Voice recordings in the training folder — MiniMax only, 0 elsewhere."""
         folder = self.image_folder_var.get()
-        if not folder or not os.path.isdir(folder) or not self._is_minimax_arch():
+        if not folder or not os.path.isdir(folder) or "voice" not in self._arch_media():
             return 0
         return sum(1 for f in os.listdir(folder)
                    if os.path.splitext(f)[1].lower() in self.TRAINING_AUDIO_EXTENSIONS)
@@ -11176,7 +11194,7 @@ class LoRATrainerGUI:
             # Per-category retirement rows: only when the dataset is genuinely MIXED — with
             # one category there is nothing to finish separately.
             if hasattr(self, "_mixed_stop_label"):
-                _mixed = self._minimax_dataset_mixed()
+                _mixed = self._is_minimax_arch() and self._minimax_dataset_mixed()   # a family has its option
                 if _mixed:
                     self._mixed_stop_label.grid(row=28, column=0, sticky=tk.W, padx=5,
                                                 pady=(8, 2))
@@ -11193,8 +11211,8 @@ class LoRATrainerGUI:
 
     def _minimax_dataset_has_clips(self):
         """MiniMax H3 with at least one video clip in the training folder(s) — when the Clip Target
-        Megapixels row shows and the TOML carries clip_megapixels."""
-        if not self._is_minimax_arch():
+        Megapixels row shows and the TOML carries clip_megapixels. Any Base Model that trains clips."""
+        if "clip" not in self._arch_media():
             return False
         try:
             folders = self._dataset_folders()
@@ -11228,7 +11246,7 @@ class LoRATrainerGUI:
         """True when the training folder holds voice recordings and nothing visual — the state
         in which image-shaped controls (sizing, bucketing, face teachers) mean nothing."""
         folder = self.image_folder_var.get().strip() if hasattr(self, "image_folder_var") else ""
-        if not folder or not os.path.isdir(folder) or not self._is_minimax_arch():
+        if not folder or not os.path.isdir(folder) or "voice" not in self._arch_media():
             return False
         if not self._count_training_audio_files():
             return False
@@ -11247,7 +11265,7 @@ class LoRATrainerGUI:
             return []
 
         image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif'}
-        if self._is_minimax_arch():
+        if "clip" in self._arch_media():
             image_extensions = image_extensions | self.TRAINING_VIDEO_EXTENSIONS
         images = []
 
@@ -12047,15 +12065,15 @@ class LoRATrainerGUI:
 
     def _caption_worker_config_key(self) -> tuple:
         if self._is_qwen_captioner():
-            return ("qwen", self._qwen_captioner_path() or "", bool(self._is_minimax_arch()))
-        return ("florence", self.caption_model_var.get(), bool(self._is_minimax_arch()))
+            return ("qwen", self._qwen_captioner_path() or "", "clip" in self._arch_media())
+        return ("florence", self.caption_model_var.get(), "clip" in self._arch_media())
 
     def _write_caption_worker_config(self) -> str:
         job_dir = self._caption_job_dir()
         config_path = os.path.join(job_dir, "worker_config.json")
         config = {
             "backend": "qwen" if self._is_qwen_captioner() else "florence",
-            "include_video": self._is_minimax_arch(),
+            "include_video": "clip" in self._arch_media(),
         }
         if config["backend"] == "qwen":
             config["text_encoder"] = self._qwen_captioner_path()
@@ -12836,7 +12854,7 @@ class LoRATrainerGUI:
         # Supported image extensions — plus video clips under MiniMax H3, where they are
         # training items and need a .txt exactly like a still does.
         image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif'}
-        if self._is_minimax_arch():
+        if "clip" in self._arch_media():
             image_extensions = image_extensions | self.TRAINING_VIDEO_EXTENSIONS
 
         # Clear log
@@ -31852,7 +31870,7 @@ class LoRATrainerGUI:
         filter and the gallery; only the TOML writer and validation ever see this list."""
         folders = [self.image_folder_var.get().strip()]
         if (getattr(self, "minimax_multiconcept_var", None) is not None
-                and self.minimax_multiconcept_var.get() and self._is_minimax_arch()):
+                and self.minimax_multiconcept_var.get() and self._multiconcept_arch()):
             for var in getattr(self, "_concept_folder_vars", []):
                 extra = var.get().strip()
                 # Skip blanks and duplicates — the dataset layer hard-fails on a repeated

@@ -10,6 +10,29 @@ from fizgig.families.description import (ClipSpec, FamilyDescription, FamilyOpti
 # The old H3 Training-tab controls as family options (lora_trainer_gui.py's MiniMax rows and _build_minimax_command),
 # their old settings keys kept so presets, queued runs and Last Train carry across.
 _OSTRIS = "pref:minimax_training_adapter[H3_TRAIN_BASE=ref2va|H3_DISTILL=1->minimax_ref_training_adapter]"
+def _preset(rank, epochs, clip_still=True):
+    """The old H3 built-ins (lora_trainer_gui.py MINIMAX_BUILT_IN_PRESETS), values unchanged, in the standard layer's
+    keys and this family's option keys."""
+    return {
+        "NETWORK_DIM": rank, "NETWORK_ALPHA": rank, "NETWORK_TYPE": "LoRA (standard)", "LOKR_FACTOR": 8,
+        "LEARNING_RATE": 1e-6, "MAX_TRAIN_EPOCHS": epochs, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42,
+        "ADAPTIVE_LR": False, "ADAPTIVE_LR_MIN": "1e-5", "ADAPTIVE_LR_MAX": "4e-4", "OPTIMIZER_TYPE": "automagic3",
+        "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0, "DATASET_MEGAPIXELS": "0.25",
+        "FAMILY_PRECISION": "Auto (fits your free VRAM)", "BLOCKS_SWAP": "Auto (detect from GPU)",
+        "FAMILY_EMA": "0.98 (recommended)",
+        "H3_ADAPTER_RAMP": "Off", "H3_CAPTION_DROPOUT": "0.05", "H3_LOWNOISE_PCT": "60", "H3_HIGHNOISE_LR_PCT": "100",
+        "H3_BLOCKS": "all", "H3_TRAIN_REFINER": "", "H3_LIKENESS_MODE": "Default",
+        "H3_ADAPTER": "Circlestone — best for photos", "H3_TREAD": "1", "H3_CLIP_STILL": "1" if clip_still else "",
+        "H3_DISTILL": "",
+    }
+
+
+PRESETS = (
+    ("✨ MiniMax H3 Fast (LoRA 8, 50 epochs)", _preset(8, 50)),
+    ("✨ MiniMax H3 (rank 16, 60 epochs)", _preset(16, 60)),
+    ("✨ MiniMax H3 Style (LoRA 8)", _preset(8, 50, clip_still=False)),
+)
+
 OPTIONS = (
     FamilyOption("H3_LIKENESS_MODE", "Training mode", choices=(
         ("Default", "photo_blocks=20-49 clip_blocks=20-49 audio_blocks=20-49"),
@@ -141,11 +164,13 @@ MINIMAX = FamilyDescription(
     vae_label="MiniMax H3 Video VAE",
 
     options=OPTIONS,
+    presets=PRESETS,
     workbench=("repair", "explorer", "profiler", "extract", "royale"),
     workbench_engine="fizgig.minimax.workbench:H3WorkbenchEngine",
     finetune=True,
     ft_learning_rate=3e-5,            # the tested H3 fine-tune rate (1e-4 destroys; 1e-5 too slow to judge from)                    # the old rotation FT (component windows on an NF4 trunk, int8 ConvRot saves)
     media=("photo", "clip", "voice"),
+    multi_concept=True,
     preview_park_optimizer=True,      # the old previews' optimizer-state park (~2.5 GB back for the render)
     clip_spec=ClipSpec(fps=24, frame_step=17, frame_offset=5, edge_multiple=32, audio_rate=32000, audio_channels=2,
                        mute_suffix="_mute", note="src/fizgig/minimax/clip.py FPS / GRID_FRAMES / SIZE_STEP"),
