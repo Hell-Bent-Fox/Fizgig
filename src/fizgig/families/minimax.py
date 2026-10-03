@@ -43,9 +43,9 @@ PRESETS = (
     ("✨ MiniMax H3 Fast (LoRA 8, 50 epochs)", _preset(8, 50)),
     ("✨ MiniMax H3 (rank 16, 60 epochs)", _preset(16, 60)),
     ("✨ MiniMax H3 Style (LoRA 8)", _preset(8, 50, clip_still=False)),
-    # Slider (3 Oct): rank 4 at 2e-4 for ~160 steps, as the other families' sliders; a prompt smile slider at push 2
+    # Slider (3 Oct): rank 8 (Peter) at 2e-4 for ~160 steps; a prompt smile slider at push 2
     # was clear by epoch 5 of 10 (16 practice pictures an epoch)
-    ("✨ MiniMax H3 Slider (rank 4, 2e-4)", _preset(4, 16, clip_still=False, slider=True, lr=2e-4,
+    ("✨ MiniMax H3 Slider (rank 8, 2e-4)", _preset(8, 16, clip_still=False, slider=True, lr=2e-4,
                                                      optimizer="adamw8bit")),
 )
 

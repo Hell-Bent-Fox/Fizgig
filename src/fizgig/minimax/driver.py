@@ -531,15 +531,28 @@ class MiniMaxDriver(FamilyDriver):
                 torch.cuda.empty_cache()
 
     def slider_setup(self, group):
-        """The dial's previews: stills for photo pairs and prompt sliders (three clips a prompt would cost minutes to
-        show a still's worth), clips at the Samples tab's length for clip pairs - that look lives in the motion."""
-        from fizgig.minimax.clip import is_video
-        clips = any(is_video(p) for ds in getattr(group, "datasets", [])
-                    for p in getattr(getattr(ds, "datasource", None), "image_paths", None) or [])
+        """A pair slider's derived clip stills sit out (step_policy); the dial's previews render at the Samples tab's
+        Sample length - clips side by side, or a still strip."""
         self._slider_pairs = any(getattr(ds, "has_control", False) for ds in getattr(group, "datasets", []))
-        if not clips:
+        frames = int(self.options.get("preview_frames", 1) or 1)
+        logger.info("[slider] previews: %s", f"{frames}-frame clips side by side" if frames > 1 else "stills side by side")
+
+    def still_renders(self):
+        """generate() renders stills inside (a prompt slider's practice pictures train as stills)."""
+        import contextlib
+
+        @contextlib.contextmanager
+        def _stills():
+            had = self.options.get("preview_frames")
             self.options["preview_frames"] = 1
-        logger.info("[slider] previews: %s", "clips side by side (clip pairs)" if clips else "stills side by side")
+            try:
+                yield
+            finally:
+                if had is None:
+                    self.options.pop("preview_frames", None)
+                else:
+                    self.options["preview_frames"] = had
+        return _stills()
 
     def slider_preview(self, frames, multipliers):
         """Clip previews at -1 / 0 / +1 laid side by side as one clip (the PNG is the labelled middle-frame strip);

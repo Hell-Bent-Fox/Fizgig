@@ -160,8 +160,13 @@ class FamilyDriver:
 
     # ---- prompt-pair sliders (optional) ------------------------------------------------------------
     def slider_setup(self, group) -> None:
-        """A slider run's data is known (an image-pair group, or a prompt slider's practice bank): a family whose
-        previews are clips decides here whether the dial's previews are stills (H3)."""
+        """A slider run's data is known (an image-pair group, or a prompt slider's practice bank)."""
+
+    def still_renders(self):
+        """A context in which generate() renders stills, whatever the previews are set to (a prompt slider's practice
+        pictures). Families whose previews are always stills need nothing."""
+        import contextlib
+        return contextlib.nullcontext()
 
     def slider_preview(self, frames, multipliers):
         """One preview's decoded results at each strength -> what save_preview writes, or None for the shared

@@ -1008,7 +1008,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             net.set_enabled(SPEED, True)
         dit.eval()
         bank = []
-        with torch.no_grad():
+        with torch.no_grad(), driver.still_renders():     # practice pictures are stills, whatever the previews are
             for i in tqdm(range(len(group)), desc="[slider] practice images"):
                 if use_speed:
                     lat = driver.generate(dit, n_c, slider_bank_res, slider_bank_res, steps=speed_desc.settings.steps,
