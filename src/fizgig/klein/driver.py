@@ -268,6 +268,73 @@ class KleinDriver(FamilyDriver):
         px = (px / 2 + 0.5).clamp(0, 1)
         return Image.fromarray((px[0].permute(1, 2, 0).numpy() * 255).astype(np.uint8))
 
+    # ---- Distilled training previews: the old trainer's model handoff (training/trainer.py sample_images) ----------
+    def park_for_preview(self, dit, device):
+        """Max block swap on the training DiT so the Distilled fits beside it: 6 double + 22 single, per type (the
+        ratio split stops at 24). An NF4 base cannot swap and is small - left as it is (token None)."""
+        if getattr(dit, "_nf4_quantized", False):
+            return None
+        orig = int(dit.blocks_to_swap or 0)
+        nd, ns = dit.num_double_blocks - 2, dit.num_single_blocks - 2
+        dit.enable_block_swap(nd + ns, torch.device(device), True, double_blocks_to_swap=nd,
+                              single_blocks_to_swap=ns)
+        dit.prepare_block_swap_before_forward()
+        return orig
+
+    @staticmethod
+    def _preview_swap(nd=N_DOUBLE, ns=N_SINGLE):
+        """The Distilled's own swap by card (_auto_distilled_sample_swap): 23 GB+ none, 15-22 GB 16 (ratio split),
+        under 15 GB the maximum per type. FIZGIG_SIM_VRAM_GB simulates a card."""
+        import os
+        sim = os.environ.get("FIZGIG_SIM_VRAM_GB", "").strip()
+        if sim:
+            gb = float(sim)
+        elif torch.cuda.is_available():
+            gb = torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
+        else:
+            return 0, None, None
+        if gb >= 23:
+            return 0, None, None
+        if gb >= 15:
+            return 16, None, None
+        return (nd - 2) + (ns - 2), nd - 2, ns - 2
+
+    def load_preview_checkpoint(self, path, device, int8=False):
+        """The Distilled DiT: loaded on the CPU when it streams, optionally INT8 (before the swap and the LoRA),
+        forward-only block swap."""
+        from fizgig.klein.model_utils import KLEIN_MODEL_INFO, load_dit
+        n, nd, ns = self._preview_swap()
+        device = torch.device(device)
+        loading = torch.device("cpu") if n else device
+        m = load_dit(device=device, model_version_info=KLEIN_MODEL_INFO["klein-9b"], dit_path=path,
+                     attn_mode="torch", split_attn=False, loading_device=loading, dit_weight_dtype=DTYPE)
+        if int8:
+            from fizgig.klein.model import FP8_OPTIMIZATION_EXCLUDE_KEYS, FP8_OPTIMIZATION_TARGET_KEYS
+            from fizgig.modules.int8 import apply_int8_quantization
+            apply_int8_quantization(m, target_keys=FP8_OPTIMIZATION_TARGET_KEYS,
+                                    exclude_keys=FP8_OPTIMIZATION_EXCLUDE_KEYS, compute_device=loading)
+        if n:
+            m.enable_block_swap(n, device, supports_backward=False, double_blocks_to_swap=nd,
+                                single_blocks_to_swap=ns)
+            m.move_to_device_except_swap_blocks(device)
+        m.prepare_block_swap_before_forward()
+        return m.eval().requires_grad_(False), n
+
+    def unpark_after_preview(self, dit, device, token):
+        """The run's own swap back (re-placing the parked blocks), or, with none, the sample-time offloaders torn
+        down - their backward hooks would otherwise fire on the next backward - and the model back on the GPU."""
+        if token is None:
+            return
+        device = torch.device(device)
+        if token > 0:
+            dit.enable_block_swap(token, device, True)
+            dit.move_to_device_except_swap_blocks(device)
+        else:
+            from fizgig.families import quant
+            dit.disable_block_swap()
+            quant.move(dit, device)
+        dit.switch_block_swap_for_training()
+
     # ---- LoRA and the block map -------------------------------------------------------------------
     def block_map(self, dit=None):
         """Klein's own ids (double_N / single_N), as the old Repair Studio presets name them."""

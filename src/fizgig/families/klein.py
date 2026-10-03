@@ -9,6 +9,21 @@ from fizgig.families.description import FamilyDescription, LoRAFormat, ModelFile
 _BFL = "black-forest-labs"
 _DOUBLE = ("img_attn.qkv", "img_attn.proj", "img_mlp.0", "img_mlp.2",
            "txt_attn.qkv", "txt_attn.proj", "txt_mlp.0", "txt_mlp.2")
+
+
+def _preset(rank, lr, epochs, area, adaptive, ts=("", "")):
+    """The old Klein built-ins (lora_trainer_gui.py BUILT_IN_PRESETS), values unchanged, in the standard layer's
+    keys. adaptive = (min, max)."""
+    return {
+        "NETWORK_DIM": rank, "NETWORK_ALPHA": rank, "NETWORK_TYPE": "LoRA (standard)", "LEARNING_RATE": lr,
+        "MAX_TRAIN_EPOCHS": epochs, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42,
+        "ADAPTIVE_LR": True, "ADAPTIVE_LR_MIN": adaptive[0], "ADAPTIVE_LR_MAX": adaptive[1],
+        "TARGET_LAYERS": area, "MIN_TIMESTEP": ts[0], "MAX_TIMESTEP": ts[1], "OPTIMIZER_TYPE": "adamw8bit",
+        "FAMILY_PRECISION": "Auto (fits your free VRAM)", "BLOCKS_SWAP": "Auto (detect from GPU)",
+        "FAMILY_EMA": "Off",
+    }
+
+
 _STYLE_COMP = tuple(f"double_{i}" for i in range(8)) + ("single_0", "single_1")
 
 KLEIN = FamilyDescription(
@@ -78,8 +93,10 @@ KLEIN = FamilyDescription(
     auto_precisions=("int8", "nf4"),
     optimizers=("adamw8bit", "adamw"),
     network_types=("lora", "lokr"),
+    adaptive_lr_clip_signal=True,     # the old trainer's grad-clip ratio signal (K6)
     edit_training=True,               # Klein is an edit model: references ride after the image tokens
     slider_training=True,
+    train_preview_checkpoint=True,    # the old "Use Distilled model for samples" (on by default)
     preview_checkpoint_sampling=SamplingSettings(
         "Distilled 4-step", steps=4, cfg=1.0, sampler="euler", scheduler="simple",
         options=(("schedule", "simple"), ("shift", 2.02), ("guidance", 1.0)),
@@ -98,6 +115,17 @@ KLEIN = FamilyDescription(
                      "ignored); about 3.5 to 4.5 gives guided previews.",
     preview_width=1024,
     preview_height=1024,
+    presets=(
+        ("✨ Old Reliable (rank 16, full model, single subject)", _preset(16, 1e-4, 55, "Full Model", ("1e-4", "4e-4"))),
+        ("✨ Old Reliable - Flavour 8 (rank 8, full model, single subject)",
+         _preset(8, 1e-4, 55, "Full Model", ("1e-4", "4e-4"))),
+        ("✨ Identity (rank 8, single subject)", _preset(8, 4e-4, 15, "Identity", ("2e-4", "4e-4"))),
+        ("✨ Identity (rank 8, harder dataset)", _preset(8, 4e-4, 20, "Identity", ("2e-4", "4e-4"))),
+        ("✨ Multi-Character (rank 16, multi character or concept)",
+         _preset(16, 2e-4, 50, "Identity", ("1e-4", "4e-4"))),
+        ("✨ Style (late timesteps)", _preset(4, 4e-4, 15, "Style", ("1e-5", "4e-4"), ("0", "400"))),
+        ("✨ Style+Composition (all timesteps)", _preset(4, 4e-4, 15, "Style+Composition", ("1e-5", "4e-4"))),
+    ),
     notes=(
         ("Timesteps: flux2_shift - logit-normal, shift exp(mu) with mu 0.5 at 256 latent tokens to 1.15 at 4096, "
          "unweighted MSE on the flow-matching velocity.",

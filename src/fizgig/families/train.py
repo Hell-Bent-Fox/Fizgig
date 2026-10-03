@@ -19,6 +19,7 @@ import logging
 import math
 import os
 import random
+import re
 import sys
 import time
 from multiprocessing import Value
@@ -45,6 +46,7 @@ logger = logging.getLogger(__name__)
 ADAPTER = "training_adapter"
 CONTEXT = "context"
 SPEED = "speed_lora"
+TRAINABLE_PREVIEW = "epoch_lora"         # the epoch's LoRA, frozen on a preview checkpoint
 
 
 class _Collator:
@@ -121,7 +123,27 @@ def _load_state(state_dir, net, optimizer, device, arch):
     """(epoch, global step, training_state.json) of a saved state, its LoRA weights and RNG restored. The optimizer
     (and, by the caller, the EMA) is restored only from a state this family wrote: another trainer's (the original
     Krea 2's) orders its parameters differently, so its moments would land on the wrong tensors - that state goes on
-    from its weights with a fresh optimizer."""
+    from its weights with a fresh optimizer.
+    A pause saved by an accelerate trainer (the old Klein trainer: model.safetensors holding the LoRA, the epoch in the
+    folder name, adaptive_lr_state.json beside it) goes on the same way; its global step is None (the caller counts
+    it from the epoch)."""
+    legacy = os.path.join(state_dir, "model.safetensors")
+    if not os.path.isfile(os.path.join(state_dir, "training_state.json")) and os.path.isfile(legacy):
+        m = re.search(r"-(\d{6})-state$", os.path.basename(os.path.normpath(state_dir)))
+        if not m:
+            raise RuntimeError(f"[resume] {state_dir}: no epoch in the folder name ('<lora name>-000012-state')")
+        if net.load_trainable(legacy) == 0:
+            raise RuntimeError(f"[resume] {state_dir} matched none of this LoRA's modules - different rank or "
+                               f"target modules?")
+        meta = {"epoch": int(m.group(1)), "own_state": False}
+        side = os.path.join(state_dir, "adaptive_lr_state.json")
+        if os.path.isfile(side):
+            with open(side, encoding="utf-8") as f:
+                meta["adaptive_lr_state"] = json.load(f)
+        logger.info("[resume] this pause was saved by the old trainer: continuing from its LoRA weights and epoch"
+                    + (" (and its adaptive LR state)" if "adaptive_lr_state" in meta else "")
+                    + ", with a fresh optimizer")
+        return meta["epoch"], None, meta
     for need in ("lora.safetensors", "optimizer.pt", "training_state.json"):
         if not os.path.isfile(os.path.join(state_dir, need)):
             raise RuntimeError(f"[resume] {state_dir} is not a saved training state (missing {need}). Pick the "
@@ -411,6 +433,94 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
     return paths
 
 
+class _CheckpointPreviews:
+    """Training previews on the family's preview checkpoint (train_preview_checkpoint: Klein's Distilled), with the
+    old Klein trainer's memory handoff: the driver parks the training model, loads the checkpoint (its own swap by
+    card, optionally INT8), the epoch's LoRA - the live adapter, EMA weights if EMA is on - and the context LoRA ride
+    on it as frozen adapters, and the training model is put back exactly. Between epochs the checkpoint stays in
+    system RAM when it isn't block-swapped and the cache mode allows (auto: decided once per run, free RAM >= 18 GB,
+    so caching never flip-flops); any failure to reuse it falls back to a fresh load."""
+
+    def __init__(self, driver, path, device, cache_mode="auto", int8=False, context=None):
+        self.driver, self.path, self.device = driver, path, torch.device(device)
+        self.cache_mode, self.int8, self.context = str(cache_mode or "auto").lower(), bool(int8), context
+        self.cached = None                 # (model, FamilyLoRA, swapped) on the CPU between epochs
+        self._auto = None
+        self._lora_file = os.path.join(os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp",
+                                       f"fizgig_preview_lora_{os.getpid()}.safetensors")
+
+    def _cache_on(self, swapped):
+        if self.cache_mode == "off" or swapped:
+            return False
+        if self.cache_mode == "on":
+            return True
+        if self._auto is None:
+            try:
+                import psutil
+                self._auto = psutil.virtual_memory().available / 1e9 >= 18.0
+            except Exception:
+                self._auto = False
+        return self._auto
+
+    def render(self, dit, net, ema, render):
+        """Park, put the checkpoint up with this epoch's LoRA, call render(model, adapters), restore."""
+        if ema is not None:
+            ema.swap_in()
+        try:
+            net.save(self._lora_file, dtype=torch.bfloat16)
+        finally:
+            if ema is not None:
+                ema.swap_out()
+        rng = torch.get_rng_state()
+        cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        token = self.driver.park_for_preview(dit, self.device)
+        m = fl = None
+        swapped = 0
+        try:
+            gc.collect()
+            torch.cuda.empty_cache()
+            if self.cached is not None:
+                try:
+                    m, fl, swapped = self.cached
+                    self.cached = None
+                    quant.move(m, self.device)
+                    fl.swap_file(TRAINABLE_PREVIEW, self._lora_file)
+                    logger.info("[sample] preview checkpoint reused from RAM (no disk reload)")
+                except Exception:
+                    logger.warning("[sample] preview checkpoint reuse failed - reloading from disk", exc_info=True)
+                    m = fl = None
+            if m is None:
+                m, swapped = self.driver.load_preview_checkpoint(self.path, self.device, int8=self.int8)
+                fl = FamilyLoRA(m, self.driver, device=self.device)
+                fl.add_file(self._lora_file, TRAINABLE_PREVIEW)
+                if self.context:
+                    fl.add_file(self.context[0], CONTEXT, self.context[1])
+                logger.info(f"[sample] previews on {os.path.basename(self.path)}"
+                            + (f" ({swapped} blocks streamed)" if swapped else ""))
+            return render(m, fl, swapped)
+        finally:
+            keep = m is not None and self._cache_on(swapped)
+            if keep:
+                try:
+                    quant.move(m, "cpu")
+                    self.cached = (m, fl, swapped)
+                except Exception:
+                    logger.warning("[sample] could not keep the preview checkpoint in RAM", exc_info=True)
+                    self.cached = None
+            del m, fl
+            gc.collect()
+            gc.collect()
+            torch.cuda.empty_cache()
+            self.driver.unpark_after_preview(dit, self.device, token)
+            torch.set_rng_state(rng)
+            if cuda_rng is not None:
+                torch.cuda.set_rng_state_all(cuda_rng)
+            try:
+                os.remove(self._lora_file)
+            except OSError:
+                pass
+
+
 def _largest_bucket_mp(group):
     """Megapixels of the run's largest actual bucket (what sets activation memory), or None."""
     try:
@@ -562,7 +672,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  trigger_word=None, trigger_position="start", recaption_instruction=None,
                  recaption_instruction_detailed=None, captioner=None,
                  finetune=False, ft_rotations=10, ft_save_every_rotations=1, ft_rotate_every=1, ft_start_window=0,
-                 ft_epochs_done=0, ft_fused_backward=False, reg_lr_multiplier=0.2):
+                 ft_epochs_done=0, ft_fused_backward=False, reg_lr_multiplier=0.2, preview_checkpoint=None,
+                 preview_checkpoint_cache="auto", preview_int8=False):
     desc = get_family(family)
     if desc is None or not desc.training_ready:
         raise RuntimeError(f"unknown or untrainable family {family!r}")
@@ -908,7 +1019,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             g["lr"] = learning_rate
         logger.info(f"[adaptive_lr] ENABLED - start_lr={learning_rate:.3e} min_lr={adaptive_lr_min:.3e} "
                     f"max_lr={adaptive_lr_max:.3e} (the Learning Rate box is ignored)")
-    adaptive = AdaptiveLR(adaptive_lr_min, adaptive_lr_max) if adaptive_lr else None
+    adaptive = (AdaptiveLR(adaptive_lr_min, adaptive_lr_max, clip_signal=desc.adaptive_lr_clip_signal)
+                if adaptive_lr else None)
     ema = None
     if ema_decay and ema_decay > 0:
         from fizgig.training.ema import EMAWeights
@@ -918,6 +1030,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     start_epoch = global_step = 0
     if resume_state_dir:
         start_epoch, global_step, meta = _load_state(resume_state_dir, net, optimizer, device, arch)
+        if global_step is None:
+            global_step = start_epoch * steps_per_epoch
         if adaptive:
             adaptive.load_state_dict(meta.get("adaptive_lr_state"))
         if ema is not None and meta["own_state"] and os.path.exists(os.path.join(resume_state_dir, "ema.pt")):
@@ -1033,12 +1147,31 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                 conds = encoded
         if not sd:          # seed 0 = a fresh random seed every preview round, as on the other trainers
             sd = random.randint(1, 2 ** 31 - 1)
+        if ckpt_previews is not None and not slider:
+            ck = desc.preview_checkpoint_sampling          # the checkpoint's own recipe (Distilled: 4 steps, no CFG)
+            ckpt_previews.render(dit, net, ema, lambda m, fl, swp: _render_previews(
+                driver, m, fl, vae, conds, sample_dir, epoch, output_name=output_name, steps=ck.steps, cfg=ck.cfg,
+                neg=None, width=w, height=h, seed=sd, speed=ck, swapped=bool(swp), refs=ref_latents))
+            last_prompt[0] = prompts[-1] if prompts else None
+            return
         _render_previews(driver, dit, net, vae, conds, sample_dir, epoch, output_name=output_name,
                          steps=sample_steps, cfg=sample_cfg_scale, neg=neg, width=w, height=h,
                          seed=sd, ema=ema,
                          speed=speed_desc.settings if (speed_lora and speed_desc) else None, lowmem=lowmem,
                          swapped=bool(swapped), refs=ref_latents, slider=slider)
         last_prompt[0] = prompts[-1] if prompts else None
+
+    ckpt_previews = None
+    if preview_checkpoint and encoded is not None:
+        if not desc.train_preview_checkpoint:
+            logger.warning(f"[sample] {desc.display_name} has no checkpoint previews - ignoring --preview_checkpoint")
+        elif not os.path.isfile(preview_checkpoint):
+            logger.warning(f"[sample] preview checkpoint {preview_checkpoint} not found - previews use the training "
+                           f"model")
+        else:
+            ckpt_previews = _CheckpointPreviews(
+                driver, preview_checkpoint, device, preview_checkpoint_cache, preview_int8,
+                context=(context_lora_path, context_lora_strength) if context_lora_path else None)
 
     def state(epoch):
         _save_state(output_dir, output_name, net, optimizer, epoch=epoch, global_step=global_step, arch_id=arch,
@@ -1061,7 +1194,9 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             pending = 0                    # every parameter already stepped from its own gradient hook
             return
         if max_grad_norm:
-            torch.nn.utils.clip_grad_norm_(params, max_grad_norm)
+            pre = torch.nn.utils.clip_grad_norm_(params, max_grad_norm)
+            if adaptive is not None and adaptive.clip_signal:
+                adaptive.record_clip(pre, max_grad_norm)
         optimizer.step()
         if scheduler is not None:
             scheduler.step()
@@ -1279,6 +1414,11 @@ def setup_parser():
     p.add_argument("--sample_negative", default=None)
     p.add_argument("--sample_at_first", action="store_true")
     p.add_argument("--sample_seed", type=int, default=42)
+    p.add_argument("--preview_checkpoint", default=None,
+                   help="Render training previews on this checkpoint (families with train_preview_checkpoint)")
+    p.add_argument("--preview_checkpoint_cache", default="auto", choices=("auto", "on", "off"),
+                   help="Keep the preview checkpoint in system RAM between epochs")
+    p.add_argument("--preview_int8", action="store_true", help="INT8 matmuls on the preview checkpoint")
     p.add_argument("--sample_reference", default=None, help="Edit previews: the photo every preview prompt edits")
     p.add_argument("--sample_image", default=None,
                    help="A picture previews see through the text encoder's vision path (families with preview_image)")
@@ -1377,7 +1517,9 @@ def main():
         gradient_accumulation_steps=a.gradient_accumulation_steps, compile_blocks=a.compile_blocks,
         finetune=a.finetune, ft_rotations=a.ft_rotations, ft_save_every_rotations=a.ft_save_every_rotations,
         ft_rotate_every=a.ft_rotate_every, ft_start_window=a.ft_start_window, ft_epochs_done=a.ft_epochs_done,
-        ft_fused_backward=a.ft_fused_backward, reg_lr_multiplier=a.reg_lr_multiplier)
+        ft_fused_backward=a.ft_fused_backward, reg_lr_multiplier=a.reg_lr_multiplier,
+        preview_checkpoint=a.preview_checkpoint, preview_checkpoint_cache=a.preview_checkpoint_cache,
+        preview_int8=a.preview_int8)
 
 
 if __name__ == "__main__":

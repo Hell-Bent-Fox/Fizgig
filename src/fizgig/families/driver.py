@@ -190,6 +190,20 @@ class FamilyDriver:
         dit.offloader = streamer
         dit.blocks_to_swap = 1
 
+    # ---- training previews on the preview checkpoint (descriptions with train_preview_checkpoint) ----------------
+    def park_for_preview(self, dit, device):
+        """Free VRAM on the training model for the preview checkpoint; returns a token for unpark_after_preview."""
+        raise NotImplementedError
+
+    def load_preview_checkpoint(self, path, device, int8=False):
+        """The preview checkpoint, frozen, ready to render beside the parked training model -> (model, swapped
+        blocks)."""
+        raise NotImplementedError
+
+    def unpark_after_preview(self, dit, device, token) -> None:
+        """Put the training model back exactly as training had it."""
+        raise NotImplementedError
+
     def compile_targets(self, dit):
         """The ModuleList of transformer blocks torch.compile replaces in place (descriptions with compiles=True).
         The DiT's forward must call a block that has `_handles_checkpointing` directly, without its own checkpoint."""

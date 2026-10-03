@@ -157,6 +157,10 @@ class FamilyDescription:
     # a full fine-tune of the base model is offered (the driver's ft_spec returns its FTSpec, families/ft.py): the
     # Training tab shows the fine-tune card and the launch sends --finetune. Optional - most families never need it
     finetune: bool = False
+    # training previews may render on the preview checkpoint (the preview_dit file, sampled with
+    # preview_checkpoint_sampling) instead of the training model - Klein's Distilled previews. The driver brings the
+    # memory handoff (park_for_preview / load_preview_checkpoint / unpark_after_preview)
+    train_preview_checkpoint: bool = False
     # measured training memory for the Auto plan: {precision: (peak GB with no block swap, GB saved per swapped
     # block)}; the peak may instead be ((megapixels, GB), ...) points, interpolated for the run's resolution.
     # {} = Auto just takes the first precision
@@ -169,6 +173,9 @@ class FamilyDescription:
     # Automagic v3's sign window for this family when Optimizer Args doesn't set polarity_history (0 = its default)
     automagic_sign_window: int = 0
     network_types: tuple = ("lora",)
+    # Adaptive LR also treats a grad-clip ratio over 50% of an epoch's steps as a stability signal (Klein's rule,
+    # training/adaptive_lr.AdaptiveLR clip_signal)
+    adaptive_lr_clip_signal: bool = False
     edit_training: bool = False       # Edit LoRA from before/after pairs (the driver's supports_references)
     edit_note: str = ""               # the Edit LoRA section's "What you need" line: pair count and photo size
     slider_training: bool = False     # Slider LoRAs (strength is a dial between two looks); the driver needs

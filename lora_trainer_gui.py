@@ -7722,7 +7722,10 @@ class LoRATrainerGUI:
                      "at_first": bool(getattr(self, "sample_at_first_var", None) and self.sample_at_first_var.get()),
                      "prompts": self.sample_prompt_text.get("1.0", tk.END).splitlines(),
                      "reference": (self.sample_ref_image_var.get().strip()
-                                   if getattr(self, "sample_ref_image_var", None) else "")},
+                                   if getattr(self, "sample_ref_image_var", None) else ""),
+                     **({"checkpoint": bool(self.use_distilled_samples_var.get()),
+                         "checkpoint_cache": self.cache_sample_model_var.get(),
+                         "int8": bool(self._get_inference_int8())} if desc.train_preview_checkpoint else {})},
             samples_dir=self.get_samples_dir(),
             edit_caption=self.entries["FAMILY_EDIT_CAPTION"].get() if "FAMILY_EDIT_CAPTION" in self.entries else "",
         )
@@ -13612,9 +13615,13 @@ class LoRATrainerGUI:
         the family's settings, so Klein's sample-model choices don't apply."""
         muted = COLORS["text_muted"]
         if hasattr(self, "use_distilled_check"):
-            self.use_distilled_check.configure(
-                state=tk.DISABLED, text=f"Use Distilled model for samples — Klein only ({desc.display_name} previews "
-                                        f"run on the model being trained)")
+            if desc.train_preview_checkpoint:       # Klein (driver): its Distilled previews, as Klein
+                self.use_distilled_check.configure(state=tk.NORMAL,
+                                                   text="Use Distilled model for samples (4-step, matches ComfyUI)")
+            else:
+                self.use_distilled_check.configure(
+                    state=tk.DISABLED, text=f"Use Distilled model for samples — Klein only ({desc.display_name} "
+                                            f"previews run on the model being trained)")
         sp = desc.preview_speed()
         speed_on = bool(sp and sp.pref_key and self._krea2_pref(sp.pref_key)
                         and os.path.exists(self._krea2_pref(sp.pref_key)))
@@ -13708,10 +13715,13 @@ class LoRATrainerGUI:
                 f"Optional - every sample edits this photo with its prompt, at the photo's shape. Leave empty for "
                 f"normal samples. An Edit LoRA run previews on the photo set on its own card instead."
                 if _kind == "edit" else f"Not used for {desc.display_name} previews."))
+        _ck = bool(desc.train_preview_checkpoint)
         if hasattr(self, "cache_sample_model_combo"):
-            self.cache_sample_model_combo.configure(state=tk.DISABLED)
+            self.cache_sample_model_combo.configure(state=("readonly" if _ck else tk.DISABLED))
         if hasattr(self, "cache_sample_model_label"):
-            self.cache_sample_model_label.configure(text="Cache sample model in RAM (Klein only):", foreground=muted)
+            self.cache_sample_model_label.configure(
+                text="Cache sample model in RAM:" if _ck else "Cache sample model in RAM (Klein only):",
+                foreground=COLORS["text_secondary"] if _ck else muted)
 
     def update_sample_output_label(self):
         """Update the sample output path label to show actual path"""

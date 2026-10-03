@@ -548,6 +548,14 @@ def _preview_flags(desc, st, plan, cmd):
                     ref = ""
             if ref:
                 out += ["--sample_reference", ref]
+        ck = desc.preview_checkpoint()
+        if desc.train_preview_checkpoint and ck and sm.get("checkpoint") and not slider_on(desc, st):
+            path = _s((st.get("models") or {}).get(ck[0].pref_key))
+            if path and os.path.exists(path):        # Klein's "Use Distilled model for samples"
+                out += ["--preview_checkpoint", path,
+                        "--preview_checkpoint_cache", _s(sm.get("checkpoint_cache")) or "auto"]
+                if sm.get("int8"):
+                    out.append("--preview_int8")
     return out
 
 
