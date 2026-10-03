@@ -238,6 +238,11 @@ class FamilyDriver:
         dit.offloader = streamer
         dit.blocks_to_swap = 1
 
+    def frozen_file_added(self, dit, path: str, strength: float, role: str) -> None:
+        """A frozen LoRA file (role "adapter": on for training, off in previews; "context": on for both) has been
+        added to the family LoRA. A family whose LoRAs carry weights the family LoRA cannot wrap (H3's AdaLN rows on
+        the pruned base, injected at run time) applies them here."""
+
     # ---- room beside the training model (preview decode, override encode) ----------------------------
     def park_for(self, dit, device, need_gb, purpose: str):
         """Make `need_gb` free next to the resident training model (None = the driver's own figure for a preview

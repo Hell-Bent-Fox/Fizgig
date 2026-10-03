@@ -321,28 +321,59 @@ class MiniMaxDriver(FamilyDriver):
         for name, ap in parents.items():
             down, up = sd.get(f"{name}.lora_down.weight"), sd.get(f"{name}.lora_up.weight")
             lin = ap.linear.base if hasattr(ap.linear, "base") else ap.linear
-            if down is not None and up is not None and up.shape[0] == lin.out_features:
+            # rows that fit the Linear itself (a LoRA trained on this pruned base) ride the family LoRA, as the old
+            # _prefilter_frozen_lora kept them; only full-model rows (another input width) are injected
+            if (down is not None and up is not None and up.shape[0] == lin.out_features
+                    and down.shape[1] != lin.in_features):
                 out.append((ap, down.clone(), up.clone() * float(strength)))
         return out
+
+    def frozen_file_added(self, dit, path, strength, role):
+        """A frozen file's full-model AdaLN rows (an older H3 LoRA trained with AdaLN on, as a Context LoRA): the
+        pruned base has no AdaLN Linears to wrap, so they are injected at run time (turbo_adaln_patch), as the old
+        load_context_lora did - on for every training step; in previews the adapter's come off, the context's stay."""
+        pairs = self._adaln_pairs(dit, path, strength)
+        if not pairs:
+            return
+        if not hasattr(self, "_frozen_adaln"):
+            self._frozen_adaln = {}
+        self._frozen_adaln[role] = pairs
+        logger.info(f"[{role}] {len(pairs)} AdaLN rows injected at run time")
+        self._patch_adaln(dit, ("adapter", "context"))
+
+    def _patch_adaln(self, dit, roles, extra=()):
+        """One patch for the union of the active frozen files' AdaLN rows (a patch replaces the module forward
+        wholesale, so every set on a module goes in together)."""
+        from fizgig.minimax.trainer import turbo_adaln_patch, turbo_adaln_unpatch
+        held = getattr(self, "_frozen_adaln", {})
+        turbo_adaln_unpatch([p for v in held.values() for p in v] + list(getattr(self, "_turbo_pairs", None) or []))
+        pairs = [p for r in roles for p in held.get(r, [])] + list(extra)
+        if pairs:
+            device = next(p for p in dit.parameters() if p.device.type == "cuda").device
+            turbo_adaln_patch(dit, pairs, device, DTYPE)
 
     @torch.no_grad()
     def generate(self, dit, cond, width, height, *, steps, seed, cfg=1.0, neg_cond=None, sigmas=None, options=(),
                  noise=None, on_step=None, refs=None, frames=None, audio=None):
         turbo = getattr(self, "_turbo_pairs", None) is not None
-        if not turbo:
+        frozen = bool(getattr(self, "_frozen_adaln", None))
+        if not turbo and not frozen:
             return self._generate(dit, cond, width, height, steps, seed, cfg, neg_cond, frames, audio)
-        from fizgig.minimax.trainer import turbo_adaln_patch, turbo_adaln_unpatch
         device = next(p for p in dit.parameters() if p.device.type != "meta").device
         try:
-            self._net.move_adapter(TURBO, device)
-            self._net.set_enabled(TURBO, True)
-            turbo_adaln_patch(dit, self._turbo_pairs, device, DTYPE)
+            if turbo:
+                self._net.move_adapter(TURBO, device)
+                self._net.set_enabled(TURBO, True)
+            self._patch_adaln(dit, ("context",), self._turbo_pairs if turbo else ())
+            if not turbo:
+                return self._generate(dit, cond, width, height, steps, seed, cfg, neg_cond, frames, audio)
             return self._generate(dit, cond, width, height, int(self.options.get("turbo_steps") or 6), seed, 1.0,
                                   None, frames, audio)
         finally:
-            turbo_adaln_unpatch(self._turbo_pairs)
-            self._net.set_enabled(TURBO, False)
-            self._net.move_adapter(TURBO, "cpu")
+            self._patch_adaln(dit, ("adapter", "context"))     # the training set back (nothing if none)
+            if turbo:
+                self._net.set_enabled(TURBO, False)
+                self._net.move_adapter(TURBO, "cpu")
 
     def _generate(self, dit, cond, width, height, steps, seed, cfg, neg_cond, frames, audio):
         from fizgig.minimax import sampling

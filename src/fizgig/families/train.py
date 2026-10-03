@@ -928,12 +928,14 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         n = net.add_file(training_adapter, ADAPTER, training_adapter_strength)
         if n == 0:
             raise RuntimeError(f"Training adapter {training_adapter} matched no {desc.display_name} modules.")
+        driver.frozen_file_added(dit, training_adapter, training_adapter_strength, "adapter")
         logger.info(f"[adapter] training adapter ON ({n} Linears, strength {training_adapter_strength:g}) - frozen, "
                     f"off in previews, not saved into the LoRA")
     else:
         logger.warning("[adapter] no training adapter for this run")
     if context_lora_path:
         n = net.add_file(context_lora_path, CONTEXT, context_lora_strength)
+        driver.frozen_file_added(dit, context_lora_path, context_lora_strength, "context")
         logger.info(f"[context] {os.path.basename(context_lora_path)} frozen + active at {context_lora_strength:g} "
                     f"({n} Linears)")
     if speed_lora and encoded is not None:
