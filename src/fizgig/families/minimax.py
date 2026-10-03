@@ -64,6 +64,9 @@ MINIMAX = FamilyDescription(
     modelspec_arch="MiniMax-H3",
     implementation="https://github.com/MiniMax-AI/MiniMax-H3",
     ema_default="0.98",               # the old H3 default (v5.4.1)
+    training_adapter="minimax_circlestone_adapter",    # the old default for photos (v6.3.0); Ostris for clips comes later
+    training_adapter_note=("Keeps H3 LoRA training stable: frozen at 1.0 for every training step, off for previews "
+                           "and never in your saved file."),
     precisions=("int8",),             # the native int8 ConvRot base (quant tiers + rings come with the H3 port)
     optimizers=("automagic3", "adamw8bit", "adamw"),
     optimizer_weight_decay=1e-4,      # the old trainer's (ai-toolkit's job template); bnb's default is 1e-2
