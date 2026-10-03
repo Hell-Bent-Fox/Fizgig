@@ -396,21 +396,49 @@ ARCHITECTURES = {
     },
 }
 
-# MiniMax H3 RefMod (9 Sep 2026): the same family (caches, paths, Training Base, previews) with
-# a different job — no LoRA; the dataset's references become a RefMod file (the community
-# ComfyUI-MiniMaxH3Mod format) whose latent is OPTIMISED against the frozen H3 base rather than
-# just VAE-encoded. Two controls (Grid, Steps); every other Training-tab section hides. The
-# entry keeps is_minimax so every MiniMax code path (cache commands, validation, sample
-# defaults) applies unchanged; is_refmod routes the launch to minimax_refmod.py.
+# MiniMax H3 RefMod (9 Sep 2026): H3's files, caches and Training Base with a different job — no
+# LoRA; the dataset's references become a RefMod file (the community ComfyUI-MiniMaxH3Mod format)
+# whose latent is OPTIMISED against the frozen H3 base rather than just VAE-encoded. Two controls
+# (Grid, Steps); every other Training-tab section hides. Its own entry (written out 3 Oct 2026 so
+# it outlives the old MiniMax H3 trainer entry, values unchanged): is_minimax keeps the H3 dataset
+# and caching paths (clip / voice media, the minimax_cache_* scripts, validation); is_refmod routes
+# the launch to minimax_refmod.py.
 ARCHITECTURES["MiniMax H3 RefMod"] = {
-    **ARCHITECTURES["MiniMax H3"],
-    "is_refmod": True,
     "train_script": "src/fizgig/scripts/minimax_refmod.py",
-    "lora_name_suffix": "refmod",
+    "cache_latents_script": "src/fizgig/scripts/minimax_cache_latents.py",
+    "cache_text_script": "src/fizgig/scripts/minimax_cache_text.py",
+    "is_minimax": True,
+    "is_refmod": True,
+    "network_module": "fizgig.networks.lora_klein",  # unused — RefMod trains no network
+    "use_fizgig_venv": True,
+    "timestep_sampling": "shift",
+    "discrete_flow_shift": 12.0,
+    "weighting_scheme": "none",
+    "blocks_swap_max": 40,
+    "fp8_text_encoder_flag": None,
+    "uses_clip": False,
+    "uses_t5": False,
+    "uses_text_encoder": True,
+    "uses_model_type": False,
+    "uses_model_version": False,
+    "model_version": "minimax-h3",
+    "vae_label": "MiniMax H3 Video VAE",
+    "text_encoder_label": "Qwen3-VL-32B",
+    "is_distilled": False,
+    "supports_weighting_scheme": False,
+    "supports_discrete_flow_shift": False,
     # No previews, ever (Peter, 16 Sep 2026): the node pack's extractor has none, they were the
     # only thing putting a 14 GB model on the card during a plain encode, and a mod is judged
     # in RefMod Studio. The Samples pane is ignored and its settings left alone.
     "supports_samples": False,
+    "sample_cfg_default": 1.0,
+    "sample_flow_shift_default": None,
+    "sample_is_distilled": True,
+    "sample_cfg_fixed": True,
+    "sample_steps_default": 20,
+    "sample_width_default": 768,
+    "sample_height_default": 768,
+    "lora_name_suffix": "refmod",
 }
 
 # Families added through the standard layer (src/fizgig/families): an entry each, built from the family's
@@ -1120,12 +1148,28 @@ def refmod_token_cap_value(label) -> str:
 def refmod_clips_value(label) -> str:
     """'as motion (all their frames)' -> 'motion'; anything else -> 'still'."""
     return "motion" if str(label or "").strip().lower().startswith("as motion") else "still"
+# The base every RefMod built-in starts from: the H3 Fast preset's values as they stood (3 Oct 2026), written out so
+# RefMod no longer reads the old trainer's preset table. RefMod trains no LoRA - the LoRA keys are inert for it; the
+# dataset ones (megapixels, clip stills, distillation off) are what its caching reads.
+_REFMOD_PRESET_BASE = {
+    "NETWORK_DIM": 8, "NETWORK_ALPHA": 8, "NETWORK_TYPE": "LoRA (standard)", "LOKR_FACTOR": 8,
+    "LEARNING_RATE": 1e-06, "MINIMAX_ADAPTER_RAMP": "Off", "MINIMAX_CAPTION_DROPOUT": "0.05 (default)",
+    "MAX_TRAIN_EPOCHS": 50, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42, "ADAPTIVE_LR": False, "ADAPTIVE_LR_MIN": "1e-5",
+    "ADAPTIVE_LR_MAX": "4e-4", "OPTIMIZER_TYPE": "automagic3", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
+    "DATASET_MEGAPIXELS": "0.25", "MINIMAX_LOWNOISE_PCT": "60", "MINIMAX_HIGHNOISE_LR_PCT": "100",
+    "MINIMAX_BLOCKS": "all", "MINIMAX_BASE_QUANT": "Auto (recommended)", "MINIMAX_TRAIN_ADALN": False,
+    "MINIMAX_TRAIN_REFINER": False, "MINIMAX_LIKENESS_MODE": "Default",
+    "MINIMAX_ADAPTER": "Circlestone — best for photos", "MINIMAX_TREAD": True, "MINIMAX_CLIP_STILL": True,
+    "MINIMAX_SLOW_BLOCKS": "", "MINIMAX_SLOW_LR_SCALE": "0.2", "MINIMAX_BLOCK_LIMIT": "Off",
+    "MINIMAX_LR_WARMUP": "Off", "MINIMAX_EMA": "0.98 (recommended)", "MINIMAX_DISTILL": False,
+}
+
 REFMOD_BUILT_IN_PRESETS = {
     # The community recipe (16 Sep 2026): the node pack's own extractor path — encode mode (no
     # optimisation), full-resolution references, under its 8 192-token cap (8 references at
     # 1 MP ~ 8 000 tokens). Same photos as the Fizgig recipe, for a fair comparison.
     "✨ RefMod — community recipe (plain encode, 8 refs at 1 MP)": {
-        **MINIMAX_BUILT_IN_PRESETS[_MM_FAST_KEY],
+        **_REFMOD_PRESET_BASE,
         "MINIMAX_REFMOD_GRID": REFMOD_GRID_OPTIONS[0],
         "MINIMAX_REFMOD_REFS": "8",
         "MINIMAX_REFMOD_STEPS": REFMOD_STEP_OPTIONS[0],
@@ -1143,7 +1187,7 @@ REFMOD_BUILT_IN_PRESETS = {
     # in the same file was tried in eleven configurations and never lifted likeness beyond
     # noise while dropping portraits ~10 (pose drift) — removed 14 Sep 2026.
     "✨ RefMod — Fizgig recipe (Full reference, 16 refs at 1 MP, optimised)": {
-        **MINIMAX_BUILT_IN_PRESETS[_MM_FAST_KEY],
+        **_REFMOD_PRESET_BASE,
         "MINIMAX_REFMOD_GRID": REFMOD_GRID_OPTIONS[0],
         **REFMOD_DEFAULTS,
         # 1 MP references (the file's pixels); the optimiser's stills are cached at 0.25 MP
@@ -1154,7 +1198,7 @@ REFMOD_BUILT_IN_PRESETS = {
     # The same recipe at 0.5 MP references: half the tokens per reference at generation
     # (~8,000 for 16, the library's budget) for a lighter file (Peter, 16 Sep 2026).
     "✨ RefMod — Fizgig recipe lite (Full reference, 16 refs at 0.5 MP, optimised)": {
-        **MINIMAX_BUILT_IN_PRESETS[_MM_FAST_KEY],
+        **_REFMOD_PRESET_BASE,
         "MINIMAX_REFMOD_GRID": REFMOD_GRID_OPTIONS[0],
         **REFMOD_DEFAULTS,
         "DATASET_MEGAPIXELS": "0.5",
@@ -1166,7 +1210,7 @@ REFMOD_BUILT_IN_PRESETS = {
     # the pack's concept recipe, the pooled 16x16 grid (stacks under the cap, carries palette
     # and feel); high fidelity = Full at 0.25 MP (keeps texture, grain, brushwork).
     "✨ RefMod — style, community (16×16 grid, all refs, plain encode)": {
-        **MINIMAX_BUILT_IN_PRESETS[_MM_FAST_KEY],
+        **_REFMOD_PRESET_BASE,
         "MINIMAX_REFMOD_GRID": REFMOD_GRID_OPTIONS[2],
         "MINIMAX_REFMOD_REFS": "all",
         "MINIMAX_REFMOD_STEPS": REFMOD_STEP_OPTIONS[0],
@@ -1182,7 +1226,7 @@ REFMOD_BUILT_IN_PRESETS = {
     # High fidelity means it (Peter, 16 Sep 2026): 1 MP references, ~1 000 tokens a still, so 8 of
     # them — the library's budget; the token readout warns anyone who takes it further.
     "✨ RefMod — style, high fidelity (Full at 1 MP, 8 refs, plain encode)": {
-        **MINIMAX_BUILT_IN_PRESETS[_MM_FAST_KEY],
+        **_REFMOD_PRESET_BASE,
         "MINIMAX_REFMOD_GRID": REFMOD_GRID_OPTIONS[0],
         "MINIMAX_REFMOD_REFS": "8",
         "MINIMAX_REFMOD_STEPS": REFMOD_STEP_OPTIONS[0],
@@ -17543,6 +17587,7 @@ class LoRATrainerGUI:
         if fam is None:
             var = getattr(self, "explorer_family_var", None)
             fam = var.get() if var is not None else ""
+        fam = self._wb_key(fam)            # an old value ("minimax") reads as its family
         return next((d for d in self._workbench_families("explorer") if d.key == fam), None)
 
     def _explorer_default_state(self):
@@ -19173,6 +19218,7 @@ class LoRATrainerGUI:
         if fam is None:
             var = getattr(self, "extract_family_var", None)
             fam = var.get() if var is not None else ""
+        fam = self._wb_key(fam)            # an old value ("minimax") reads as its family
         return next((d for d in self._workbench_families("extract") if d.key == fam), None)
 
     def _on_extract_family_changed(self):
@@ -21131,6 +21177,7 @@ class LoRATrainerGUI:
         if fam is None:
             var = getattr(self, "profiler_family_var", None)
             fam = var.get() if var is not None else ""
+        fam = self._wb_key(fam)            # an old value ("minimax") reads as its family
         return next((d for d in self._workbench_families("profiler") if d.key == fam), None)
 
     def _on_profiler_family_changed(self):
@@ -24781,6 +24828,7 @@ class LoRATrainerGUI:
         if fam is None:
             var = getattr(self, "royale_family_var", None)
             fam = var.get() if var is not None else ""
+        fam = self._wb_key(fam)            # an old value ("minimax") reads as its family
         return next((d for d in self._workbench_families("royale") if d.key == fam), None)
 
     def _royale_default_state(self):
@@ -31684,6 +31732,7 @@ class LoRATrainerGUI:
         if fam is None:
             var = getattr(self, "repair_family_var", None)
             fam = var.get() if var is not None else ""
+        fam = self._wb_key(fam)            # an old value ("minimax") reads as its family
         return next((d for d in self._workbench_families("repair") if d.key == fam), None)
 
     def _repair_block_groups(self, desc):
