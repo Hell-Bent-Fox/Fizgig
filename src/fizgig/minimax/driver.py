@@ -152,6 +152,117 @@ class MiniMaxDriver(FamilyDriver):
                                video_weight=0.0 if cond.get("audio_only") else 1.0)
         return loss, {"t": float(s)}
 
+    # ---- previews (first stage: the reference sampler, the old clip contract) -----------------------
+    #   options: preview_frames (1 = a still; 22 / 39 / 56 ... clips), preview_audio=1 (a clip's sound),
+    #            audio_vae=PATH (the decoder for that sound)
+    def load_text_encoder(self, path, device):
+        from fizgig.minimax.embedder import load_minimax_h3_te_planned
+        return load_minimax_h3_te_planned(path, device=device, compute_dtype=DTYPE, quantize=True)
+
+    def unload_text_encoder(self, te):
+        import gc
+        del te
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    @torch.no_grad()
+    def encode_text(self, te, captions):
+        return [{"hidden_states": te.encode(c)[0].detach().cpu()} for c in captions]       # (L, 5120)
+
+    def load_vae(self, path, device):
+        """The video decoder in fp16 on the CPU (it rides to the GPU for the decode only, as the old previews) and,
+        with the audio_vae option, the audio decoder."""
+        from safetensors import safe_open
+        from fizgig.minimax.vae import MiniMaxH3VideoVAEDecoder
+        dec = MiniMaxH3VideoVAEDecoder()
+        with safe_open(path, framework="pt", device="cpu") as f:
+            dec.load_state_dict({k: f.get_tensor(k) for k in f.keys()}, strict=False)
+        audio = None
+        apath = self.options.get("audio_vae")
+        if apath:
+            from fizgig.minimax.audio_vae import load_minimax_h3_audio_vae_decoder
+            audio = load_minimax_h3_audio_vae_decoder(apath, device="cpu")
+        return {"video": dec.to(torch.float16).eval(), "audio": audio, "device": device}
+
+    def initial_noise(self, seed, width, height):
+        raise NotImplementedError("H3 travel previews come with the workbench wrap")
+
+    @torch.no_grad()
+    def generate(self, dit, cond, width, height, *, steps, seed, cfg=1.0, neg_cond=None, sigmas=None, options=(),
+                 noise=None, on_step=None, refs=None, frames=None, audio=None):
+        from fizgig.minimax import sampling
+        device = next(p for p in dit.parameters() if p.device.type != "meta").device
+        frames = int(self.options.get("preview_frames", 1) if frames is None else frames)
+        want_audio = (self.options.get("preview_audio") == "1" if audio is None else bool(audio)) and frames > 1
+        txt = cond["hidden_states"]
+        txt = (txt[None] if txt.dim() == 2 else txt).to(device, DTYPE)
+        unc = None
+        if cfg > 1.0 and neg_cond is not None:
+            unc = neg_cond["hidden_states"]
+            unc = (unc[None] if unc.dim() == 2 else unc).to(device, DTYPE)
+        lat, arows = sampling.sample_image(dit, txt, width=width, height=height, steps=steps, cfg_scale=cfg,
+                                           uncond_embeds=unc, seed=seed, device=device, dtype=DTYPE,
+                                           num_frames=frames, return_audio=True)
+        return {"latent": lat.cpu(), "audio": arows.cpu() if (want_audio and arows is not None) else None,
+                "size": (width, height)}
+
+    @torch.no_grad()
+    def decode(self, vae, latents, width, height):
+        """A still -> PIL. A clip -> a dict (frames [3, F, H, W] in [0, 1], the middle frame, the waveform) that
+        save_preview writes as the old contract."""
+        from PIL import Image
+        device = vae["device"]
+        dec = vae["video"].to(device)
+        lat = latents["latent"].to(device).float()
+        try:
+            if lat.shape[2] > 1:
+                px = dec.decode_clip(lat)[0].float().cpu()                    # [3, F, H, W]
+                mid = (px[:, px.shape[1] // 2].permute(1, 2, 0).clamp(0, 1) * 255).byte().numpy()
+                wave = None
+                if latents.get("audio") is not None and vae.get("audio") is not None:
+                    from fizgig.minimax.audio_vae import unpack_audio
+                    adec = vae["audio"].to(device)
+                    wave = adec.decode(unpack_audio(latents["audio"]).to(device, torch.float32))[0].cpu()
+                    vae["audio"].to("cpu")
+                return {"frames": px, "image": Image.fromarray(mid), "wave": wave}
+            px = dec.decode(lat)[0]
+            return Image.fromarray((px.permute(1, 2, 0).clamp(0, 1) * 255).byte().cpu().numpy())
+        finally:
+            vae["video"].to("cpu")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+    def save_preview(self, result, path):
+        """The old previews' contract: a clip writes every 2nd frame as JPEG in <stem>.clip/, the wav and a playable
+        mp4 beside it, then the middle frame as the PNG - LAST, the gallery's 'finished' signal."""
+        import os
+        from PIL import Image
+        if not isinstance(result, dict):
+            result.save(path)
+            return [path]
+        stem = path[:-4]
+        px, out = result["frames"], []
+        clip_dir = stem + ".clip"
+        os.makedirs(clip_dir, exist_ok=True)
+        keep = list(range(0, px.shape[1], 2))
+        if keep[-1] != px.shape[1] - 1:
+            keep.append(px.shape[1] - 1)
+        for k in keep:
+            fr = (px[:, k].permute(1, 2, 0).clamp(0, 1) * 255).byte().numpy()
+            Image.fromarray(fr).save(os.path.join(clip_dir, f"f{k:03d}.jpg"), quality=87)
+        if result.get("wave") is not None:
+            from fizgig.minimax.trainer import write_preview_mp4, write_wav
+            write_wav(stem + ".wav", result["wave"])
+            out.append(stem + ".wav")
+            try:
+                write_preview_mp4(stem + ".mp4", px, stem + ".wav")
+                out.append(stem + ".mp4")
+            except Exception:
+                pass                                     # the wav and the scrub frames still work
+        result["image"].save(path)
+        return out + [path]
+
     # ---- LoRA and the block map -------------------------------------------------------------------
     def block_map(self, dit=None):
         names = {n for n, _ in dit.named_modules()} if dit is not None else None
