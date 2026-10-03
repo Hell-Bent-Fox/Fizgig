@@ -160,6 +160,12 @@ class FamilyDriver:
         result up among the model's own Linears, so a family only lists its renames."""
         return None
 
+    def convert_lora_state_dict(self, sd: dict) -> dict:
+        """A LoRA file's tensors before the family LoRA reads them - a family whose other trainers write a layout
+        the generic reader cannot map (Klein: diffusers split q/k/v fused into its combined qkv) converts here.
+        Default: as is."""
+        return sd
+
     def lora_target_names(self, dit) -> list:
         """Dotted module names (relative to dit) of the Linears a LoRA wraps: every module in the block map."""
         return [m for g in self.block_map(dit) for b in g.blocks for m in b.modules]

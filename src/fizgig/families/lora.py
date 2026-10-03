@@ -216,7 +216,7 @@ class FamilyLoRA:
         ("lora", A, B, scale) with scale = alpha / rank; a LoKR entry is ("lokr", w1, w2, scale) with low-rank factors
         multiplied out and the LyCORIS scale rule (lycoris_scale_from_keys). LoHa is refused."""
         from safetensors.torch import load_file
-        sd = load_file(path)
+        sd = self.driver.convert_lora_state_dict(load_file(path))
         if any(re.search(r"\.hada_w1_a(\.|$)", k) for k in sd):
             raise ValueError(f"{path}: LoHa files are not supported by the standard layer yet")
         out = {}

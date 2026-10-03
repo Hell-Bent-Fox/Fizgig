@@ -361,6 +361,12 @@ class KleinDriver(FamilyDriver):
         dit.switch_block_swap_for_training()
 
     # ---- LoRA and the block map -------------------------------------------------------------------
+    def convert_lora_state_dict(self, sd):
+        """Every Klein LoRA layout the old loaders took (networks/lora.py ensure_kohya_lora_state_dict): kohya,
+        OneTrainer's lora_transformer_, PEFT, diffusers Flux with split q/k/v fused into Klein's qkv / linear1."""
+        from fizgig.networks.lora import ensure_kohya_lora_state_dict
+        return ensure_kohya_lora_state_dict(sd)
+
     def block_map(self, dit=None):
         """Klein's own ids (double_N / single_N), as the old Repair Studio presets name them."""
         names = {n for n, _ in dit.named_modules()} if dit is not None else None
