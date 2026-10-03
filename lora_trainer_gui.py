@@ -23010,9 +23010,13 @@ class LoRATrainerGUI:
             _place(_two_columns(inner, gi), g, 2 if gi == 0 else 10)
 
     def _build_repair_slider_panel_h3(self, parent):
-        """MiniMax H3 layout: 50 main blocks (0-25 left, 26-49 right) + the 2 token-refiner
-        blocks. Generic per-block (no semantic bucket colouring — that map doesn't exist yet;
-        these sliders + the weight-only Profiler are the instrument to build it)."""
+        """A video family's panel (H3: 50 main blocks, 0-25 left and 26-49 right, then the 2 token-refiner blocks),
+        from the family's block map: its first group split over two columns, the other groups under the right one.
+        Generic per-block rows (no semantic bucket colouring - that map doesn't exist yet; these sliders and the
+        Profiler are the instrument to build it)."""
+        desc = self._repair_desc()
+        groups = self._repair_block_groups(desc)
+        self._repair_family_labels = {b.id: b.label for g in groups for b in g.blocks}
         canvas = tk.Canvas(parent, highlightthickness=0, bg=COLORS["bg_surface"], height=625)
         scroll = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scroll.set)
@@ -23032,27 +23036,26 @@ class LoRATrainerGUI:
         col_right = ttk.Frame(inner)
         col_right.grid(row=0, column=1, sticky=tk.NSEW, padx=4)
 
-        r = 0
-        ttk.Label(col_left, text="Blocks 0–25", font=(FONT_FAMILY, 10, "bold")).grid(
-            row=r, column=0, padx=0, pady=(2, 4), sticky=tk.W)
-        r += 1
-        for i in range(26):
-            self._build_repair_block_row(col_left, f"h3blk_{i}", r)
-            r += 1
+        def _title(name, blocks):
+            nums = [b.label.split()[-1] for b in blocks]
+            return f"{name} {nums[0]}–{nums[-1]}" if all(n.isdigit() for n in nums) and nums else name
 
-        r = 0
-        ttk.Label(col_right, text="Blocks 26–49", font=(FONT_FAMILY, 10, "bold")).grid(
-            row=r, column=0, padx=0, pady=(2, 4), sticky=tk.W)
-        r += 1
-        for i in range(26, 50):
-            self._build_repair_block_row(col_right, f"h3blk_{i}", r)
-            r += 1
-        ttk.Label(col_right, text="Token Refiner", font=(FONT_FAMILY, 10, "bold")).grid(
-            row=r, column=0, padx=0, pady=(8, 4), sticky=tk.W)
-        r += 1
-        for bid in ("h3_rf_0", "h3_rf_1"):
-            self._build_repair_block_row(col_right, bid, r)
-            r += 1
+        main = list(groups[0].blocks) if groups else []
+        half = (len(main) + 1) // 2 + (1 if len(main) % 2 == 0 and len(main) > 2 else 0)   # H3: 26 | 24
+        rows = {col_left: 0, col_right: 0}
+
+        def _section(col, title, blocks, top_pad):
+            ttk.Label(col, text=title, font=(FONT_FAMILY, 10, "bold")).grid(
+                row=rows[col], column=0, padx=0, pady=(top_pad, 4), sticky=tk.W)
+            rows[col] += 1
+            for b in blocks:
+                self._build_repair_block_row(col, b.id, rows[col])
+                rows[col] += 1
+        if main:
+            _section(col_left, _title(groups[0].label, main[:half]), main[:half], 2)
+            _section(col_right, _title(groups[0].label, main[half:]), main[half:], 2)
+        for g in groups[1:]:
+            _section(col_right, g.label, list(g.blocks), 8)
 
     def _repair_block_display(self, block_id: str):
         """(label, colour, category_short_or_None) for a block row. Klein ids are
