@@ -99,9 +99,9 @@ class FamilyDriver:
         """The run's --family_option KEY=VALUE pairs, before the dataset is built (an option may shape it)."""
         self.options = dict(options)
 
-    def prepare_training(self, dit, group) -> None:
-        """After the DiT and the LoRA are built, before the first step: install model-side training state (H3:
-        TREAD, the caption-dropout embed). Default: nothing."""
+    def prepare_training(self, dit, group, net=None) -> None:
+        """After the DiT and the LoRA (`net`, the FamilyLoRA) are built, before the first step: install model-side
+        training state (H3: TREAD, the caption-dropout embed, the preview Turbo). Default: nothing."""
 
     def step_frozen_blocks(self, batch: dict):
         """Block ids whose trainable weights sit out this item's step (per-modality routing). Default: none."""

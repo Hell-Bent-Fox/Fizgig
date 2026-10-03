@@ -18,6 +18,7 @@ import torch
 from fizgig.families.driver import Block, BlockGroup, FamilyDriver
 
 DTYPE = torch.bfloat16
+TURBO = "h3_turbo"                     # the preview Turbo LoRA's adapter name
 _BLOCK_MODULES = ("attn.qkv_proj", "attn.out_proj", "mlp.fc1", "mlp.fc2")
 
 
@@ -80,10 +81,21 @@ class MiniMaxDriver(FamilyDriver):
         from fizgig.dataset.image_dataset import ImageDataset
         ImageDataset.clip_still_as_photo = options.get("clip_still_as_photo") == "1"
 
-    def prepare_training(self, dit, group):
+    def prepare_training(self, dit, group, net=None):
         import logging
         import os
         log = logging.getLogger(__name__)
+        tpath = self.options.get("turbo_lora")
+        if tpath and net is not None:
+            # the old previews' Turbo: wired once, OFF and on the CPU between previews; its Linears ride the family
+            # LoRA, its full-model AdaLN rows the pruned base's run-time injection (turbo_adaln_patch)
+            strength = float(self.options.get("turbo_strength") or 0.75)
+            n = net.add_file(tpath, TURBO, strength)
+            net.set_enabled(TURBO, False)
+            net.move_adapter(TURBO, "cpu")
+            self._net, self._turbo_pairs = net, self._adaln_pairs(dit, tpath, strength)
+            log.info(f"[turbo] {n} modules at strength {strength:g} + {len(self._turbo_pairs)} adaln via run-time "
+                     f"injection; previews {int(self.options.get('turbo_steps') or 6)} steps")
         tread = self.options.get("tread")
         if tread:
             ratio, span = tread.split("@")
@@ -188,9 +200,43 @@ class MiniMaxDriver(FamilyDriver):
     def initial_noise(self, seed, width, height):
         raise NotImplementedError("H3 travel previews come with the workbench wrap")
 
+    @staticmethod
+    def _adaln_pairs(dit, path, strength):
+        """A LoRA file's full-model AdaLN rows as (AdalnProj, A, B * strength) - the old _prefilter_frozen_lora's
+        AdaLN half (the Linears are the family LoRA's)."""
+        from safetensors.torch import load_file
+        from fizgig.networks.lora import ensure_kohya_lora_state_dict
+        sd = ensure_kohya_lora_state_dict(load_file(path))
+        parents = {f"lora_unet_{n.replace('.', '_')}_linear": m for n, m in dit.named_modules()
+                   if type(m).__name__ == "AdalnProj"}
+        out = []
+        for name, ap in parents.items():
+            down, up = sd.get(f"{name}.lora_down.weight"), sd.get(f"{name}.lora_up.weight")
+            lin = ap.linear.base if hasattr(ap.linear, "base") else ap.linear
+            if down is not None and up is not None and up.shape[0] == lin.out_features:
+                out.append((ap, down.clone(), up.clone() * float(strength)))
+        return out
+
     @torch.no_grad()
     def generate(self, dit, cond, width, height, *, steps, seed, cfg=1.0, neg_cond=None, sigmas=None, options=(),
                  noise=None, on_step=None, refs=None, frames=None, audio=None):
+        turbo = getattr(self, "_turbo_pairs", None) is not None
+        if not turbo:
+            return self._generate(dit, cond, width, height, steps, seed, cfg, neg_cond, frames, audio)
+        from fizgig.minimax.trainer import turbo_adaln_patch, turbo_adaln_unpatch
+        device = next(p for p in dit.parameters() if p.device.type != "meta").device
+        try:
+            self._net.move_adapter(TURBO, device)
+            self._net.set_enabled(TURBO, True)
+            turbo_adaln_patch(dit, self._turbo_pairs, device, DTYPE)
+            return self._generate(dit, cond, width, height, int(self.options.get("turbo_steps") or 6), seed, 1.0,
+                                  None, frames, audio)
+        finally:
+            turbo_adaln_unpatch(self._turbo_pairs)
+            self._net.set_enabled(TURBO, False)
+            self._net.move_adapter(TURBO, "cpu")
+
+    def _generate(self, dit, cond, width, height, steps, seed, cfg, neg_cond, frames, audio):
         from fizgig.minimax import sampling
         device = next(p for p in dit.parameters() if p.device.type != "meta").device
         frames = int(self.options.get("preview_frames", 1) if frames is None else frames)

@@ -900,7 +900,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     if gradient_checkpointing:
         driver.enable_gradient_checkpointing(dit, True)
     net = FamilyLoRA(dit, driver, device=device)
-    driver.prepare_training(dit, group)
+    driver.prepare_training(dit, group, net)
     if training_adapter:
         n = net.add_file(training_adapter, ADAPTER, training_adapter_strength)
         if n == 0:

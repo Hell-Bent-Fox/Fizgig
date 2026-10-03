@@ -123,8 +123,14 @@ class LoRALinear(nn.Module):
             if s:
                 if isinstance(ad, (LoKR, LoHa)):
                     out = out + (s * ad(x)).to(out.dtype)
-                else:
-                    out = out + (s * ad(x.to(ad[0].weight.dtype))).to(out.dtype)
+                    continue
+                lx = ad(x.to(ad[0].weight.dtype))
+                if lx.dtype == out.dtype:
+                    # a frozen adapter in the model's dtype: ONE fused add, the strength formed in fp32 and the sum
+                    # rounded once - the old loaders' LoRAInfModule epilogue, so a preview at strength 0.75 matches them
+                    out = torch.add(out, lx, alpha=float(s))
+                else:                                # the fp32 trainable adapter: as before
+                    out = out + (s * lx).to(out.dtype)
         return out
 
 
