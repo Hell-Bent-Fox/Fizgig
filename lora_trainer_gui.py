@@ -7468,7 +7468,7 @@ class LoRATrainerGUI:
 
     def _family_kind_chosen(self):
         """The Kind of training radio sets the flags (one at a time); the traces redraw the rows. Choosing
-        Fine-tune sets its learning rate (1e-5) and turns Adaptive LR off, as the fine-tune recipe needs."""
+        Fine-tune sets the family's fine-tune learning rate and turns Adaptive LR off, as the recipe needs."""
         k = self._family_kind_var.get()
         was_ft = bool(self.entries["FAMILY_FT"].get())
         self.entries["FAMILY_EDIT"].set(k == "edit")
@@ -7485,7 +7485,7 @@ class LoRATrainerGUI:
             e = self.entries.get("LEARNING_RATE")
             if e is not None:
                 e.delete(0, tk.END)
-                e.insert(0, "1e-5")
+                e.insert(0, f"{(_desc.ft_learning_rate if _desc is not None else 1e-5):g}")
 
     def _family_ft_plan_refresh(self):
         """The fine-tune card's 'on this card' line: the rotation this card gets (planned from the model file's
@@ -7511,13 +7511,19 @@ class LoRATrainerGUI:
             free = plannable_free_vram()
             key = (path, round(free, 1), str(getattr(self, "dataset_megapixels_var", None) and
                                              self.dataset_megapixels_var.get()))
+            _opts = {}
+            for _o in desc.options:             # the family's own fine-tune settings (H3's Blocks range)
+                for _t in _o.resolve(self._family_options_values(desc).get(_o.key, _o.default)):
+                    _k, _eq, _v = _t.partition("=")
+                    if _eq and not _k.startswith(("--", "aux:")):
+                        _opts[_k] = _v
+            key = key + (tuple(sorted(_opts.items())),)
             if getattr(self, "_ft_plan_cache", (None,))[0] != key:
-                spec = desc.load_driver().ft_spec(None)
                 try:
                     _mp = float(str(self.dataset_megapixels_var.get()).split()[0])
                 except Exception:
                     _mp = None
-                self._ft_plan_cache = (key, _ft.plan_from_file(path, spec, free, mp=_mp)
+                self._ft_plan_cache = (key, desc.load_driver().ft_card_plan(path, free, mp=_mp, options=_opts)
                                        if path and os.path.isfile(path) else None)
             plan = self._ft_plan_cache[1]
         except Exception:

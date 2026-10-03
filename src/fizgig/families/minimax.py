@@ -143,7 +143,8 @@ MINIMAX = FamilyDescription(
     options=OPTIONS,
     workbench=("repair", "explorer", "profiler", "extract", "royale"),
     workbench_engine="fizgig.minimax.workbench:H3WorkbenchEngine",
-    finetune=True,                    # the old rotation FT (component windows on an NF4 trunk, int8 ConvRot saves)
+    finetune=True,
+    ft_learning_rate=3e-5,            # the tested H3 fine-tune rate (1e-4 destroys; 1e-5 too slow to judge from)                    # the old rotation FT (component windows on an NF4 trunk, int8 ConvRot saves)
     media=("photo", "clip", "voice"),
     preview_park_optimizer=True,      # the old previews' optimizer-state park (~2.5 GB back for the render)
     clip_spec=ClipSpec(fps=24, frame_step=17, frame_offset=5, edge_multiple=32, audio_rate=32000, audio_channels=2,

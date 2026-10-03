@@ -252,6 +252,13 @@ class FamilyDriver:
         family whose base file and trunk differ from the shared bf16 + NF4 path brings its own (H3)."""
         return None
 
+    def ft_card_plan(self, path, free_gb, mp=None, options=None):
+        """The fine-tune card's estimate before anything loads: (windows, stream) for this file on a card with
+        `free_gb` free, or None. Default: the shared planner over the file's header (families.ft.plan_from_file)."""
+        from fizgig.families.ft import plan_from_file
+        plan = plan_from_file(path, self.ft_spec(None), free_gb, mp=mp)
+        return (plan[0], plan[1]) if plan else None
+
     def ft_cycle(self, cycle: int, offset: int, total: int) -> None:
         """The fine-tune's rotation cycle is known (`cycle` epochs; `offset` epochs done before this leg; `total`
         epochs this leg runs): a family whose options land on epochs (H3's retirement) snaps them here."""
