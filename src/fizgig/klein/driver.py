@@ -12,6 +12,8 @@ interface, so the generic cache / train / preview code trains Klein the way the 
 * edit: reference latents ride after the image tokens at time offsets 10, 20, ... (pack_control_latent)
 * LoRA: the Linears of the double and single blocks (attention qkv / proj, MLPs, linear1 / linear2), kohya keys
 """
+import logging
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -87,6 +89,15 @@ class KleinDriver(FamilyDriver):
         once a list is accepted for compiling, the shared wrapper does the checkpoint and each block's own is switched
         off (before the first trace) - a refused list keeps its own, so it never runs without one."""
         from fizgig.families.compile import compile_blocks
+        if boundary == "outside" and any(getattr(m, "scale_weight", None) is not None
+                                         and getattr(m, "weight", None) is not None
+                                         and m.weight.dtype == torch.float8_e4m3fn for m in dit.modules()):
+            # measured 3 Oct 2026: an fp8-resident base (BFL's fp8 file on "bf16") compiled with the checkpoint
+            # outside the graph stops at the first backward - the recompute sees different tensor metadata. Inside
+            # trains (0.69 vs 0.77 s/step eager at 0.25 MP, +0.8 GB)
+            logging.getLogger(__name__).info("[compile] fp8 base: compiling with the checkpoint inside the graph "
+                                             "(outside does not work with fp8 weights)")
+            boundary = "inside"
         for blocks in (dit.double_blocks, dit.single_blocks):
             originals = list(blocks)
             compile_blocks(dit, blocks, blocks_to_swap, boundary=boundary,

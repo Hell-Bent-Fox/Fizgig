@@ -107,9 +107,25 @@ KLEIN = FamilyDescription(
     network_types=("lora", "lokr"),
     adaptive_lr_clip_signal=True,     # the old trainer's grad-clip ratio signal (K6)
     # torch.compile of both block lists (the driver's compile_blocks); graph breaks tolerated, as the old trainer's
-    # default. Auto stays off until compile_payback_steps is measured here
+    # default. Measured 3 Oct 2026 on a 5090, full model, rank 32, 0.25 MP (epoch-3 s/step, peak GB):
+    #   INT8  eager 1.14 / 12.8   inside 0.47 / 20.7   outside 0.54 / 11.8   (1 MP: eager 2.49 / 17.8, outside 1.29 / 15.7)
+    #   NF4   eager 0.96 / 7.9    inside 0.67 / 7.3                          (1 MP: eager 2.02 / 9.9, inside 1.49 / 9.3)
+    #   fp8 file (bf16 choice)  eager 0.77 / 11.1   inside 0.69 / 11.9   outside fails (the driver compiles it inside)
+    # First epoch while compiling: INT8 outside 4.2 s/step, NF4 inside 5.5 -> pays back after ~130 / ~380 steps.
     compiles=True,
     compile_fullgraph=False,
+    compile_boundary="outside",
+    compile_payback_steps={"int8": 200, "nf4": 400},
+    compile_memory={"int8": {"inside": ((0.25, 20.7),), "outside": ((0.25, 11.8), (1.0, 15.7))},
+                    "nf4": {"inside": ((0.25, 7.3), (1.0, 9.3))}},
+    compile_hint=("Auto (recommended) turns torch.compile on only when this run is long enough to repay it. On Klein "
+                  "9B it is measured 2.1x per step on the INT8 base (1.14 -> 0.54 s/step) with LESS memory than "
+                  "uncompiled (the gradient checkpoint stays outside the compiled blocks), and 1.4x on NF4. The first "
+                  "epoch runs slower while the blocks compile, so Auto waits for runs longer than about 200 steps on "
+                  "INT8 and 400 on NF4, and checks the compiled run fits your free VRAM. The fp8 base is not "
+                  "compiled by Auto (1.1x; On still compiles). Requires Triton and, on Windows, a C++ compiler (VS "
+                  "Build Tools) - both located automatically. Never used with Blocks Swap, since swapping moves "
+                  "weights and compiled graphs assume they stay put."),
     edit_training=True,               # Klein is an edit model: references ride after the image tokens
     edit_note=("Pairs of an original and its edited version, the same crop and shape - about 40 pairs is a good "
                "start (20 at least). Each photo 1 MP or larger; Fizgig resizes them."),

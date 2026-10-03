@@ -262,8 +262,8 @@ class FamilyDriver:
         for b in order:
             if b in mem and _peak((mem[b], 0.0), mp) <= budget:
                 return b, ("" if b == preferred else
-                           f"the checkpoint goes outside the compiled region to fit ({_peak((mem[b], 0.0), mp):.1f} "
-                           f"GB at {mp:.2f} MP)")
+                           f"the checkpoint goes {b} the compiled region ({_peak((mem[b], 0.0), mp):.1f} GB at "
+                           f"{mp:.2f} MP, measured)")
         need = min(_peak((v, 0.0), mp) for v in mem.values())
         return False, (f"compiled it needs ~{need:.1f} GB at {mp:.2f} MP and {budget + 1.5:.1f} GB is free - running "
                        f"uncompiled")
