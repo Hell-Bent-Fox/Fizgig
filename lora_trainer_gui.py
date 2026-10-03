@@ -21609,7 +21609,7 @@ class LoRATrainerGUI:
         instrument). `krea2` below means "any no-map family" (historical naming)."""
         fam = self.repair_family_var.get()
         desc = self._repair_desc(fam)
-        krea2 = fam == "minimax" or desc is not None
+        krea2 = fam == "minimax" or (desc is not None and not desc.category_masters)
         if desc is not None:
             # Standard-layer family: previews with its speed LoRA (when set in Preferences) or its default
             # sampling. Radio values stay distilled / base so the rest of the tab reads them unchanged.
@@ -31620,8 +31620,10 @@ class LoRATrainerGUI:
     def _repair_no_map(self) -> bool:
         """True for any family without a semantic block map (MiniMax H3, the described families): no category
         presets, no master sliders."""
-        return (getattr(self, "repair_family_var", None) is not None
-                and (self.repair_family_var.get() == "minimax" or self._repair_desc() is not None))
+        if getattr(self, "repair_family_var", None) is None:
+            return False
+        _d = self._repair_desc()
+        return self.repair_family_var.get() == "minimax" or (_d is not None and not _d.category_masters)
 
     def _workbench_families(self, tool):
         """Standard-layer families a workbench tool offers (the description's `workbench` names the tool)."""

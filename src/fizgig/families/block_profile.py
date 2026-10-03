@@ -289,7 +289,8 @@ th{color:#9aa0aa;font-weight:600;} .pill{display:inline-block;padding:2px 9px;bo
 """
 
 
-_CAT_COLOR = {"identity": "#70AD47", "look": "#5B9BD5", "style_ident_overlap": "#5BB3A6"}   # Repair Studio's
+_CAT_COLOR = {"identity": "#70AD47", "look": "#5B9BD5", "style_ident_overlap": "#5BB3A6",     # Repair Studio's
+              "style_composition": "#5B9BD5", "ident_details_overlap": "#B8A547", "details": "#ED7D31"}
 
 
 def _pct(x):

@@ -226,7 +226,12 @@ class FamilyDriver:
         if mode == "outside":
             return "outside", ""
         if mode != "auto":
-            return d.compile_boundary, ""
+            b, why = self._compile_fit(precision, mp, d.compile_boundary)
+            if not b:                       # On still compiles: the leanest boundary, with a warning
+                return "outside", ("on: " + why.replace(" - running uncompiled", "") +
+                                   " - compiling with the checkpoint outside the graph anyway (it may run out of "
+                                   "memory; Off or Auto avoid that)")
+            return b, (why if b != d.compile_boundary else "")
         from fizgig.utils.capabilities import compile_blocker
         blocked = compile_blocker(blocks_to_swap)
         if blocked:
@@ -238,8 +243,30 @@ class FamilyDriver:
         if total_steps < pay:
             return False, (f"{total_steps} steps on the {precision.upper()} path — compile pays back after ~{pay}, "
                            "so this run is quicker uncompiled")
-        return d.compile_boundary, (f"{total_steps} steps on the {precision.upper()} path — compile pays back within "
-                                    f"~{pay} steps and this run is longer")
+        b, fit = self._compile_fit(precision, mp, d.compile_boundary)
+        if not b:
+            return False, fit
+        return b, (f"{total_steps} steps on the {precision.upper()} path — compile pays back within ~{pay} steps and "
+                   f"this run is longer" + (f"; {fit}" if fit else ""))
+
+    def _compile_fit(self, precision, mp, preferred):
+        """(boundary, why) by the description's measured compiled peaks (compile_memory) against free VRAM: the
+        preferred boundary if it fits, else the checkpoint outside the graph, else (False, why). A family without
+        compiled figures keeps its boundary."""
+        mem = (self.description.compile_memory or {}).get(precision)
+        if not mem:
+            return preferred, ""
+        from fizgig.families.quant import _peak, free_vram_gb
+        budget = free_vram_gb() - 1.5
+        order = [preferred] + [b for b in ("inside", "outside") if b != preferred]
+        for b in order:
+            if b in mem and _peak((mem[b], 0.0), mp) <= budget:
+                return b, ("" if b == preferred else
+                           f"the checkpoint goes outside the compiled region to fit ({_peak((mem[b], 0.0), mp):.1f} "
+                           f"GB at {mp:.2f} MP)")
+        need = min(_peak((v, 0.0), mp) for v in mem.values())
+        return False, (f"compiled it needs ~{need:.1f} GB at {mp:.2f} MP and {budget + 1.5:.1f} GB is free - running "
+                       f"uncompiled")
 
     def quant_target_names(self, dit) -> list:
         """The Linears an INT8 / NF4 base quantises (families/quant.py). Default: the LoRA targets. A family whose

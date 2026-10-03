@@ -62,6 +62,14 @@ KLEIN = FamilyDescription(
     n_blocks=32,                      # 8 double-stream + 24 single-stream blocks (Klein9BParams)
     block_prefix="double_blocks",
     block_note="Block ids follow the old Repair Studio (double_0-7, single_0-23), so its saved presets apply.",
+    # the old Repair Studio's 5 buckets (lora_trainer_gui.py _repair_category_for_block): style+composition in the
+    # double blocks and single 0, the style/identity overlap at single 1, identity 2-11, the identity/detail overlap
+    # 12-16, details 17-23
+    block_categories=tuple((f"double_{i}", "style_composition") for i in range(8)) + tuple(
+        (f"single_{i}", "style_composition" if i == 0 else "style_ident_overlap" if i == 1 else
+         "identity" if i <= 11 else "ident_details_overlap" if i <= 16 else "details") for i in range(24)),
+    category_masters=True,
+    workbench=("repair", "explorer", "profiler", "extract", "royale"),
 
     # Model Area to Train, the old Training tab's areas and their block patterns (lora_trainer_gui.py, Klein's
     # include_patterns): Style trains the style+composition blocks at the late (clean) timesteps 0-400
@@ -91,6 +99,10 @@ KLEIN = FamilyDescription(
     ema_default="Off",                # the doc's K10: available, off until an A/B says otherwise
     precisions=("bf16", "int8", "nf4"),
     auto_precisions=("int8", "nf4"),
+    # Measured 3 Oct 2026 on a 5090, full model, rank 32, adamw8bit, gradient checkpointing, BFL's fp8 base file, peak
+    # reserved over the first epoch (24 photos): INT8 12.6 GB at 0.25 MP / 17.1 GB at 1 MP (1.18 / 2.51 s/step); NF4 7.9 /
+    # 9.9 GB (1.06 / 2.02 s/step). Swapped-block savings not measured yet (0 = Auto does not plan a swap)
+    train_memory={"int8": (((0.25, 12.6), (1.0, 17.1)), 0.0), "nf4": (((0.25, 7.9), (1.0, 9.9)), 0.0)},
     optimizers=("adamw8bit", "adamw"),
     network_types=("lora", "lokr"),
     adaptive_lr_clip_signal=True,     # the old trainer's grad-clip ratio signal (K6)

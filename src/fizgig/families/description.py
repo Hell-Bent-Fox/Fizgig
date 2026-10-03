@@ -146,6 +146,10 @@ class FamilyDescription:
     compile_payback_steps: dict = field(default_factory=dict)
     compile_boundary: str = "inside"
     compile_fullgraph: bool = True
+    # measured peak GB when compiled: {precision: {"inside" | "outside": ((megapixels, GB), ...)}}. With it the compile
+    # plan checks free VRAM: the family's boundary if it fits, else the checkpoint outside the graph, else uncompiled.
+    # {} = no memory check (the compiled peak is no bigger than eager's)
+    compile_memory: dict = field(default_factory=dict)
     # the Training tab's hint under Compile Blocks: this family's measured figures
     compile_hint: str = ""
     # previews can take the Samples tab's reference image through the text encoder's vision path ('prompt from a
@@ -219,6 +223,10 @@ class FamilyDescription:
     # what each block carries, measured with the Profiler: ((block id, category), ...), category one of
     # "identity" / "look" / "style_ident_overlap" (Repair Studio's colours). Unlisted blocks stay uncoloured.
     block_categories: tuple = ()
+    # Repair Studio's category controls over block_categories - the five master sliders, the donor category toggles
+    # and the Identity / Style+Composition / Details only presets (Klein's 5-bucket map: style_composition,
+    # style_ident_overlap, identity, ident_details_overlap, details). False = per-block sliders only
+    category_masters: bool = False
     # Fast Identity Mode: the block ids a standard LoRA trains alone when it is on (the measured identity blocks).
     # Everything before the first of them runs forward only, so it is faster. () = no Fast Identity Mode.
     identity_blocks: tuple = ()
