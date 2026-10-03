@@ -90,7 +90,12 @@ def main():
         ImageDirectoryDatasource.captions_optional = True
         logger.info("[cache] captions optional — every image is taken, captioned or not")
     datasets = generate_dataset_group_by_blueprint(blueprint.dataset_group).datasets
+    cache_latents(args, datasets, device)
 
+
+def cache_latents(args, datasets, device):
+    """The latent stage over loaded datasets (args: vae, audio_vae, clip_still, skip_existing, keep_cache,
+    num_workers, batch_size) - this script's, and the H3 family driver's."""
     logger.info(f"Loading H3 video VAE from {args.vae}")
     vae = MiniMaxH3VideoVAEEncoder()
     with safe_open(args.vae, framework="pt", device="cpu") as f:

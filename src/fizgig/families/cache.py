@@ -128,6 +128,8 @@ def main():
     p.add_argument("--slider", action="store_true",
                    help="the control_directory holds a slider's other pole: cache its latents, encode captions "
                         "plainly (not as edit pairs)")
+    p.add_argument("--aux", action="append", default=[], metavar="KEY=VALUE",
+                   help="a further model file or option for the family's own caching (e.g. audio_vae=PATH)")
     args = p.parse_args()
     from fizgig.families.quant import apply_vram_cap
     apply_vram_cap()                # FIZGIG_SIM_VRAM_GB: behave like a smaller card
@@ -151,6 +153,9 @@ def main():
             raise SystemExit(f"{len(many)} after-image(s) match more than one before-image (e.g. {', '.join(many[:3])}): "
                              f"keep one before-image per after-image, named the same")
 
+    aux = dict(a.split("=", 1) for a in args.aux if "=" in a)
+    if driver.cache_stage(args.stage, datasets, args, device, aux):
+        return                              # the family caches in its own layout (H3)
     if args.stage == "latents":
         from fizgig.scripts.cache_latents import encode_datasets
         vae = driver.load_vae(args.model, device)

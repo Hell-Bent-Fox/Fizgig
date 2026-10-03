@@ -81,6 +81,12 @@ class FamilyDriver:
         """captions -> list of conditioning dicts (tensors on CPU)."""
         raise NotImplementedError
 
+    def cache_stage(self, stage: str, datasets, args, device, aux: dict) -> bool:
+        """Optional: cache `stage` ("latents" / "text") over the loaded datasets in the family's own layout and return
+        True. args carries the shared cache flags (model, skip_existing, keep_cache, batch_size, num_workers, slider);
+        aux the --aux KEY=VALUE extras. Default False: the shared encode_images / encode_text path runs."""
+        return False
+
     def media_problem(self, path: str) -> str:
         """Why this clip or sound file cannot train as it is ("" = fine), against the description's clip_spec. Only
         called for families whose media include "clip" / "voice"."""

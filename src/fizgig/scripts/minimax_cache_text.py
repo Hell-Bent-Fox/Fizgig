@@ -254,7 +254,12 @@ def main():
     user_config = load_user_config(args.dataset_config)
     blueprint = blueprint_gen.generate(user_config, args, architecture=ARCHITECTURE_MINIMAX)
     datasets = generate_dataset_group_by_blueprint(blueprint.dataset_group).datasets
+    cache_text(args, datasets, device)
 
+
+def cache_text(args, datasets, device):
+    """The text stage over loaded datasets (args: text_encoder, reference_count, no_quantize, batch_size,
+    skip_existing, keep_cache, num_workers) - this script's, and the H3 family driver's."""
     all_files, all_paths = prepare_cache_files_and_paths(datasets)
 
     _refs = max(0, int(args.reference_count or 0))

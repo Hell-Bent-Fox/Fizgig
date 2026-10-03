@@ -8,9 +8,10 @@ from typing import Optional
 from fizgig.families.description import FamilyDescription
 from fizgig.families.klein import KLEIN
 from fizgig.families.krea2 import KREA2
+from fizgig.families.minimax import MINIMAX
 from fizgig.families.qwen_image import QWEN_IMAGE_21
 
-FAMILIES = {d.key: d for d in (QWEN_IMAGE_21, KREA2, KLEIN)}
+FAMILIES = {d.key: d for d in (QWEN_IMAGE_21, KREA2, KLEIN, MINIMAX)}
 
 for _d in FAMILIES.values():
     _problems = _d.validate()
@@ -41,12 +42,12 @@ def by_arch_id(arch_id: str) -> Optional[FamilyDescription]:
 
 def training_families() -> list:
     """Descriptions whose training entry points exist (shown in the Base Model selector)."""
-    return [d for d in FAMILIES.values() if d.training_ready]
+    return [d for d in FAMILIES.values() if d.training_ready and not d.hidden]
 
 
 def workbench_families(tool: str) -> list:
     """Descriptions whose driver is built and whose description enables this workbench tool ("repair", ...)."""
-    return [d for d in FAMILIES.values() if d.training_ready and tool in d.workbench]
+    return [d for d in FAMILIES.values() if d.training_ready and not d.hidden and tool in d.workbench]
 
 
 def family_of_lora(path: str) -> Optional[FamilyDescription]:

@@ -94,6 +94,9 @@ def load_base(driver, path, device, precision="bf16", blocks_to_swap=0, supports
         elif swap > cap:
             logger.info(f"[block swap] {swap} requested, {cap} is the maximum")
             swap = cap
+    if getattr(driver, "loads_quantized", False):     # the file is already the base precision (H3's int8 ConvRot)
+        dit = driver.load_dit(path, device)
+        return dit, 0
     dit = driver.load_dit(path, "cpu" if (swap or precision != "bf16") else device)
     quantize(dit, driver, precision, device, store_device="cpu" if swap else None)
     if swap:

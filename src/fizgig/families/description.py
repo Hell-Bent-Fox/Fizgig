@@ -112,6 +112,8 @@ class FamilyDescription:
     lora_name_suffix: str
     aliases: tuple = ()
     experimental: bool = True
+    # registered (the shared cache / trainer find it) but not offered in the GUI yet - a family mid-port
+    hidden: bool = False
 
     # model files (Preferences rows, in display order)
     model_files: tuple = ()
