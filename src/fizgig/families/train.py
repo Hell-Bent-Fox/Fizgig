@@ -1357,8 +1357,10 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             latents = batch["latents"].to(device)
             if slider:
                 # both poles backpropagate before the strength flips: checkpointed blocks recompute their forward
-                # in backward, at whatever strength is set then
+                # in backward, at whatever strength is set then. The family's per-step freeze applies as on any step
+                # (H3: the Training mode's block window, never the token refiner)
                 optimizer.zero_grad(set_to_none=True)
+                _frozen_sl = _step_freeze(driver.step_frozen_blocks(batch))
                 if slider_prompts:
                     _l, _t = _prompt_slider_step(driver, dit, net, latents, slider_enc, gen,
                                                  guidance=slider_guidance, min_t=min_timestep, max_t=max_timestep)
@@ -1381,6 +1383,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                     finally:
                         net.set_trainable_multiplier(1.0)
                     _t = _info.get("t", 0.5)
+                for _p in _frozen_sl:
+                    _p.requires_grad_(True)
                 loss, _info = torch.tensor(_l), {"t": _t}
             else:
                 cond = driver.batch_cond(batch, device)
