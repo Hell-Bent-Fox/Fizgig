@@ -8349,7 +8349,7 @@ class LoRATrainerGUI:
             lbl.config(text="all 50 blocks", fg=COLORS["text_explain"])
             return
         try:
-            from fizgig.minimax.trainer import parse_block_spec
+            from fizgig.minimax.common import parse_block_spec
             idx = parse_block_spec(spec, MINIMAX_NUM_BLOCKS)
         except ValueError as e:
             lbl.config(text=f"✗ {e}", fg="#E74C3C")
@@ -27295,7 +27295,7 @@ class LoRATrainerGUI:
         """Write the clip's soundtrack to a temp wav (winsound plays files); None if silent."""
         import tempfile
         try:
-            from fizgig.minimax.trainer import write_wav
+            from fizgig.minimax.common import write_wav
         except Exception:
             return None
         if clip.get("wav") is None:
@@ -28329,7 +28329,7 @@ class LoRATrainerGUI:
         try:
             import numpy as np
             import torch as _t
-            from fizgig.minimax.trainer import write_preview_mp4, write_wav, _find_ffmpeg
+            from fizgig.minimax.common import write_preview_mp4, write_wav, _find_ffmpeg
             frames = clip["frames"]
             if path.lower().endswith(".mp4") and _find_ffmpeg() and len(frames) > 1:
                 arr = np.stack([np.asarray(f.convert("RGB")) for f in frames])   # [F,H,W,3]
@@ -32455,7 +32455,7 @@ class LoRATrainerGUI:
                 _spec = "all"
             if _spec.lower() != "all":
                 try:
-                    from fizgig.minimax.trainer import parse_block_spec
+                    from fizgig.minimax.common import parse_block_spec
                     parse_block_spec(_spec, MINIMAX_NUM_BLOCKS)
                 except ValueError as e:
                     errors.append(f"Blocks to Train: {e}")
@@ -32467,7 +32467,7 @@ class LoRATrainerGUI:
             _slow_spec = str(self.entries["MINIMAX_SLOW_BLOCKS"].get() or "").strip()
             if _slow_spec:
                 try:
-                    from fizgig.minimax.trainer import parse_block_spec
+                    from fizgig.minimax.common import parse_block_spec
                     parse_block_spec(_slow_spec, MINIMAX_NUM_BLOCKS)
                 except ValueError as e:
                     errors.append(f"Slower LR for blocks: {e}")

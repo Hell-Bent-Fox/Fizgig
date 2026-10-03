@@ -68,7 +68,7 @@ class MiniMaxDriver(FamilyDriver):
         under the tested streaming floor or when the staging would starve system RAM. Previews are trimmed to the
         plan up front: a streamed plan leaves ~4 GB, so clips start at 22 frames; a 16 GB-class card caps them at
         768x640 / 22 frames."""
-        from fizgig.minimax import trainer as T
+        from fizgig.minimax import common as T
         from fizgig.utils.device import plannable_free_vram
         path = run["dit_path"]
         free = plannable_free_vram()
@@ -205,7 +205,7 @@ class MiniMaxDriver(FamilyDriver):
     #   clip_still_as_photo  1: each clip's cached still also trains as a photo
     def set_options(self, options):
         super().set_options(options)
-        from fizgig.minimax.trainer import parse_block_spec
+        from fizgig.minimax.common import parse_block_spec
         n = self.description.n_blocks
         self._allowed = {m: set(parse_block_spec(options[f"{m}_blocks"], n)) for m in ("photo", "clip", "audio")
                          if options.get(f"{m}_blocks")}
@@ -278,7 +278,7 @@ class MiniMaxDriver(FamilyDriver):
             r = 0.0
         self._ramp = None
         if r > 0:
-            from fizgig.minimax.trainer import AdapterRamp
+            from fizgig.minimax.common import AdapterRamp
             ramp = AdapterRamp.__new__(AdapterRamp)
             ramp.target, ramp.mult, ramp._smooth, ramp._prev = r, 0.1, None, None
             ramp._size = self._adapter_size
@@ -355,7 +355,7 @@ class MiniMaxDriver(FamilyDriver):
         """Per-category retirement, as the old trainer: past its stop epoch (options visual_stop / audio_stop,
         "N:anchor" or "N:stop") photos & clips or voice items either train on at 10% LR (anchor - a drift guard on
         the shared adapters) or are skipped outright (stop - faster epochs)."""
-        from fizgig.minimax.trainer import _P1_LR_SCALE, ANCHOR_LR_SCALE
+        from fizgig.minimax.common import _P1_LR_SCALE, ANCHOR_LR_SCALE
         self._epoch = epoch
         if getattr(self, "_ftb", None) is not None and self.options.get("ft_scope") == "photo" and (
                 self._modality(batch) != "photo"):
@@ -406,7 +406,7 @@ class MiniMaxDriver(FamilyDriver):
     # ---- training: the old compute_loss ------------------------------------------------------------
     def training_loss(self, dit, latents, cond, generator, *, min_t=0.0, max_t=1.0, refs=None, diff_ref=None,
                       diff_weight=0.0):
-        from fizgig.minimax.trainer import compute_distill_loss, compute_loss, sample_sigmas
+        from fizgig.minimax.common import compute_distill_loss, compute_loss, sample_sigmas
         teacher = self._teacher_phase()
         if (getattr(self, "_distill", False) and (teacher or not self._p1) and "ref_hidden_states" in cond
                 and not cond.get("audio_only")):
@@ -440,7 +440,7 @@ class MiniMaxDriver(FamilyDriver):
         if hn != 1.0 and not cond.get("audio_only"):
             # the old noise-band LR: steps drawn above sigma 0.5 train at this share (a voice step's gradient lives on
             # the audio schedule, which this classification does not describe - it sits out)
-            from fizgig.minimax.trainer import MINIMAX_LOWNOISE_SIGMA
+            from fizgig.minimax.common import MINIMAX_LOWNOISE_SIGMA
             info["lr_mult"] = hn if float(s) >= MINIMAX_LOWNOISE_SIGMA else 1.0
         return loss, info
 
@@ -516,7 +516,7 @@ class MiniMaxDriver(FamilyDriver):
     def _patch_adaln(self, dit, roles, extra=()):
         """One patch for the union of the active frozen files' AdaLN rows (a patch replaces the module forward
         wholesale, so every set on a module goes in together)."""
-        from fizgig.minimax.trainer import turbo_adaln_patch, turbo_adaln_unpatch
+        from fizgig.minimax.common import turbo_adaln_patch, turbo_adaln_unpatch
         held = getattr(self, "_frozen_adaln", {})
         turbo_adaln_unpatch([p for v in held.values() for p in v])
         pairs = [p for r in roles for p in held.get(r, [])] + list(extra)
@@ -560,9 +560,9 @@ class MiniMaxDriver(FamilyDriver):
         raises - retries one rung down, a shorter clip first (141 -> 56 -> 22 -> still never: 22 is the floor), then
         the resolution down the standard sizes to 512. Both caps stick for later epochs; a resolution step prints the
         marker the GUI writes back into the Samples tab. At the floor of both it re-raises."""
-        from fizgig.minimax.trainer import clip_fallback_frames, next_preview_res
+        from fizgig.minimax.common import clip_fallback_frames, next_preview_res
         if getattr(self, "_small_card", False):
-            from fizgig.minimax.trainer import cap_preview_res_small_card
+            from fizgig.minimax.common import cap_preview_res_small_card
             width, height = cap_preview_res_small_card(width, height)
         cap = getattr(self, "_res_cap", None)
         if cap and (cap[0] < width or cap[1] < height):
@@ -621,7 +621,7 @@ class MiniMaxDriver(FamilyDriver):
         ~7.5 GB, an override encode the text encoder + 2), only the missing gigabytes (+1) of tail blocks go to CPU
         (park_dit_partial, which unbinds a streaming ring first) - every extra gigabyte moved is paging churn and a
         slower restore on a WDDM card."""
-        from fizgig.minimax.trainer import park_dit_partial
+        from fizgig.minimax.common import park_dit_partial
         from fizgig.utils.device import plannable_free_vram
         need_gb = 7.5 if need_gb is None else need_gb
         gc.collect()
@@ -639,7 +639,7 @@ class MiniMaxDriver(FamilyDriver):
 
     def unpark(self, dit, device, token):
         if token:
-            from fizgig.minimax.trainer import restore_parked_dit
+            from fizgig.minimax.common import restore_parked_dit
             restore_parked_dit(dit, device, getattr(self, "_n_swap", 0))     # swap-aware: never the whole base
             torch.cuda.empty_cache()
 
@@ -688,7 +688,7 @@ class MiniMaxDriver(FamilyDriver):
             fr = (px[:, k].permute(1, 2, 0).clamp(0, 1) * 255).byte().numpy()
             Image.fromarray(fr).save(os.path.join(clip_dir, f"f{k:03d}.jpg"), quality=87)
         if result.get("wave") is not None:
-            from fizgig.minimax.trainer import write_preview_mp4, write_wav
+            from fizgig.minimax.common import write_preview_mp4, write_wav
             write_wav(stem + ".wav", result["wave"])
             out.append(stem + ".wav")
             try:
@@ -713,7 +713,7 @@ class MiniMaxDriver(FamilyDriver):
 
     def expand_train_blocks(self, items):
         """The old Blocks to Train field: ranges and singles ("3-12, 22, 31-33"), "all", or h3blk_N ids."""
-        from fizgig.minimax.trainer import parse_block_spec
+        from fizgig.minimax.common import parse_block_spec
         ids, spec = [], []
         for it in items:
             it = str(it).split("·")[0].strip()
@@ -741,7 +741,7 @@ class MiniMaxDriver(FamilyDriver):
         and VAE (~1.1 GB) are in, then adds the trunk back - so usable ~ free - 2.6; the fine-tune Blocks range
         narrows the cycle. Clips' activation reserve is left to the trainer (it sees the dataset)."""
         from fizgig.minimax.rotation_ft import plan_h3_ft_windows
-        from fizgig.minimax.trainer import parse_block_spec
+        from fizgig.minimax.common import parse_block_spec
         spec = str((options or {}).get("ft_blocks") or "").strip()
         subset = sorted(parse_block_spec(spec, self.description.n_blocks)) if spec and spec.lower() != "all" else None
         windows, stream, _why = plan_h3_ft_windows(free_gb - 2.6, subset=subset, n_blocks=self.description.n_blocks)
@@ -763,7 +763,7 @@ class MiniMaxDriver(FamilyDriver):
         """Retirement under a fine-tune: stop mode only (the anchor rides optimizer machinery the per-tensor steps
         don't have) and the epoch snapped to rotation-cycle boundaries, cumulative across continuations - the old
         _snap_stop."""
-        from fizgig.minimax.trainer import snap_ft_stop
+        from fizgig.minimax.common import snap_ft_stop
         log = logging.getLogger(__name__)
         for k, label in (("visual_stop", "photos & clips"), ("audio_stop", "voice")):
             spec = self.options.get(k)

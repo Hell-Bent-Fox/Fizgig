@@ -293,7 +293,7 @@ class H3RepairEngine:
 
         if self._turbo_lora_path and os.path.exists(self._turbo_lora_path):
             try:
-                from fizgig.minimax.trainer import load_preview_turbo, turbo_adaln_patch
+                from fizgig.minimax.common import load_preview_turbo, turbo_adaln_patch
                 self._turbo_net, _folded = load_preview_turbo(
                     self.dit, self._turbo_lora_path, float(self._turbo_lora_strength))
                 self._turbo_net.to(device=self.device, dtype=self.dtype)
@@ -512,7 +512,7 @@ class H3RepairEngine:
         if not pairs:
             return
         try:
-            from fizgig.minimax.trainer import turbo_adaln_patch
+            from fizgig.minimax.common import turbo_adaln_patch
             turbo_adaln_patch(self.dit, pairs, self.device, self.dtype)
             self._adaln_installed = sig
         except Exception:
@@ -1942,7 +1942,7 @@ class H3RepairEngine:
                 except Exception:
                     pass
         try:
-            from fizgig.minimax.trainer import turbo_adaln_unpatch
+            from fizgig.minimax.common import turbo_adaln_unpatch
             turbo_adaln_unpatch(self._turbo_adaln)
             turbo_adaln_unpatch([(m, a, b) for _n, m, a, b in
                                  (self._primary_adaln or []) + (self._donor_adaln or [])])

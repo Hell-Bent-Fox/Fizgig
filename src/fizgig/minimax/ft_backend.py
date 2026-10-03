@@ -100,7 +100,7 @@ class H3FTBackend:
     """The shared runner's backend for H3 (see the module docstring)."""
 
     def __init__(self, driver, dit, device, src, group):
-        from fizgig.minimax.trainer import parse_block_spec, plan_ft_modality_routing
+        from fizgig.minimax.common import parse_block_spec, plan_ft_modality_routing
         self.driver, self.dit, self.device, self.src = driver, dit, torch.device(device), src
         self.n_blocks = len(dit.blocks)
         o = driver.options
@@ -120,7 +120,7 @@ class H3FTBackend:
         plan_subset, self.routes = plan_ft_modality_routing(self.n_blocks, pb, ab, n_photo, n_voice, n_clip,
                                                             explicit_subset=subset, clip_blocks=cb)
         if subset is None and plan_subset is not None:
-            from fizgig.minimax.trainer import format_block_spec
+            from fizgig.minimax.common import format_block_spec
             subset = plan_subset
             logger.info("[h3-ft] the cycle tightens to blocks %s - the union of what this dataset actually trains.",
                         format_block_spec(subset))
@@ -197,7 +197,7 @@ class H3FTBackend:
         from fizgig.minimax.rotation_ft import ft_clip_activation_gb, plan_h3_ft_windows
         act = margin = 0.0
         if self.n_clip_items:
-            from fizgig.minimax.trainer import _max_clip_act_item
+            from fizgig.minimax.common import _max_clip_act_item
             lt, smp = _max_clip_act_item(self.group)
             act, margin = ft_clip_activation_gb(lt, smp)
             if act > 0:
@@ -235,7 +235,7 @@ class H3FTBackend:
     def rotate(self, want):
         """The old boundary, in its order: deactivate the outgoing window, defrag if the incoming one would not fit
         (non-streaming), rescope the ring (evicting the streamed set first), then activate."""
-        from fizgig.minimax.trainer import park_dit_to_cpu, restore_parked_dit
+        from fizgig.minimax.common import park_dit_to_cpu, restore_parked_dit
         from fizgig.utils.device import plannable_free_vram
         want = list(want)
         if want == list(self.rot.active):
@@ -264,7 +264,7 @@ class H3FTBackend:
         if not self.stream:
             return
         from fizgig.minimax.h3_nf4_h2d_offload import H3NF4H2DOffloader, bind_block_packed_to
-        from fizgig.minimax.trainer import format_block_spec, park_dit_to_cpu
+        from fizgig.minimax.common import format_block_spec, park_dit_to_cpu
         dit, device = self.dit, self.device
         old = self._ring
         if old is not None:
@@ -336,7 +336,7 @@ class H3FTBackend:
 def source_unfit_reason(path):
     """Why a file cannot be H3-fine-tuned, or None: the rotation FT needs the pre-quantised int8 ConvRot checkpoint
     (the master dequantises from its codes)."""
-    from fizgig.minimax.trainer import is_pruned_checkpoint
+    from fizgig.minimax.common import is_pruned_checkpoint
     if not is_pruned_checkpoint(path):
         return ("is not the pre-quantized int8 checkpoint (minimax_h3_*_pruned_int8_convrot.safetensors) - the "
                 "fine-tune builds its master from its ConvRot codes")
