@@ -52,68 +52,69 @@ OPTIONS = (
         setting="MINIMAX_TRAIN_BASE"),
     FamilyOption("H3_STRUCTURE", "Training Structure", choices=tuple((c[0], c[1]) for c in _STRUCTURE),
                  choice_values=tuple(c[2] for c in _STRUCTURE), choice_notes=tuple((c[0], c[3]) for c in _STRUCTURE),
-                 setting="MINIMAX_LOWNOISE_PCT"),
-    FamilyOption("H3_LOWNOISE_PCT", "Clean-end share (%)", kind="entry", tokens="lownoise_pct={}", default="60",
-                 hint="The share of steps drawn at the clean (detail) end: 60 is Likeness and Style, 8 the model's "
-                      "default.", setting="MINIMAX_LOWNOISE_PCT", requires="H3_STRUCTURE=Custom"),
+                 setting="MINIMAX_LOWNOISE_PCT", hint_indent=7, pady=(8, 2), width=36),
+    FamilyOption("H3_LOWNOISE_PCT", "Clean-end share", kind="entry", tokens="lownoise_pct={}", default="60", width=8, suffix="% of steps",
+                 setting="MINIMAX_LOWNOISE_PCT", requires="H3_STRUCTURE=Custom", pady=(2, 2)),
     FamilyOption("H3_HIGHNOISE_LR_PCT", "Medium to High Noise LR", kind="entry",
                  tokens="highnoise_lr_pct={}", default="100",
                  hint="Scales the LR of the noisy-half steps: pose, framing, face shape. Leave at 100 unless "
                       "experimenting.",
-                 setting="MINIMAX_HIGHNOISE_LR_PCT"),
+                 setting="MINIMAX_HIGHNOISE_LR_PCT", width=8, suffix="%  — best left at 100 unless you are experimenting.", hint_indent=7, pady=(2, 8), hint_pady=(0, 8)),
     FamilyOption("H3_MIXED_STOP_CATEGORY", "Finish one category early", choices=(
         ("voice", "stop_category=audio"), ("photos & clips", "stop_category=visual")),
-        setting="MIXED_STOP_CATEGORY", mixed_only=True),
-    FamilyOption("H3_MIXED_STOP_EPOCH", "After epoch", kind="entry", tokens="stop_epoch={}",
-                 setting="MIXED_STOP_EPOCH", mixed_only=True),
-    FamilyOption("H3_MIXED_STOP_MODE", "Then", choices=(
+        setting="MIXED_STOP_CATEGORY", mixed_only=True, width=14, pady=(8, 2)),
+    FamilyOption("H3_MIXED_STOP_EPOCH", " after epoch ", kind="entry", tokens="stop_epoch={}",
+                 setting="MIXED_STOP_EPOCH", mixed_only=True, inline=True, width=5),
+    FamilyOption("H3_MIXED_STOP_MODE", "", inline=True, width=26, choices=(
         ("anchor at 10% LR (recommended)", "stop_mode=anchor"), ("stop completely (faster)", "stop_mode=stop")),
         hint="Finish the smaller category early, before it overbakes. Blank = both train to the end. Anchor holds it "
              "at 10% LR and keeps its epoch report live. Stop skips its steps: faster, but unwatched.",
-        setting="MIXED_STOP_MODE", mixed_only=True),
+        setting="MIXED_STOP_MODE", mixed_only=True, hint_indent=7),
     FamilyOption("H3_LIKENESS_MODE", "Training mode", choices=(
         ("Default", "photo_blocks=20-49 clip_blocks=20-49 audio_blocks=20-49"),
         ("More Blocks", "--train_blocks=6-49"),
-        ("Off · hand-pick the blocks below", "")),
+        ("Off · hand-pick the blocks in Other Options", "")),
         choice_hints=(
             ("Default", "High quality, versatile, best at preserving model priors. Photos, clips and voice all train "
                         "blocks 20-49, and the backward stops at the window so the steps are quicker too."),
             ("More Blocks", "Less preservation of model priors, high quality. May help when you are training a MOTION "
-                            "concept specifically, since it reaches more of the model. It is not a likeness upgrade - "
-                            "Default reaches higher likeness, sooner, with quicker steps. Every step type trains 6-49, "
+                            "concept specifically, since it reaches more of the model. It is not a likeness upgrade — "
+                            "Default reaches higher likeness, sooner, with quicker steps — and Default may well be enough for motion too. Every step type trains 6-49, "
                             "at 44 blocks in the backward instead of 30. Blocks 0-5 stay out either way; they deform "
                             "anatomy and colour."),
-            ("Off · hand-pick the blocks below", "The blocks are yours to pick, for experiments: Blocks to Train.")),
-        setting="MINIMAX_LIKENESS_MODE"),
+            ("Off · hand-pick the blocks in Other Options", "The blocks are yours to pick, for experiments: Blocks to Train, in the Other Options section "
+                                                   "further down this tab.")),
+        setting="MINIMAX_LIKENESS_MODE", section="after", width=34, pady=(8, 2)),
     FamilyOption("H3_ADAPTER", "Training adapter", choices=(
         ("Circlestone — best for photos", "--training_adapter=pref:minimax_circlestone_adapter"),
         ("Ostris — best for videos", f"--training_adapter={_OSTRIS}"),
         ("Off", "")),
         hint="De-distills the base while your LoRA learns: frozen at 1.0 for every training step, off for previews "
              "and never in your saved file. Circlestone (one file for fl2va and ref2va) trains sharper LoRAs from "
-             "photos; Ostris learns a video look faster.",
-        setting="MINIMAX_ADAPTER"),
+             "photos; Ostris learns a video look faster. For mixed datasets, choose by whether the photos or the videos are "
+             "the priority.",
+        setting="MINIMAX_ADAPTER", section="after", compact=True, width=46),
     FamilyOption("H3_TREAD", "TREAD token routing — on clip steps, half the video tokens skip the middle blocks",
                  kind="check", tokens="tread=0.5@2-47", default="1",
                  hint="Faster clip steps: a random half of each clip's video tokens skips blocks 2-46 and rejoins "
                       "unchanged. Photos and clip stills always run in full; previews and your saved LoRA are "
                       "untouched. See the MiniMax section of the README.",
-                 mode="lora", setting="MINIMAX_TREAD", show_if_media="clip"),
+                 mode="lora", setting="MINIMAX_TREAD", show_if_media="clip", section="after"),
     FamilyOption("H3_CLIP_STILL", "Also train each clip's sharpest face frame as a photo", kind="check",
                  tokens="clip_still_as_photo=1 aux:clip_still=1", default="1",
                  hint="Each clip's sharpest face frame trains as a photo with the clip's caption. Picked at caching; "
                       "clips cached with this off use frame 0 until re-cached.",
-                 setting="MINIMAX_CLIP_STILL", show_if_media="clip"),
+                 setting="MINIMAX_CLIP_STILL", show_if_media="clip", section="after"),
     FamilyOption("H3_ADAPTER_RAMP", "Adapter-relative LR", kind="choice", choices=(
         ("Off", ""), ("0.003 (slow build)", "adapter_ramp=0.003"), ("0.005 (recommended)", "adapter_ramp=0.005"),
         ("0.01 (fast build)", "adapter_ramp=0.01")),
         hint="Makes the Learning Rate box a ceiling the run climbs toward. Set it where you want to end up.",
-        setting="MINIMAX_ADAPTER_RAMP", section="other"),
+        setting="MINIMAX_ADAPTER_RAMP", section="other", width=24),
     FamilyOption("H3_CAPTION_DROPOUT", "Caption dropout", choices=(
         ("Off", "caption_dropout=0"), ("0.05 (default)", "caption_dropout=0.05"),
         ("0.10 (strong)", "caption_dropout=0.1")), choice_values=("0", "0.05", "0.1"), default="0.05 (default)",
         hint="Trains a few percent of steps with no caption, so the LoRA does not lean entirely on the trigger word.",
-        setting="MINIMAX_CAPTION_DROPOUT", section="other"),
+        setting="MINIMAX_CAPTION_DROPOUT", section="other", width=24),
     FamilyOption("H3_BLOCKS", "Blocks to Train", kind="entry", tokens="--train_blocks={}", default="all",
                  suggestions=("6-49 · recommended (skips 0-5)", "all · every block (50 of 50)",
                               "10-49 · skip the first 10", "14-37 · middle band", "25-49 · back half",
@@ -122,20 +123,23 @@ OPTIONS = (
                       "31-33. Measured answers: 6-49 for the whole model (what More Blocks runs) and 20-49 for "
                       "likeness (Default). Blocks 0-5 are in neither: they deform anatomy and pull the dataset's "
                       "colour into the render.",
-                 setting="MINIMAX_BLOCKS", requires="H3_LIKENESS_MODE=Off", section="other"),
+                 setting="MINIMAX_BLOCKS", requires="H3_LIKENESS_MODE=Off", section="other", always_shown=True, counts_blocks=50, unmet_notes=(
+                     ("Default", "Owned by the Training mode above: photos and clips 20-49, and voice the same. Set the mode to Off to hand-pick.", "photos and clips: 20-49"),
+                     ("More Blocks", "Owned by the Training mode above: every step type trains 6-49. Set the mode to Off to hand-pick.", "every step type: 6-49")), pady=(8, 2)),
     FamilyOption("H3_DISTILL", "Learn identity from my dataset (reference distillation)", kind="check",
                  tokens="distill=1 aux:distill=1 --dit=pref:minimax_ref_dit",
                  hint="Experiment. Teaches the LoRA to reproduce identity the way H3 does from a reference photo. "
                       "Needs the ref2va model in Preferences.", setting="MINIMAX_DISTILL", section="other"),
-    FamilyOption("H3_DISTILL_REFS", "References per photo", choices=(
-        ("2", "aux:distill_refs=2"), ("1", "aux:distill_refs=1"), ("3", "aux:distill_refs=3"),
-        ("4", "aux:distill_refs=4")), requires="H3_DISTILL", setting="MINIMAX_DISTILL_REFS", section="other"),
-    FamilyOption("H3_DISTILL_WEIGHT", "Teacher weight", kind="entry", tokens="distill_weight={}", default="0.8",
+    FamilyOption("H3_DISTILL_WEIGHT", "   teacher ", kind="entry", inline=True, always_shown=True, width=5,
+                 suggestions=("0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"), tokens="distill_weight={}", default="0.8",
                  requires="H3_DISTILL", setting="MINIMAX_DISTILL_WEIGHT", section="other"),
-    FamilyOption("H3_DISTILL_PHASE1", "Identity-first phase", choices=(
+    FamilyOption("H3_DISTILL_REFS", "   references each ", kind="entry", tokens="aux:distill_refs={}", default="2",
+                 inline=True, always_shown=True, width=4, suggestions=("1", "2", "3", "4"), requires="H3_DISTILL",
+                 setting="MINIMAX_DISTILL_REFS", section="other"),
+    FamilyOption("H3_DISTILL_PHASE1", "   identity-first ", choices=(
         ("Auto (from dataset size)", "distill_phase1=-1"), ("Off — blend throughout", "distill_phase1=0"),
         ("2 epochs", "distill_phase1=2"), ("4 epochs", "distill_phase1=4"), ("8 epochs", "distill_phase1=8"),
-        ("16 epochs", "distill_phase1=16"), ("30 epochs", "distill_phase1=30")), requires="H3_DISTILL", setting="MINIMAX_DISTILL_PHASE1", section="other"),
+        ("16 epochs", "distill_phase1=16"), ("30 epochs", "distill_phase1=30")), requires="H3_DISTILL", setting="MINIMAX_DISTILL_PHASE1", section="other", inline=True, always_shown=True, width=22),
     FamilyOption("H3_TRAIN_REFINER", "Train the text token refiner", kind="check", tokens="train_token_refiner=1",
                  hint="Recommended off. Does not affect the ability to use a trigger word. The refiner sets how every "
                       "prompt is read; training it softens output and makes previews judder between epochs. LoRA and "
@@ -204,6 +208,9 @@ MINIMAX = FamilyDescription(
     network_hint="LoRA recommended for MiniMax",
     ema_hint="A smoothed average of the weights, leading to better and more reliable previews.",
     samples_turbo_pace=True,
+    ema_section="other",
+    precision_label="Base Precision",
+    precision_after_states=True,
     preview_park_optimizer=True,      # the old previews' optimizer-state park (~2.5 GB back for the render)
     clip_spec=ClipSpec(fps=24, frame_step=17, frame_offset=5, edge_multiple=32, audio_rate=32000, audio_channels=2,
                        mute_suffix="_mute", note="src/fizgig/minimax/clip.py FPS / GRID_FRAMES / SIZE_STEP"),

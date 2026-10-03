@@ -5323,6 +5323,8 @@ class LoRATrainerGUI:
         self.entries["FAMILY_EMA"] = ttk.Combobox(
             self._family_ema_frame, values=["Off", "0.98 (recommended)", "0.99 (stronger)", "0.995 (long runs only)"], width=22, state="readonly")
         self.entries["FAMILY_EMA"].set(str(self.settings.get("FAMILY_EMA", "0.98 (recommended)")))
+        self._family_ema_var = tk.StringVar(value=self.entries["FAMILY_EMA"].get())
+        self.entries["FAMILY_EMA"].configure(textvariable=self._family_ema_var)
         self.entries["FAMILY_EMA"].pack(side=tk.LEFT)
         self._family_ema_hint = ttk.Label(
             training_content,
@@ -5334,8 +5336,10 @@ class LoRATrainerGUI:
         # (H3's are the old MINIMAX_* keys), so presets, queued runs and Last Train carry them unchanged.
         # Training Parameters' rows sit above Multi Concept (where H3's old rows were); section "other" ones go in
         # Other Options (_family_options_frame_other, built with that section)
-        self._family_options_frame = ttk.Frame(training_content)
-        self._family_options_frame.grid(row=47, column=0, columnspan=3, sticky=tk.W, padx=0, pady=(4, 0))
+        self._family_options_frame = tk.Frame(training_content, bg=COLORS["bg_surface"])
+        self._family_options_frame.grid(row=27, column=0, columnspan=3, sticky=tk.W, padx=0, pady=(4, 0))
+        self._family_options_frame_after = tk.Frame(training_content, bg=COLORS["bg_surface"])
+        self._family_options_frame_after.grid(row=47, column=0, columnspan=3, sticky=tk.W, padx=0, pady=(4, 0))
         self._family_opt_vars = {}
         self._family_opt_rows = {}
         # --- Edit LoRA — standard-layer families whose model edits images (description.edit_training) ----
@@ -5609,8 +5613,22 @@ class LoRATrainerGUI:
         self.collapsible_sections["scheduler"] = scheduler_section
 
         scheduler_content = scheduler_section.get_content_frame()
-        self._family_options_frame_other = ttk.Frame(scheduler_content)
+        self._family_options_frame_other = tk.Frame(scheduler_content, bg=COLORS["bg_surface"])
         self._family_options_frame_other.grid(row=40, column=0, columnspan=3, sticky=tk.W, padx=0, pady=(4, 0))
+        # the EMA row's Other Options twin (description ema_section "other"), on the same variable
+        self._family_ema_label2 = ttk.Label(scheduler_content, text="Weight averaging (EMA):")
+        self._family_ema_label2.grid(row=25, column=0, sticky=tk.W, padx=5, pady=(8, 0))
+        self._family_ema_frame2 = ttk.Frame(scheduler_content)
+        self._family_ema_frame2.grid(row=25, column=1, sticky=tk.W, padx=5, pady=(8, 0))
+        self._family_ema_combo2 = ttk.Combobox(self._family_ema_frame2, textvariable=self._family_ema_var,
+                                               values=list(self.entries["FAMILY_EMA"].cget("values")), width=22,
+                                               state="readonly")
+        self._family_ema_combo2.pack(side=tk.LEFT)
+        self._family_ema_hint2 = ttk.Label(scheduler_content, text="", foreground=COLORS["text_explain"],
+                                           font=HINT_FONT, justify=tk.LEFT, wraplength=720)
+        self._family_ema_hint2.grid(row=26, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(0, 4))
+        for _w in (self._family_ema_label2, self._family_ema_frame2, self._family_ema_hint2):
+            _w.grid_remove()
         scheduler_content.columnconfigure(1, weight=1)
 
         # === Dataset subsection (migrated from the removed Dataset tab) ===
@@ -8710,6 +8728,9 @@ class LoRATrainerGUI:
             return "1" if str(v) in ("1", "True", "true") or v is True else ""
         if opt.kind == "choice":
             return opt.pick(v)
+        for sg in opt.suggestions:
+            if str(v).strip() and sg.split("·")[0].strip() == str(v).strip():
+                return sg
         return str(v)
 
     # A model-card option's control: the existing row's var, keyed by the option's setting
@@ -8739,7 +8760,8 @@ class LoRATrainerGUI:
         """Build the Training tab's card of the family's own controls (none for a family without options), each row
         shown only where it applies to the dataset in the training folder (clips, a mixed voice + picture set)."""
         from fizgig.families import launch as _fl
-        frames = {"": self._family_options_frame, "other": self._family_options_frame_other,
+        frames = {"": self._family_options_frame, "after": self._family_options_frame_after,
+                  "other": self._family_options_frame_other,
                   "ft": self._family_options_frame_ft}       # a fine-tune option sits in the fine-tune card
 
         def _sec(o):
@@ -8747,47 +8769,76 @@ class LoRATrainerGUI:
         for f in frames.values():
             for w in f.winfo_children():
                 w.destroy()
-        self._family_opt_vars, self._family_opt_rows = {}, {}
+        self._family_opt_vars, self._family_opt_rows, self._family_opt_side = {}, {}, {}
         opts = [o for o in (desc.options if desc is not None else ()) if o.tab == "training" and o.kind != "fixed"]
         for sec, f in frames.items():
             self._set_widget_visible(f, any(_sec(o) == sec for o in opts))
         if not opts:
+            self._family_options_align()          # the label columns go back to the sections' own
             return
         rows_at = dict.fromkeys(frames, 0)
+        cell = None                   # the last row's control area: an inline option packs into it
         for opt in opts:
             frame = frames[_sec(opt)]
             r = rows_at[_sec(opt)]
             val = self._family_option_value(opt)
             row = []
-            if opt.kind == "check":
-                var = tk.BooleanVar(value=val == "1")
-                w = ttk.Checkbutton(frame, text=opt.label, variable=var)
-                w.grid(row=r, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(8, 0))
-                row.append(w)
+            inline = bool(opt.inline and cell is not None)
+            if inline:                         # on the previous option's row: its words, spacing and all
+                if opt.label:
+                    lab = ttk.Label(cell, text=opt.label)
+                    lab.pack(side=tk.LEFT)
+                    row.append(lab)
+            elif opt.kind == "check" or opt.compact:
+                cell = self._family_option_cell(frame)        # the whole row: the tick, or label + control, then any inline ones
+                cell.grid(row=r, column=0, columnspan=2, sticky=tk.W, padx=5, pady=opt.pady)
+                row.append(cell)
+                if opt.kind != "check":
+                    lab = ttk.Label(cell, text=f"{opt.label}:")
+                    lab.pack(side=tk.LEFT, padx=(0, 8))
+                    row.append(lab)
             else:
                 lab = ttk.Label(frame, text=f"{opt.label}:")
-                lab.grid(row=r, column=0, sticky=tk.W, padx=5, pady=(8, 0))
+                lab.grid(row=r, column=0, sticky=tk.W, padx=5, pady=opt.pady)
+                cell = self._family_option_cell(frame)
+                cell.grid(row=r, column=1, sticky=tk.W, padx=5, pady=opt.pady)
+                row += [lab, cell]
+            if opt.kind == "check":
+                var = tk.BooleanVar(value=val == "1")
+                w = ttk.Checkbutton(cell, text=opt.label, variable=var)
+            else:
                 var = tk.StringVar(value=val)
                 if opt.kind == "choice":
-                    w = ttk.Combobox(frame, values=opt.choice_labels(), textvariable=var, state="readonly",
-                                     width=max(24, max(len(x) for x in opt.choice_labels()) + 2))
+                    w = ttk.Combobox(cell, values=opt.choice_labels(), textvariable=var, state="readonly",
+                                     width=opt.width or max(24, max(len(x) for x in opt.choice_labels()) + 2))
                 elif opt.suggestions:          # editable: the suggestions are starting points, typing is the control
-                    w = ttk.Combobox(frame, values=list(opt.suggestions), textvariable=var, width=34)
+                    w = ttk.Combobox(cell, values=list(opt.suggestions), textvariable=var, width=opt.width or 34)
                 else:
-                    w = ttk.Entry(frame, textvariable=var, width=10)
-                w.grid(row=r, column=1, sticky=tk.W, padx=5, pady=(8, 0))
-                row += [lab, w]
-            r += 1
+                    w = ttk.Entry(cell, textvariable=var, width=opt.width or 10)
+            w.pack(side=tk.LEFT, padx=((0, 8) if inline and isinstance(w, ttk.Entry)
+                                       and not isinstance(w, ttk.Combobox) else 0))
+            row.append(w)
+            side = None
+            if opt.suffix or opt.unmet_notes or opt.counts_blocks:
+                side = tk.Label(cell, text=opt.suffix, font=((FONT_FAMILY, 9) if opt.counts_blocks else HINT_FONT),
+                                fg=COLORS["text_explain"], bg=COLORS["bg_surface"])
+                side.pack(side=tk.LEFT, padx=((10, 0) if opt.counts_blocks else (4, 0)))
+                row.append(side)
+            if not inline:
+                r += 1
             hint = ttk.Label(frame, text=opt.hint, foreground=COLORS["text_explain"], font=HINT_FONT,
                              justify=tk.LEFT, wraplength=720)
-            if opt.hint or opt.choice_notes:
-                hint.grid(row=r, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(0, 2))
+            if opt.hint or opt.choice_notes or opt.unmet_notes:
+                hint.grid(row=r, column=0, columnspan=2, sticky=tk.W, padx=(5 + opt.hint_indent, 5), pady=opt.hint_pady)
                 row.append(hint)
             if opt.choice_notes:
                 def _note(*_a, o=opt, v=var, h=hint):
                     h.config(text=dict(o.choice_notes).get(v.get(), o.hint))
                 var.trace_add("write", _note)
                 _note()
+            self._family_opt_side[opt.key] = (w, side, hint)
+            if opt.counts_blocks:
+                var.trace_add("write", lambda *_a, o=opt: self._family_option_state(o))
             r += 1
             if opt.choice_hints:
                 amber = ttk.Label(frame, text="", foreground=COLORS["warning"],
@@ -8811,6 +8862,42 @@ class LoRATrainerGUI:
             rows_at[_sec(opt)] = r
         self._family_options_media_refresh()
 
+    @staticmethod
+    def _family_option_cell(frame):
+        """A row's control area, on the frame's own background (a card's surface, or a ttk frame's)."""
+        if isinstance(frame, tk.Frame) and not isinstance(frame, ttk.Frame):
+            return tk.Frame(frame, bg=frame.cget("bg"))
+        return ttk.Frame(frame)
+
+    def _family_options_align(self):
+        """One label column for a section's own fields and the family's option rows (the old H3 rows sat in the
+        section's grid): the section's column 0 is wide enough for both, and each option frame uses it."""
+        frames = [getattr(self, a, None) for a in ("_family_options_frame", "_family_options_frame_after",
+                                                   "_family_options_frame_other", "_family_options_frame_ft")]
+        by_master = {}
+        for f in frames:
+            if f is not None:
+                by_master.setdefault(f.master, []).append(f)
+        for p, fs in by_master.items():
+            try:
+                p.grid_columnconfigure(0, minsize=0)
+                need = 0
+                for f in fs:
+                    f.grid_columnconfigure(1, weight=1)          # a long tick's span goes to the control column
+                    if not f.winfo_manager():
+                        continue
+                    for w in f.grid_slaves(column=0):
+                        if int(w.grid_info().get("columnspan", 1)) == 1:
+                            need = max(need, w.winfo_reqwidth() + 10)
+                p.update_idletasks()
+                p.grid_columnconfigure(0, minsize=max(need, p.grid_bbox(0, 0)[2]))
+                p.update_idletasks()
+                w0 = p.grid_bbox(0, 0)[2]
+                for f in fs:
+                    f.grid_columnconfigure(0, minsize=w0)
+            except tk.TclError:
+                pass
+
     def _family_options_media_refresh(self, *_a):
         """Show each option row only where it applies to the training folder's media (FamilyOption.show_if_media /
         mixed_only - the launch applies the same rule, so a hidden row never sends anything)."""
@@ -8820,11 +8907,55 @@ class LoRATrainerGUI:
         from fizgig.families import launch as _fl
         media = _fl.dataset_media(self.image_folder_var.get().strip())
         vals = self._family_options_values(self._family_desc())
+        import dataclasses
+        _d = self._family_desc()
         for opt, widgets in rows.values():
-            _d = self._family_desc()
-            on = _fl.option_applies(opt, media, vals, _d.options, finetune=self._family_ft_on(_d))
+            shown = dataclasses.replace(opt, requires="") if opt.always_shown else opt
+            on = _fl.option_applies(shown, media, vals, _d.options, finetune=self._family_ft_on(_d))
             for w in widgets:
                 self._set_widget_visible(w, on)
+            if opt.unmet_notes or opt.counts_blocks:
+                self._family_option_state(opt, media, vals)
+        self._family_options_align()
+
+    def _family_option_state(self, opt, media=None, vals=None):
+        """An always-shown option's control: greyed with the owning choice's notes while its `requires` is unmet,
+        live (with its block count) otherwise."""
+        from fizgig.families import launch as _fl
+        w, side, hint = getattr(self, "_family_opt_side", {}).get(opt.key, (None, None, None))
+        _d = self._family_desc()
+        if w is None or _d is None:
+            return
+        if vals is None:
+            vals = self._family_options_values(_d)
+        met = not opt.requires or _fl.option_applies(
+            __import__("dataclasses").replace(opt, show_if_media="", mixed_only=False, mode=""), set(), vals, _d.options)
+        try:
+            if not met and opt.unmet_notes:
+                key = opt.requires.partition("=")[0]
+                owner = next((o for o in _d.options if o.key == key), None)
+                cur = owner.pick(vals.get(key, "")) if owner is not None else ""
+                note = next((n for n in opt.unmet_notes if n[0] == cur), opt.unmet_notes[0])
+                w.configure(state="disabled")
+                hint.configure(text=note[1])
+                if side is not None:
+                    side.configure(text=note[2], fg=COLORS["text_explain"])
+                return
+            w.configure(state=("readonly" if opt.kind == "choice" else "normal"))
+            hint.configure(text=opt.hint)
+            if side is not None and opt.counts_blocks:
+                spec = str(self._family_opt_vars[opt.key].get()).split("·")[0].strip() or "all"
+                if spec.lower() == "all":
+                    side.configure(text=f"all {opt.counts_blocks} blocks", fg=COLORS["text_explain"])
+                else:
+                    from fizgig.minimax.common import parse_block_spec
+                    try:
+                        n = len(parse_block_spec(spec, opt.counts_blocks))
+                        side.configure(text=f"✓ {n} of {opt.counts_blocks} blocks", fg="#27AE60")
+                    except ValueError as e:
+                        side.configure(text=f"✗ {e}", fg="#E74C3C")
+        except tk.TclError:
+            pass
 
     def _set_widget_visible(self, w, show: bool):
         """Show/hide a single widget, working for both grid- and pack-managed widgets.
@@ -9450,19 +9581,30 @@ class LoRATrainerGUI:
         has_ema = bool(desc is not None and desc.ema_default)
         if desc is not None:
             self._family_ema_hint.configure(text=desc.ema_hint or self._FAMILY_EMA_HINT)
+            self._family_ema_hint2.configure(text=desc.ema_hint or self._FAMILY_EMA_HINT)
+        _ema_other = bool(desc is not None and desc.ema_section == "other")
         for w in (self._family_ema_label, self._family_ema_frame, self._family_ema_hint):
-            self._set_widget_visible(w, has_ema)
+            self._set_widget_visible(w, has_ema and not _ema_other)
+        for w in (self._family_ema_label2, self._family_ema_frame2, self._family_ema_hint2):
+            self._set_widget_visible(w, has_ema and _ema_other)
         if has_ema:
             _ev = ["Off", "0.98 (recommended)", "0.99 (stronger)", "0.995 (long runs only)"]
             if desc.ema_short_run:
                 _ev.append(self._FAMILY_EMA_SHORT)
             self.entries["FAMILY_EMA"].configure(values=_ev)
+            self._family_ema_combo2.configure(values=_ev)
             if self.entries["FAMILY_EMA"].get() not in _ev:
                 self.entries["FAMILY_EMA"].set("0.98 (recommended)")
         many = bool(desc is not None and len(desc.precisions) > 1)
         for w in (self._family_precision_label, self.entries["FAMILY_PRECISION"], self._family_precision_hint):
             self._set_widget_visible(w, many)
         if many:
+            _late = bool(desc.precision_after_states)       # H3: below Save State / Keep Last, hint full width
+            self._family_precision_label.config(text=f"{desc.precision_label or 'Base precision'}:")
+            self._family_precision_label.grid_configure(row=16 if _late else 6, padx=5 if _late else (12, 8))
+            self.entries["FAMILY_PRECISION"].grid_configure(row=16 if _late else 6)
+            self._family_precision_hint.grid_configure(row=17 if _late else 7, column=0 if _late else 1,
+                                                       columnspan=2 if _late else 1)
             opts = ["auto"] + [p for p in ("bf16", "int8", "nf4", "hqq") if p in desc.precisions]
             labels = {**self._FAMILY_PRECISION_LABELS, **desc.precision_labels}
             _cur = self.entries["FAMILY_PRECISION"].get()

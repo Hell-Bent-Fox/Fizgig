@@ -123,7 +123,20 @@ class FamilyOption:
     #                                   ("60", "8", ""); "" marks the custom choice any other value lands on
     tab: str = "training"             # "training" | "samples" | "model" (the Training Base row under the Base
     #                                   Model picker: never in a preset, carried by Last Train and the queue)
-    section: str = ""                 # training tab: "" = Training Parameters, "other" = Other Options
+    # training tab: "" = Training Parameters (under Network Type), "after" = Training Parameters below the "Read at
+    # launch" line, "other" = Other Options; a fine-tune option (mode "finetune") sits in the fine-tune card
+    section: str = ""
+    inline: bool = False              # on the previous option's row, after its control (the label as plain text)
+    compact: bool = False             # label and control side by side across the row, not in the label column
+    width: int = 0                    # the control's width in characters (0 = sized to its choices)
+    suffix: str = ""                  # a grey note beside the control ("% of steps")
+    hint_indent: int = 0              # extra left indent of the hint, in pixels
+    pady: tuple = (8, 0)              # the control row's vertical padding
+    hint_pady: tuple = (0, 4)         # the hint's vertical padding
+    always_shown: bool = False        # `requires` decides what is SENT; the row shows regardless
+    # while `requires` is not met the control greys out and shows (required choice label, hint, side note)
+    unmet_notes: tuple = ()
+    counts_blocks: int = 0            # a block-spec entry: the side note counts the blocks it means (of this many)
     setting: str = ""                 # the old settings key this option's value is read from on first use
     show_if_media: str = ""           # shown only when the dataset holds this media kind ("clip", "voice")
     mixed_only: bool = False          # shown only when the dataset mixes voice with photos or clips
@@ -292,6 +305,9 @@ class FamilyDescription:
     loss_watch: bool = True           # the per-image loss watch toggles (off: hidden, never sent - MiniMax H3)
     network_hint: str = ""            # the line under Network Type in place of the LoRA / LoKR trade
     ema_hint: str = ""                # the line under Weight averaging (EMA) in place of the shared one
+    ema_section: str = ""             # "other": the EMA row sits in Other Options (MiniMax H3's place)
+    precision_label: str = ""         # the Base precision row's label ("Base Precision")
+    precision_after_states: bool = False   # the Base precision row below Save State / Keep Last (H3's place)
     # the Samples tab's "Turbo preview: N steps at M% strength" row (MiniMax H3) instead of the Turbo strength box:
     # the Steps box is the plain-model count, the row the turbo's
     samples_turbo_pace: bool = False
