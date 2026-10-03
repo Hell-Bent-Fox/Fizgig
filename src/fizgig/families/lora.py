@@ -62,6 +62,23 @@ class LoKR(nn.Module):
         return torch.kron(self.lokr_w1.float(), self.lokr_w2.float())
 
 
+class LoHa(nn.Module):
+    """A frozen LoHa (Hadamard) adapter: delta = (w1_a @ w1_b) * (w2_a @ w2_b), materialised per forward as the old
+    loaders' LoHaInfModule does (the Hadamard product does not factor); the scale is applied by the LoRALinear."""
+
+    def __init__(self, w1a, w1b, w2a, w2b):
+        super().__init__()
+        self.hada_w1_a, self.hada_w1_b = nn.Parameter(w1a.clone()), nn.Parameter(w1b.clone())
+        self.hada_w2_a, self.hada_w2_b = nn.Parameter(w2a.clone()), nn.Parameter(w2b.clone())
+
+    def delta(self):
+        return (self.hada_w1_a.float() @ self.hada_w1_b.float()) * (self.hada_w2_a.float() @ self.hada_w2_b.float())
+
+    def forward(self, x):
+        w = (self.hada_w1_a @ self.hada_w1_b) * (self.hada_w2_a @ self.hada_w2_b)
+        return x @ w.to(x.dtype).transpose(-1, -2)
+
+
 class LoRALinear(nn.Module):
     def __init__(self, base: nn.Linear):
         super().__init__()
@@ -92,12 +109,19 @@ class LoRALinear(nn.Module):
         self.adapters[name] = ad
         self.scales[name] = scale
 
+    def add_loha(self, name, w1a, w1b, w2a, w2b):
+        ad = LoHa(w1a, w1b, w2a, w2b)
+        dev = getattr(self, "home", None) or self.base.weight.device
+        ad.to(dev, torch.bfloat16).requires_grad_(False)
+        self.adapters[name] = ad
+        self.scales[name] = 1.0
+
     def forward(self, x):
         out = self.base(x)
         for n, ad in self.adapters.items():
             s = self.scales.get(n, 0.0)
             if s:
-                if isinstance(ad, LoKR):
+                if isinstance(ad, (LoKR, LoHa)):
                     out = out + (s * ad(x)).to(out.dtype)
                 else:
                     out = out + (s * ad(x.to(ad[0].weight.dtype))).to(out.dtype)
@@ -216,13 +240,23 @@ class FamilyLoRA:
     def read_file(self, path):
         """-> {module name: entry} for every Linear the file adapts in this model. A LoRA entry is
         ("lora", A, B, scale) with scale = alpha / rank; a LoKR entry is ("lokr", w1, w2, scale) with low-rank factors
-        multiplied out and the LyCORIS scale rule (lycoris_scale_from_keys). LoHa is refused."""
+        multiplied out and the LyCORIS scale rule (lycoris_scale_from_keys). A LoHa entry is
+        ("loha", (w1_a, w1_b), (w2_a, w2_b), scale), the LyCORIS scale rule as for LoKR."""
         from safetensors.torch import load_file
         sd = self.driver.convert_lora_state_dict(load_file(path))
-        if any(re.search(r"\.hada_w1_a(\.|$)", k) for k in sd):
-            raise ValueError(f"{path}: LoHa files are not supported by the standard layer yet")
         out = {}
         for key in sd:
+            m = re.match(r"(.+)\.hada_w1_a$", key)
+            if m:
+                stem = m.group(1)
+                full = self._module_for(stem)
+                if full is None:
+                    continue
+                keys = {k[len(stem) + 1:]: v for k, v in sd.items() if k.startswith(stem + ".")}
+                from fizgig.networks.lora import lycoris_scale_from_keys
+                out[full] = ("loha", (keys["hada_w1_a"], keys["hada_w1_b"]), (keys["hada_w2_a"], keys["hada_w2_b"]),
+                             lycoris_scale_from_keys(keys))
+                continue
             m = re.match(r"(.+)\.lokr_w1(_a)?$", key)
             if m:
                 stem = m.group(1)
@@ -260,7 +294,11 @@ class FamilyLoRA:
             w = self._wrap(full)
             if w is None:
                 continue
-            if kind == "lokr":
+            if kind == "loha":
+                if P[0].shape[0] != w.base.out_features or P[1].shape[1] != w.base.in_features:
+                    continue
+                w.add_loha(name, P[0], P[1], Q[0], Q[1])
+            elif kind == "lokr":
                 if P.shape[0] * Q.shape[0] != w.base.out_features or P.shape[1] * Q.shape[1] != w.base.in_features:
                     continue
                 w.add_lokr(name, False, w1=P, w2=Q)
@@ -365,7 +403,8 @@ class FamilyLoRA:
         def params(full):
             ad = self.wrapped[full].adapters[name]
             return (ad.lokr_w1, ad.lokr_w2) if isinstance(ad, LoKR) else (ad[0].weight, ad[1].weight)
-        same = set(new) == set(st["alpha_rank"]) and all(
+        same = set(new) == set(st["alpha_rank"]) and not any(
+            new[f][0] == "loha" or isinstance(self.wrapped[f].adapters[name], LoHa) for f in new) and all(
             (new[f][0] == "lokr") == isinstance(self.wrapped[f].adapters[name], LoKR)
             and params(f)[0].shape == new[f][1].shape and params(f)[1].shape == new[f][2].shape for f in new)
         if same:
@@ -425,7 +464,7 @@ class FamilyLoRA:
             As, Bs = [], []
             for n, sc in live:
                 ad = w.adapters[n]
-                if isinstance(ad, LoKR):          # mixed with a LoRA: SVD the Kronecker delta to rank <= 64
+                if isinstance(ad, (LoKR, LoHa)):   # Kronecker / Hadamard delta: SVD to a rank <= 64 LoRA
                     U, S, Vh = torch.linalg.svd(ad.delta(), full_matrices=False)
                     k = min(64, S.numel())
                     root = S[:k].sqrt()
