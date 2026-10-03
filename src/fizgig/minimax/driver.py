@@ -829,9 +829,9 @@ class MiniMaxDriver(FamilyDriver):
             return [m for m in mods if names is None or m in names]
         main = [Block(f"h3blk_{i}", f"Block {i}", keep([f"blocks.{i}.{m}" for m in _BLOCK_MODULES]))
                 for i in range(self.description.n_blocks)]
-        refiner = [Block(f"h3_rf_{i}", f"Token refiner {i}",
+        refiner = [Block(f"h3_rf_{i}", f"Refiner {i}",
                          keep([f"token_refiner.blocks.{i}.{m}" for m in _BLOCK_MODULES])) for i in range(2)]
-        return [BlockGroup("Blocks", main), BlockGroup("Token refiner", refiner)]
+        return [BlockGroup("Blocks", main), BlockGroup("Token Refiner", refiner)]   # the old H3 panel's wording
 
     def expand_train_blocks(self, items):
         """The old Blocks to Train field: ranges and singles ("3-12, 22, 31-33"), "all", or h3blk_N ids."""
