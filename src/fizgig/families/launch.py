@@ -327,9 +327,10 @@ def option_applies(opt, media, values=None, options=(), finetune=None):
     return True
 
 
-def option_tokens(desc, inputs):
+def option_tokens(desc, inputs, missing=None):
     """(trainer args, cache --aux args) from the family's FamilyOption values (inputs["FAMILY_OPTIONS"]: key ->
-    value; an unset key takes the option's default). "pref:KEY" becomes that Preferences file's path."""
+    value; an unset key takes the option's default). "pref:KEY" becomes that Preferences file's path; `missing`
+    (a list) collects (pref key, option) for every such file that is not set or not on disk."""
     vals = inputs.get("FAMILY_OPTIONS") or {}
     models = inputs.get("models") or {}
 
@@ -349,13 +350,18 @@ def option_tokens(desc, inputs):
                 if str(have) == want or (want == "1" and str(have) in ("True", "true")):
                     key = alt
                     break
-        return models.get(key, "")
+        p = models.get(key, "")
+        if missing is not None and (not p or not os.path.exists(p)):
+            missing.append((key, cur[0]))
+        return p
 
     train, aux = [], []
+    cur = [None]                        # the option being resolved (for `missing`)
     media = dataset_media(_s(inputs.get("image_folder")))
     for opt in desc.options:
         if not option_applies(opt, media, vals, desc.options, finetune=ft_on(desc, inputs)):
             continue
+        cur[0] = opt
         for tok in opt.resolve(vals.get(opt.key, opt.default)):
             if tok.startswith("aux:"):
                 k, _, v = tok[4:].partition("=")
@@ -755,10 +761,34 @@ def start_problems(desc, inputs):
     swap = 0 if raw_swap.lower().startswith("auto") or not m else int(m.group())   # Auto always fits
     out += checks.run(v, blocks_swap=swap, swap_max=max(0, desc.n_blocks - 2), arch_label=desc.gui_label,
                       name_error=checks.tidy_name(v.get("LORA_NAME"))[1])
+    # a Preferences file an option asks for (H3's ref2va base, an Ostris adapter): set and on disk
+    miss = []
+    option_tokens(desc, inputs, missing=miss)
+    for key, opt in dict.fromkeys(miss):
+        row = next((f.label for f in desc.model_files if f.pref_key == key), key)
+        p = (inputs.get("models") or {}).get(key, "")
+        why = f"'{opt.label}' on the Training tab needs it" if opt is not None and opt.label else "a setting needs it"
+        out.append(f"{row} is {'empty' if not p else 'not where Preferences says (' + p + ')'} — {why}. Set it on "
+                   f"the Preferences tab (its Download link, or the download button there).")
+    # a typed block range (an option with counts_blocks) that does not parse, caught before any model loads
+    vals = inputs.get("FAMILY_OPTIONS") or {}
+    media = dataset_media(_s(v.get("image_folder")))
+    for opt in desc.options:
+        if not opt.counts_blocks or not option_applies(opt, media, vals, desc.options, finetune=ft_on(desc, inputs)):
+            continue
+        spec = str(vals.get(opt.key, opt.default) or "all").split("·")[0].strip() or "all"
+        if spec.lower() != "all":
+            from fizgig.minimax.common import parse_block_spec
+            try:
+                parse_block_spec(spec, opt.counts_blocks)
+            except ValueError as e:
+                out.append(f"{opt.label}: {e}")
     from fizgig.dataset.image_dataset import IMAGE_EXTENSIONS
+    exts = {e.lower() for e in IMAGE_EXTENSIONS}
+    if "clip" in desc.media:
+        exts |= {".mp4"}                     # the clip formats the dataset layer reads
     out += checks.training_folder(_s(v.get("image_folder")), _s(v.get("caption_ext", ".txt")),
-                                  check_captions=not slider_on(desc, inputs, "prompts"),
-                                  media_exts={e.lower() for e in IMAGE_EXTENSIONS})
+                                  check_captions=not slider_on(desc, inputs, "prompts"), media_exts=exts)
     return out
 
 

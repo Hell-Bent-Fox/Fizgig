@@ -231,6 +231,8 @@ class FamilyDescription:
     # fetches)
     # a line under the Training tab's Base Model picker while the family is selected (e.g. what its previews are)
     model_note: str = ""
+    # a grey note beside Load Preset while that preset is the selection: (preset name, note) pairs
+    preset_notes: tuple = ()
     # the Samples tab's wording for the family, as (place, text) pairs over the generic text - places: "banner",
     # "advanced", "flow", "neg", "cfg", "steps"; samples_cfg_free: previews render without CFG on a fixed schedule,
     # so the Advanced card (flow shift, negative, CFG) and the sample-model / reference rows hide
@@ -532,6 +534,9 @@ class FamilyDescription:
             "supports_weighting_scheme": False,
             "supports_discrete_flow_shift": False,
             "supports_samples": True,
+            # a CFG-free family (samples_cfg_free): Negative Prompt and CFG Scale are greyed, as the distilled flags do
+            "sample_is_distilled": bool(self.samples_cfg_free),
+            "sample_cfg_fixed": bool(self.samples_cfg_free),
             "sample_cfg_default": self.preview_cfg,
             "sample_flow_shift_default": None,
             "sample_steps_default": self.preview_steps if self.preview_steps else (s.steps if s else 20),

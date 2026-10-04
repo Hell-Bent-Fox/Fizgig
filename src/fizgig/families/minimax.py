@@ -1,8 +1,8 @@
-"""MiniMax H3 through the standard layer, beside the old H3 trainer ("MiniMax H3 (driver)"), hidden from the Base Model
-list until it trains end to end. Same model files and Preferences rows as MiniMax H3 (shares_prefs_with), the same
-arch id and cache layout (minimaxh3 - the dataset layer's clip / voice discovery keys on it, and the 32B text caches
-are reused), kohya LoRA keys as the old trainer writes them. Facts are the old trainer's (src/fizgig/minimax/), cited
-per value.
+"""MiniMax H3 through the standard layer. It replaced the original H3 trainer (4 Oct 2026, src/fizgig/minimax/trainer.py
+and scripts/minimax_train.py - in git history) once the two were shown to train the same: the same model files and
+Preferences keys, the same arch id and cache layout (minimaxh3 - the dataset layer's clip / voice discovery keys on it,
+and the 32B text caches are reused), kohya LoRA keys as the original writes them, and the original's Training-tab
+settings as family options seeded from their old MINIMAX_* keys. Facts are the original trainer's, cited per value.
 """
 from fizgig.families.description import (ClipSpec, FamilyDescription, FamilyOption, LoRAFormat, ModelFile,
                                         SamplingSettings, SpeedLoRA)
@@ -171,10 +171,10 @@ OPTIONS = (
 )
 
 MINIMAX = FamilyDescription(
-    key="minimax_driver",
+    key="minimax",
     arch_id="minimaxh3",
     display_name="MiniMax H3",
-    gui_label="MiniMax H3 (driver)",
+    gui_label="MiniMax H3",
     lora_name_suffix="mmh3",
     experimental=True,
     hidden=False,
@@ -264,7 +264,6 @@ MINIMAX = FamilyDescription(
                   download_note="~155MB — ostris/minimax_h3_training_adapter → "
                                 "minimax_h3_ref2va_training_adapter_v1.safetensors"),
     ),
-    shares_prefs_with="minimax",
     prefs_title="Model Paths (MiniMax H3 — experimental)",
     prefs_intro="Image-only LoRA training for MiniMax's ~33B H3 omni DiT. Train on the pruned int8 DiT — the same file "
                 "ComfyUI runs — quantized to NF4 at load, so the resident base is ~11 GB. The Qwen3-VL-32B text "
@@ -303,6 +302,7 @@ MINIMAX = FamilyDescription(
         ("cfg", "H3 renders without CFG; the shipped workflow does the same"),
         ("steps", "20 steps matches the shipped H3 workflow")),
     samples_cfg_free=True,
+    preset_notes=(("✨ MiniMax H3 (rank 16, 60 epochs)", "(more suitable for larger datasets with longer trains)"),),
     multi_concept=True,
     # the old H3 recipe on the box's click: a stronger caption dropout (each subject must answer to its own trigger)
     multi_concept_defaults=(("H3_CAPTION_DROPOUT", "0.10 (strong)"),),
@@ -341,7 +341,7 @@ MINIMAX = FamilyDescription(
         file_prefix="lora_unet_",
         note="kohya keys as the old H3 trainer writes them (create_network(None, 'lora_unet', ...)); the AdaLN "
              "projection is left out by default (--no_train_adaln).",
-        source="src/fizgig/minimax/trainer.py train_minimax",
+        source="the original H3 trainer (minimax/trainer.py train_minimax, removed 4 Oct 2026 - in git history)",
     ),
 
     driver="fizgig.minimax.driver:MiniMaxDriver",
@@ -379,7 +379,7 @@ MINIMAX = FamilyDescription(
             strength=0.75,
             settings=SamplingSettings("Turbo 6-step", steps=6, cfg=1.0, sampler="euler", scheduler="simple",
                                       note="CFG-free; the old previews' 6 steps at 0.75.",
-                                      source="src/fizgig/minimax/trainer.py load_preview_turbo"),
+                                      source="the original H3 trainer (minimax/trainer.py load_preview_turbo, in git history)"),
             load_unmerged=True,
             pref_key="minimax_turbo_lora",
             source="https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora",
