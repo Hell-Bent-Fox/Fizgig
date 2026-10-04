@@ -9,8 +9,9 @@ from fizgig.families.krea2 import KREA2
 from fizgig.families.minimax import MINIMAX
 from fizgig.families.qwen_image import QWEN_IMAGE_21
 from fizgig.families.sdxl import SDXL
+from fizgig.families.anima import ANIMA
 
-FAMILIES = {d.key: d for d in (KLEIN, MINIMAX, KREA2, QWEN_IMAGE_21, SDXL)}
+FAMILIES = {d.key: d for d in (KLEIN, MINIMAX, KREA2, QWEN_IMAGE_21, SDXL, ANIMA)}
 
 for _d in FAMILIES.values():
     _problems = _d.validate()

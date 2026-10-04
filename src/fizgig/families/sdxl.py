@@ -95,6 +95,7 @@ SDXL = FamilyDescription(
     precisions=("bf16",),             # 2.6B UNet: 5.1 GB in bf16, fits training on 12 GB cards
     optimizers=("adamw8bit", "adamw"),
     network_types=("lora",),
+    workbench_follows_samples=True,   # previews take the Samples tab's steps, CFG and negative
     helper_files=((_SDXL, ("model_index.json", "*/config.json", "tokenizer/*", "tokenizer_2/*", "scheduler/*")),),
 
     sampling=(
