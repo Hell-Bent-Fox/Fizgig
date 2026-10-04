@@ -43,8 +43,8 @@ Point it at a training run and it renders **every epoch on one fixed seed**, wit
 
 ### Profiler
 
-A per-block activation profile as a colour-coded HTML report — which blocks carry style, identity, and detail, and where they overlap. Repair Studio reads its sidecar automatically and shows the findings inline when you load the same LoRA. Klein's block map is in [KLEIN.md](KLEIN.md#block-map).
+How much rank a LoRA really uses and where its weights are, then renders with each block group switched off and scores likeness and bleed — which blocks carry the subject and which leak it. The result is a colour-coded HTML report. Repair Studio reads its sidecar automatically and shows the findings inline when you load the same LoRA. Klein's block map is in [KLEIN.md](KLEIN.md#block-map).
 
 ### Extract
 
-Distil any Klein, Krea 2, MiniMax H3 or Qwen Image 2.1 LoRA to a lower rank — Fast presets run weight-only SVD with no models loaded; Klein's activation-weighted presets add block and timestep targeting. PEFT and LyCORIS sources supported.
+Distil any Klein, Krea 2, MiniMax H3 or Qwen Image 2.1 LoRA to a lower rank — it runs weight-only SVD with no models loaded, and Klein's presets keep just the Identity, Style+Composition or Details blocks (or any blocks you pick). PEFT and LyCORIS sources supported.

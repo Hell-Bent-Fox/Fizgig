@@ -1,8 +1,8 @@
-"""Klein 9B through the standard layer, beside the old Klein trainer ("Klein (driver)") until the two are shown to
-train the same. The same model files and Preferences rows as Klein (shares_prefs_with), ComfyUI-compatible kohya keys
-like the old trainer's, and its own cache files (arch_id klein9bdrv - a fresh cache, never mixed with the old one).
-Facts are the old trainer's (src/fizgig/training/trainer.py, klein/model_utils.py, networks/lora_klein.py), cited per
-value.
+"""Klein 9B through the standard layer. It replaced the original Klein trainer (4 Oct 2026, src/fizgig/training/trainer.py,
+scripts/train.py - in git history; its cache scripts stay, called by families/cache.py) once the two were shown to train the same: the same model files
+and Preferences keys, ComfyUI-compatible kohya keys like the original's, and its own cache files (arch_id klein9bdrv -
+a fresh cache, never mixed with the original's). Facts are the original trainer's (training/trainer.py,
+klein/model_utils.py, networks/lora_klein.py), cited per value.
 """
 from fizgig.families.description import FamilyDescription, LoRAFormat, ModelFile, SamplingSettings
 
@@ -27,12 +27,12 @@ def _preset(rank, lr, epochs, area, adaptive, ts=("", "")):
 _STYLE_COMP = tuple(f"double_{i}" for i in range(8)) + ("single_0", "single_1")
 
 KLEIN = FamilyDescription(
-    key="klein_driver",
+    key="klein",
     arch_id="klein9bdrv",
     display_name="Klein 9B",
-    gui_label="Klein (driver)",
+    gui_label="Flux 2 Klein Base 9B",
     lora_name_suffix="k9b",
-    experimental=True,
+    experimental=False,
 
     # the Preferences rows (the old hand-built "Model Paths (Klein 9B)" section, texts unchanged)
     model_files=(
@@ -59,7 +59,6 @@ KLEIN = FamilyDescription(
                   hint="Qwen3-8B text encoder (used by Klein 9B)",
                   download_note="~15GB single-file safetensors — Qwen3-8B packaged for Klein 9B (Comfy-Org)"),
     ),
-    shares_prefs_with="klein",
     prefs_title="Model Paths (Klein 9B)",
     prefs_intro="Absolute paths to the four model files. Each row has a Download link that opens the HuggingFace "
                 "page in your browser.",
@@ -92,6 +91,14 @@ KLEIN = FamilyDescription(
         (f"single_{i}", "style_composition" if i == 0 else "style_ident_overlap" if i == 1 else
          "identity" if i <= 11 else "ident_details_overlap" if i <= 16 else "details") for i in range(24)),
     category_masters=True,
+    # the original Extract tab's weight-only presets (Fast SVD / Fast Identity / Fast Style+Composition / Fast
+    # Details): style+composition takes single 2 at half strength, as the original extractor's block table did
+    extract_presets=(
+        ("All Blocks", ()),
+        ("Identity", tuple((f"single_{i}", 1.0) for i in range(1, 17))),
+        ("Style+Composition", tuple((f"double_{i}", 1.0) for i in range(8))
+         + (("single_0", 1.0), ("single_1", 1.0), ("single_2", 0.5))),
+        ("Details", tuple((f"single_{i}", 1.0) for i in range(12, 24)))),
     workbench=("repair", "explorer", "profiler", "extract", "royale"),
 
     # Model Area to Train, the old Training tab's areas and their block patterns (lora_trainer_gui.py, Klein's
@@ -158,6 +165,7 @@ KLEIN = FamilyDescription(
                   "Build Tools) - both located automatically. Never used with Blocks Swap, since swapping moves "
                   "weights and compiled graphs assume they stay put."),
     edit_training=True,               # Klein is an edit model: references ride after the image tokens
+    reference_strength=True,          # the original workbench's reference strength + previous-frame latent chain
     edit_note=("Pairs of an original and its edited version, the same crop and shape - about 40 pairs is a good "
                "start (20 at least). Each photo 1 MP or larger; Fizgig resizes them."),
     slider_training=True,

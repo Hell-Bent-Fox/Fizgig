@@ -1,7 +1,5 @@
-"""The families described through FamilyDescription.
-
-Only new families register here. Klein, Krea 2 and MiniMax H3 keep their existing code paths and are
-deliberately absent: the GUI's generic hooks return None for them, so every existing branch runs as before.
+"""The families described through FamilyDescription - every family Fizgig trains. Their order is the Base Model
+dropdown's and the workbench tabs' radio order.
 """
 from typing import Optional
 
@@ -11,7 +9,7 @@ from fizgig.families.krea2 import KREA2
 from fizgig.families.minimax import MINIMAX
 from fizgig.families.qwen_image import QWEN_IMAGE_21
 
-FAMILIES = {d.key: d for d in (QWEN_IMAGE_21, KREA2, KLEIN, MINIMAX)}
+FAMILIES = {d.key: d for d in (KLEIN, MINIMAX, KREA2, QWEN_IMAGE_21)}
 
 for _d in FAMILIES.values():
     _problems = _d.validate()
@@ -24,7 +22,7 @@ def get(key: str) -> Optional[FamilyDescription]:
 
 
 def by_gui_label(label: str) -> Optional[FamilyDescription]:
-    """The description behind a Base Model selector entry, or None for Klein / Krea 2 / H3."""
+    """The description behind a Base Model selector entry, or None."""
     for d in FAMILIES.values():
         if label == d.gui_label or label in d.aliases:
             return d
@@ -32,7 +30,7 @@ def by_gui_label(label: str) -> Optional[FamilyDescription]:
 
 
 def by_arch_id(arch_id: str) -> Optional[FamilyDescription]:
-    """The description whose architecture id (cache filenames, metadata) is arch_id; None for the old families.
+    """The description whose architecture id (cache filenames, metadata) is arch_id, or None.
     Shared code (metadata, dataset buckets) asks this instead of carrying per-family entries."""
     for d in FAMILIES.values():
         if d.arch_id == arch_id:
@@ -53,7 +51,7 @@ def workbench_families(tool: str) -> list:
 def family_of_lora(path: str) -> Optional[FamilyDescription]:
     """The described family a LoRA file was written for, from its header alone (key names, no tensor data), or
     None. A file matches when most of its down weights name modules inside the family's block map in the family's
-    own key format. Callers ask the old detector first, so Klein / Krea 2 / H3 files never reach this."""
+    own key format."""
     try:
         from safetensors import safe_open
         with safe_open(path, "pt") as f:

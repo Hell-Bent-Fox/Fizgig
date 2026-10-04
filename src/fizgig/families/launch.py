@@ -26,7 +26,7 @@ Switches (FAMILY_EDIT, FAMILY_SLIDER, ADAPTIVE_LR, SAVE_STATE, enable_cache, sam
 ...) must be real booleans: the string "false" counts as on. Numbers may be strings or numbers. The run's
 settings the commands need are LORA_NAME, LORA_OUTPUT_DIR, DATASET_CONFIG (the path the plan's TOML is written
 to), NETWORK_DIM, NETWORK_ALPHA, LEARNING_RATE, MAX_TRAIN_EPOCHS, SAVE_EVERY_N_EPOCHS, SEED; the number checks
-also read LORA_LR_RATIO, GRADIENT_ACCUMULATION, MAX_GRAD_NORM, NETWORK_DROPOUT (and ADAPTIVE_LR_MIN / _MAX with
+also read LORA_LR_RATIO, GRADIENT_ACCUMULATION, MAX_GRAD_NORM (and ADAPTIVE_LR_MIN / _MAX with
 Adaptive LR on, LOKR_FACTOR with LoKR). A missing one is a problem, never a crash.
 
 plan() returns problems only when there are any: then it has no stages and no files, and nothing may be written or

@@ -233,6 +233,13 @@ class FamilyDescription:
     model_note: str = ""
     # a grey note beside Load Preset while that preset is the selection: (preset name, note) pairs
     preset_notes: tuple = ()
+    # an edit family whose workbench reference has a strength (the latents scaled by it), and whose travel renders can
+    # chain - each frame also edits the previous frame's clean latent (LoRA Royale's sequential reference); the
+    # original Klein engine's _build_ref_tokens. Shows the Strength boxes and the Sequential reference ticks
+    reference_strength: bool = False
+    # the Extract tab's presets: (name, ((block id, multiplier), ...)) - the blocks kept and the scale each is
+    # extracted at; an empty block list = every block. The tab adds Custom (a block pick). () = all blocks only
+    extract_presets: tuple = ()
     # the Samples tab's wording for the family, as (place, text) pairs over the generic text - places: "banner",
     # "advanced", "flow", "neg", "cfg", "steps"; samples_cfg_free: previews render without CFG on a fixed schedule,
     # so the Advanced card (flow shift, negative, CFG) and the sample-model / reference rows hide
@@ -515,11 +522,7 @@ class FamilyDescription:
             "train_script": self.train_script,
             "cache_latents_script": self.cache_script,
             "cache_text_script": self.cache_script,
-            "network_module": "fizgig.networks.lora_klein",   # unused: the family trainer builds its own net
             "use_fizgig_venv": True,
-            "timestep_sampling": "shift",
-            "discrete_flow_shift": None,
-            "weighting_scheme": "none",
             "blocks_swap_max": max(0, self.n_blocks - 2),
             "fp8_text_encoder_flag": None,
             "uses_clip": False,
@@ -531,8 +534,6 @@ class FamilyDescription:
             "vae_label": self.vae_label,
             "text_encoder_label": self.text_encoder_label,
             "is_distilled": False,
-            "supports_weighting_scheme": False,
-            "supports_discrete_flow_shift": False,
             "supports_samples": True,
             # a CFG-free family (samples_cfg_free): Negative Prompt and CFG Scale are greyed, as the distilled flags do
             "sample_is_distilled": bool(self.samples_cfg_free),

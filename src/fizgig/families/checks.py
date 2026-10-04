@@ -49,7 +49,6 @@ def numbers(v):
                                       ("LoRA+ LR Ratio", "LORA_LR_RATIO", int, 1),
                                       ("Gradient Accumulation", "GRADIENT_ACCUMULATION", int, 1),
                                       ("Max Grad Norm", "MAX_GRAD_NORM", float, 0),
-                                      ("Network Dropout", "NETWORK_DROPOUT", float, 0),
                                       ("Batch Size (Dataset)", "batch_size", int, 1),
                                       ("Target Megapixels (Dataset)", "megapixels", float, 0)):
         out += number(label, v.get(key, ""), cast, minimum)

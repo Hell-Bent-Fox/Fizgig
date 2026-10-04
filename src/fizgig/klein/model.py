@@ -10,23 +10,10 @@ from einops import rearrange
 from torch import Tensor, nn
 from torch.utils.checkpoint import checkpoint
 
-from typing import Optional
 
 from fizgig.modules.attention import AttentionParams
 from fizgig.modules.offloading import ModelOffloader, weighs_to_device
 from fizgig.modules.attention import attention as unified_attention
-
-
-@dataclass
-class ActivationCacheEntry:
-    """Cached intermediate activations for one denoising step's forward pass.
-
-    Used by KleinDiT.forward_cached() to skip blocks before a resume point.
-    """
-    double_outputs: list  # [block_idx] → (img, txt) or None; length = num_double_blocks
-    transition_img: Optional[Tensor]  # fused cat(txt, img) after all double blocks
-    transition_pe: Optional[Tensor]   # fused cat(pe_ctx, pe_x)
-    single_outputs: list  # [block_idx] → img or None; length = num_single_blocks
 
 
 # region cpu offloading utilities
@@ -737,154 +724,6 @@ class KleinDiT(nn.Module):
 
         img = img[:, num_txt_tokens:, ...]
 
-        img = self.final_layer(img, vec)
-        return img
-
-    def forward_cached(
-        self,
-        x: Tensor, x_ids: Tensor, timesteps: Tensor,
-        ctx: Tensor, ctx_ids: Tensor, guidance: Tensor | None,
-        resume_from: tuple[str, int] | None = None,
-        cached: ActivationCacheEntry | None = None,
-        new_cache: ActivationCacheEntry | None = None,
-    ) -> Tensor:
-        """Forward pass with activation caching for partial re-execution.
-
-        When resume_from is set and cached is valid, skips blocks before the
-        resume point and restores cached activations.  Blocks from the resume
-        point onward are executed normally and their outputs written to
-        new_cache (if provided).  When resume_from is None, behaves like
-        forward() but populates new_cache.
-        """
-        num_double = len(self.double_blocks)
-        num_single = len(self.single_blocks)
-        num_txt_tokens = ctx.shape[1]
-
-        # --- LoRA-invariant preamble (always computed, cheap) ---
-        timestep_emb = timestep_embedding(timesteps, 256)
-        vec = self.time_in(timestep_emb)
-        if self.use_guidance_embed:
-            guidance_emb = timestep_embedding(guidance, 256)
-            vec = vec + self.guidance_in(guidance_emb)
-
-        attn_params = AttentionParams.create(self.attn_mode, self.split_attn)
-
-        # --- Determine execution plan (before computing modulations) ---
-        if resume_from is None:
-            run_double_from = 0
-            run_single_from = 0
-        elif resume_from[0] == "double":
-            run_double_from = resume_from[1]
-            run_single_from = 0  # txt changes → all singles must re-run
-        else:  # "single"
-            run_double_from = num_double  # skip all doubles
-            run_single_from = resume_from[1]
-
-        # --- Compute modulations + embeddings only when needed ---
-        if run_double_from < num_double:
-            double_block_mod_img = self.double_stream_modulation_img(vec)
-            double_block_mod_txt = self.double_stream_modulation_txt(vec)
-        else:
-            double_block_mod_img = None
-            double_block_mod_txt = None
-
-        if run_single_from < num_single or run_double_from < num_double:
-            single_block_mod, _ = self.single_stream_modulation(vec)
-        else:
-            single_block_mod = None
-
-        if run_double_from == 0:
-            img_emb = self.img_in(x)
-            txt_emb = self.txt_in(ctx)
-        else:
-            img_emb = txt_emb = None  # not needed — restoring from cache
-
-        pe_x = self.pe_embedder(x_ids)
-        pe_ctx = self.pe_embedder(ctx_ids)
-
-        # --- Double-stream blocks ---
-        if run_double_from == 0:
-            img, txt = img_emb, txt_emb
-        elif run_double_from < num_double:
-            # Restore from the output of the block just before the resume point
-            img, txt = cached.double_outputs[run_double_from - 1]
-            img, txt = img.to(vec.device), txt.to(vec.device)
-        # else: skipping all doubles, will restore from transition cache below
-
-        if self.blocks_to_swap:
-            self.offloader_double.prepare_block_devices_before_forward(self.double_blocks)
-
-        for block_idx in range(num_double):
-            if block_idx < run_double_from:
-                # Skipped block — copy cached entry
-                if new_cache is not None and cached is not None:
-                    new_cache.double_outputs[block_idx] = cached.double_outputs[block_idx]
-                continue
-
-            if self.blocks_to_swap:
-                if block_idx == run_double_from and block_idx > 0:
-                    # Ensure the resume block is on GPU
-                    weighs_to_device(self.double_blocks[block_idx], vec.device)
-                self.offloader_double.wait_for_block(block_idx)
-
-            img, txt = self.double_blocks[block_idx](
-                img, txt, pe_x, pe_ctx,
-                double_block_mod_img, double_block_mod_txt, attn_params)
-
-            if new_cache is not None:
-                new_cache.double_outputs[block_idx] = (img.detach().clone(), txt.detach().clone())
-
-            if self.blocks_to_swap:
-                self.offloader_double.submit_move_blocks_forward(self.double_blocks, block_idx)
-
-        # --- Transition: double → single ---
-        if run_double_from < num_double:
-            # We ran some/all double blocks — build the fused tensor
-            img = torch.cat((txt, img), dim=1)
-            pe = torch.cat((pe_ctx, pe_x), dim=2)
-        else:
-            # Skipped all doubles — restore transition state
-            if run_single_from == 0:
-                img = cached.transition_img.to(vec.device)
-            else:
-                img = cached.single_outputs[run_single_from - 1].to(vec.device)
-            pe = cached.transition_pe.to(vec.device)
-
-        if new_cache is not None:
-            if run_double_from < num_double:
-                new_cache.transition_img = img.detach().clone()
-                new_cache.transition_pe = pe.detach().clone()
-            elif cached is not None:
-                new_cache.transition_img = cached.transition_img
-                new_cache.transition_pe = cached.transition_pe
-
-        # --- Single-stream blocks ---
-        if self.blocks_to_swap:
-            self.offloader_single.prepare_block_devices_before_forward(self.single_blocks)
-
-        for block_idx in range(num_single):
-            if block_idx < run_single_from:
-                # Skipped block — copy cached entry
-                if new_cache is not None and cached is not None:
-                    new_cache.single_outputs[block_idx] = cached.single_outputs[block_idx]
-                continue
-
-            if self.blocks_to_swap:
-                if block_idx == run_single_from and block_idx > 0:
-                    weighs_to_device(self.single_blocks[block_idx], vec.device)
-                self.offloader_single.wait_for_block(block_idx)
-
-            img = self.single_blocks[block_idx](img, pe, single_block_mod, attn_params)
-
-            if new_cache is not None:
-                new_cache.single_outputs[block_idx] = img.detach().clone()
-
-            if self.blocks_to_swap:
-                self.offloader_single.submit_move_blocks_forward(self.single_blocks, block_idx)
-
-        # --- Final layer ---
-        img = img.to(vec.device)
-        img = img[:, num_txt_tokens:, ...]
         img = self.final_layer(img, vec)
         return img
 

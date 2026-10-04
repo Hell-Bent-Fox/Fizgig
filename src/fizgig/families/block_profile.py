@@ -345,7 +345,7 @@ def _img(b64):
 
 def write_report(desc, lora_path, stats, abl, output_html, labels):
     """HTML report + Repair Studio sidecar. abl may be None (weights only)."""
-    from fizgig.profiler.visualize import compute_lora_hash
+    from fizgig.utils.lora_files import compute_lora_hash
     name = os.path.basename(lora_path)
     lora_hash = compute_lora_hash(lora_path)
     lab = lambda b: labels.get(b, "Outside the blocks" if b == OUTSIDE else b)

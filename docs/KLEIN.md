@@ -30,7 +30,7 @@ Klein is the model with a charted block map, which drives Model Area targeting, 
 
 The overlaps are real, so the Profiler reports five buckets (style+composition, style/identity overlap, identity, identity/detail overlap, details) rather than forcing each block into one. Style also concentrates at **late timesteps** (trainer `min_timestep=0, max_timestep=400`), so the Style area pairs the style+composition blocks with that range.
 
-On the workbench, Klein's Repair Studio has a slider for each of its 32 blocks (8 double + 24 single), and Extract's activation-weighted presets add block and timestep targeting on top of the Fast weight-only presets. Full tool descriptions are in [TRAINING.md](TRAINING.md#the-workbench).
+On the workbench, Klein's Repair Studio has a slider for each of its 32 blocks (8 double + 24 single), and Extract's presets keep one part of a LoRA — Identity, Style+Composition or Details — or any blocks you pick. Full tool descriptions are in [TRAINING.md](TRAINING.md#the-workbench).
 
 ## Model files
 

@@ -601,7 +601,7 @@ class H3RepairEngine:
                         len(self._primary_adaln))
         self._invalidate_baseline_cache()
         try:
-            from fizgig.profiler.visualize import compute_lora_hash
+            from fizgig.utils.lora_files import compute_lora_hash
             self.primary_hash = compute_lora_hash(path)
         except Exception:
             self.primary_hash = None
@@ -630,7 +630,7 @@ class H3RepairEngine:
         self.primary_path = path
         self.primary_block_ids = extract_block_ids_h3(self.primary_network)
         try:
-            from fizgig.profiler.visualize import compute_lora_hash
+            from fizgig.utils.lora_files import compute_lora_hash
             self.primary_hash = compute_lora_hash(path)
         except Exception:
             self.primary_hash = None
@@ -657,7 +657,7 @@ class H3RepairEngine:
         self.donor_path = path
         self.donor_block_ids = extract_block_ids_h3(net)
         try:
-            from fizgig.profiler.visualize import compute_lora_hash
+            from fizgig.utils.lora_files import compute_lora_hash
             self.donor_hash = compute_lora_hash(path)
         except Exception:
             self.donor_hash = None
