@@ -410,9 +410,14 @@ class FamilyDescription:
 
     # workbench tools that support this family ("repair", ...); the generic WorkbenchEngine drives them all
     workbench: tuple = ()
-    # the workbench engine class ("module:Class") when the generic WorkbenchEngine does not fit - a video family's
-    # (H3: clips, sound, keyframes, references, the render library). Built as Class(description).
+    # the workbench engine class ("module:Class") when the generic engines do not fit (a family with clips gets the
+    # generic video engine, families/video_workbench.py). H3 brings its own for keyframes, references and RefMod on
+    # top of the shared clip contract. Built as Class(description).
     workbench_engine: str = ""
+    # a video family's clip render regimes in the workbench: ((name, steps, speed LoRA strength), ...) - H3's "dial"
+    # (the fast loop) and "confirm" (the render that matches training previews). () = one regime, the speed LoRA's
+    # own steps and strength (or the default sampling without one)
+    clip_regimes: tuple = ()
     # Repair Studio built-ins beyond Reset All: (name, ((block id, strength), ...)) - every other block at 1.0
     repair_presets: tuple = ()
     # what each block carries, measured with the Profiler: ((block id, category), ...), category one of
@@ -465,19 +470,28 @@ class FamilyDescription:
         drv.description = self
         return drv
 
-    def make_workbench_engine(self):
-        """The family's workbench engine: its own class (workbench_engine) or the generic WorkbenchEngine."""
+    def workbench_engine_class(self):
+        """The class make_workbench_engine builds - read for its capabilities (supports_keyframes, ...) before any
+        engine exists."""
         import importlib
         if self.workbench_engine:
             mod, _, cls = self.workbench_engine.partition(":")
-            return getattr(importlib.import_module(mod), cls)(self)
+            return getattr(importlib.import_module(mod), cls)
+        if "clip" in self.media:
+            from fizgig.families.video_workbench import VideoWorkbenchEngine
+            return VideoWorkbenchEngine
         from fizgig.families.workbench import WorkbenchEngine
-        return WorkbenchEngine(self)
+        return WorkbenchEngine
+
+    def make_workbench_engine(self):
+        """The family's workbench engine: its own class (workbench_engine), else the generic video engine for a family
+        with clips, else the generic WorkbenchEngine."""
+        return self.workbench_engine_class()(self)
 
     @property
     def video_workbench(self) -> bool:
-        """The workbench tabs' clip features apply (a family with clips and its own video engine)."""
-        return "clip" in self.media and bool(self.workbench_engine)
+        """The workbench tabs' clip features apply (a family whose media include clips)."""
+        return "clip" in self.media
 
     def lora_prefix(self, block: int, module: str) -> str:
         """Key stem of one wrapped module, e.g. 'transformer.transformer_blocks.3.attn.to_q'."""

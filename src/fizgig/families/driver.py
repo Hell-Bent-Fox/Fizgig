@@ -216,6 +216,12 @@ class FamilyDriver:
         save_preview writes."""
         raise NotImplementedError
 
+    def decode_audio(self, vae, audio):
+        """A video family's sound on its own: generate()'s audio -> waveform [channels, L] (float, -1..1, on CPU), or
+        None (no sound decoder configured). The workbench decodes a clip's frames and its sound separately. Default:
+        no sound."""
+        return None
+
     def save_preview(self, result, path: str) -> list:
         """Write one decoded preview at `path` (the gallery's <name>_e<epoch>_<idx>_<timestamp>_<seed>.png) and return
         the files written. Default: the PNG. A video family writes its clip contract around it (the PNG last, as

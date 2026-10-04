@@ -178,6 +178,7 @@ class WorkbenchEngine:
         if speed_lora_path and sp is not None and os.path.exists(speed_lora_path):
             n = self.net.add_file(speed_lora_path, SPEED, sp.strength)
             self.net.move_adapter(SPEED, device)
+            self.driver.frozen_file_added(self.dit, speed_lora_path, sp.strength, "speed")
             self.speed = sp
             logger.info("%s workbench: speed LoRA %s on %d Linears", self.desc.display_name, sp.name, n)
         self.pipeline = _Loaded()
@@ -404,6 +405,7 @@ class WorkbenchEngine:
                 self.net.add_file(self._speed_path, SPEED, strength)
                 self.net.move_adapter(SPEED, self.device)
             self.net.set_strength(SPEED, strength)
+            self.driver.frozen_file_added(self.dit, self._speed_path, strength, "speed")
             self.net.set_enabled(SPEED, True)
             self.speed = sp
         else:

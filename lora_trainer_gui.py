@@ -18199,8 +18199,13 @@ class LoRATrainerGUI:
             # A path carried over from a Klein session must not sit invisibly in the state.
             self.repair_ref_path_var.set("")
             self.repair_state.ref_image_path = ""
-        # H3 renders clips: its own Length/Size/Regime/Sound row replaces the square Res combo,
-        # and the compare pop-out is a clip player.
+        # A video family renders clips: its Length/Size/Regime/Sound row replaces the square Res combo, and the
+        # compare pop-out is a clip player. What the family's engine adds beyond the clip contract (H3: keyframes,
+        # a base-model picker, the library's block banks) shows only for an engine that has it.
+        _cls = desc.workbench_engine_class() if (video and desc is not None) else None
+        _kf = bool(getattr(_cls, "supports_keyframes", False))
+        _modes = bool(getattr(_cls, "supports_base_modes", False))
+        _banks = bool(getattr(_cls, "supports_banks", False))
         try:
             if video:
                 self._repair_cmp_btn.configure(text="▶ Play clips + Metrics")
@@ -18209,7 +18214,9 @@ class LoRATrainerGUI:
                          "swap, scrub — with likeness + quality metrics on the middle frame")
                 self._repair_cache_row.grid()
                 self._repair_history_row.grid()
-                if not self._repair_kf_container.winfo_manager():
+                if not _kf:
+                    self._repair_kf_container.pack_forget()
+                elif not self._repair_kf_container.winfo_manager():
                     self._repair_kf_container.pack(fill=tk.X, padx=36, pady=(0, 16),
                                                    before=self._repair_profile_anchor)
             else:
@@ -18229,17 +18236,21 @@ class LoRATrainerGUI:
                 self._repair_h3_label.grid()
                 self._repair_h3_row.grid()
                 self._repair_scale_controls(True)
-                self._repair_h3_model_label.grid()
-                self._repair_h3_model_combo.grid()
-                self._repair_h3_base_label.grid()
-                self._repair_h3_base_combo.grid()
-                self._repair_kf_relabel()
-                if not self._repair_bulk_row.winfo_manager():
-                    self._repair_bulk_row.pack(side=tk.TOP, fill=tk.X, pady=(0, 6),
-                                               before=self._repair_sliders_host)
-                if not self._repair_bank_strip.winfo_manager():
-                    self._repair_bank_strip.pack(side=tk.TOP, fill=tk.X, pady=(0, 6),
-                                                 before=self._repair_sliders_host)
+                for _w in (self._repair_h3_model_label, self._repair_h3_model_combo, self._repair_h3_base_label,
+                           self._repair_h3_base_combo):
+                    _w.grid() if _modes else _w.grid_remove()
+                if _kf:
+                    self._repair_kf_relabel()
+                if not _banks:
+                    self._repair_bulk_row.pack_forget()
+                    self._repair_bank_strip.pack_forget()
+                else:
+                    if not self._repair_bulk_row.winfo_manager():
+                        self._repair_bulk_row.pack(side=tk.TOP, fill=tk.X, pady=(0, 6),
+                                                   before=self._repair_sliders_host)
+                    if not self._repair_bank_strip.winfo_manager():
+                        self._repair_bank_strip.pack(side=tk.TOP, fill=tk.X, pady=(0, 6),
+                                                     before=self._repair_sliders_host)
                 self._refresh_repair_h3_sound_state()
             else:
                 self._repair_h3_label.grid_remove()
@@ -22943,7 +22954,10 @@ class LoRATrainerGUI:
     def _repair_h3_ref_mode(self):
         """True when the H3 studio runs the ref2va checkpoint (a plain flag, safe from a
         worker thread — set on the Tk thread whenever the picker changes)."""
-        return self._repair_is_video() and bool(getattr(self, "_repair_h3_ref_flag", False))
+        if not (self._repair_is_video() and bool(getattr(self, "_repair_h3_ref_flag", False))):
+            return False
+        d = self._repair_desc()
+        return bool(d is not None and getattr(d.workbench_engine_class(), "supports_base_modes", False))
 
     def _repair_h3_dit_path(self):
         """The video family's checkpoint the Model picker asks for: its reference DiT (ref2va) or its DiT."""
@@ -23565,7 +23579,19 @@ class LoRATrainerGUI:
     # the pop-out becomes a player: both clips looping in lockstep, sound from the left pane
     # (winsound is one slot), a swap key to trade sides, scrub, frame-step and speed.
 
-    _REPAIR_H3_FPS = 24
+    @property
+    def _repair_audio_rate(self):
+        """The Repair Studio family's clip sound rate (its ClipSpec; H3: 32 kHz)."""
+        d = self._repair_desc() if self._repair_is_video() else None
+        spec = getattr(d, "clip_spec", None)
+        return spec.audio_rate if spec is not None else 32000
+
+    @property
+    def _REPAIR_H3_FPS(self):
+        """The Repair Studio family's clip frame rate (its ClipSpec; H3: 24)."""
+        d = self._repair_desc() if self._repair_is_video() else None
+        spec = getattr(d, "clip_spec", None)
+        return spec.fps if spec is not None else 24
 
     _REPAIR_KEEP = object()          # _set_repair_preview_clips: leave the no-LoRA clip alone
 
@@ -23580,7 +23606,7 @@ class LoRATrainerGUI:
             return None
         try:
             wav_path = os.path.join(tempfile.gettempdir(), f"fizgig_repair_{side}.wav")
-            write_wav(wav_path, clip["wav"])
+            write_wav(wav_path, clip["wav"], sample_rate=self._repair_audio_rate)
             return wav_path
         except Exception:
             return None
@@ -23764,6 +23790,7 @@ class LoRATrainerGUI:
         aborts the entry, which is retried; the stop event ends the thread between entries."""
         import time as _time
         from fizgig.minimax.sampling import PreviewAborted
+        from fizgig.families.workbench import RenderCancelled
         from fizgig.repair_studio.h3_render_cache import build_order, BASE_SIG
         from fizgig.repair_studio.state import SliderState
         eng = self.repair_engine
@@ -23811,7 +23838,7 @@ class LoRATrainerGUI:
                             rf = getattr(eng, "last_resume_from", None)
                             print(f"[repair] library: {bid} in {_time.time() - t0:.1f}s"
                                   + (f" (resumed at block {rf})" if rf is not None else ""))
-                        except PreviewAborted:
+                        except (PreviewAborted, RenderCancelled):
                             continue          # yielded to an interactive render — retry
                         finally:
                             self._repair_cache_busy = False
@@ -24615,9 +24642,10 @@ class LoRATrainerGUI:
                 import tempfile
                 wav_path = os.path.join(tempfile.gettempdir(), "fizgig_repair_save.wav")
                 if clip.get("wav") is not None:
-                    write_wav(wav_path, clip["wav"])
+                    write_wav(wav_path, clip["wav"], sample_rate=self._repair_audio_rate)
                 else:
-                    write_wav(wav_path, _t.zeros(2, int(32000 * len(frames) / self._REPAIR_H3_FPS)))
+                    write_wav(wav_path, _t.zeros(2, int(self._repair_audio_rate * len(frames) / self._REPAIR_H3_FPS)),
+                              sample_rate=self._repair_audio_rate)
                 write_preview_mp4(path, ten, wav_path, fps=self._REPAIR_H3_FPS)
                 status_var.set(f"Saved {os.path.basename(path)}.")
                 return
@@ -24626,7 +24654,7 @@ class LoRATrainerGUI:
             for i, f in enumerate(frames):
                 f.save(os.path.join(folder, f"frame_{i:03d}.png"))
             if clip.get("wav") is not None:
-                write_wav(os.path.join(folder, "sound.wav"), clip["wav"])
+                write_wav(os.path.join(folder, "sound.wav"), clip["wav"], sample_rate=self._repair_audio_rate)
             status_var.set(f"Saved {len(frames)} frames to {folder} "
                            "(no ffmpeg on the path — PNGs instead of an MP4).")
         except Exception as e:

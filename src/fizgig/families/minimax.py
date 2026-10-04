@@ -320,6 +320,8 @@ MINIMAX = FamilyDescription(
     precision_after_states=True,
     preview_park_optimizer=True,      # the old previews' optimizer-state park (~2.5 GB back for the render)
     # H3's clock (24 fps), its VAE's 17n+5 frame grid (5 ... 124) and /32 edges, its 32 kHz stereo audio VAE
+    # Dial = 4 steps at Turbo 1.0 (the fast loop), Confirm = 6 at 0.75 (the render that matches training previews)
+    clip_regimes=(("dial", 4, 1.0), ("confirm", 6, 0.75)),
     clip_spec=ClipSpec(fps=24, frame_step=17, frame_offset=5, max_frames=124, edge_multiple=32, audio_rate=32000,
                        audio_channels=2, mute_suffix="_mute", note="minimax/model.py FPS, pixel_frames_for_latent"),
 

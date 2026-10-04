@@ -793,6 +793,20 @@ class MiniMaxDriver(FamilyDriver):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
+    @torch.no_grad()
+    def decode_audio(self, vae, audio):
+        if audio is None or vae.get("audio") is None:
+            return None
+        from fizgig.minimax.audio_vae import unpack_audio
+        device = vae["device"]
+        adec = vae["audio"].to(device)
+        try:
+            return adec.decode(unpack_audio(audio).to(device, torch.float32))[0].float().clamp(-1, 1).cpu()
+        finally:
+            vae["audio"].to("cpu")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
     def save_preview(self, result, path):
         """The old previews' contract: a clip writes every 2nd frame as JPEG in <stem>.clip/, the wav and a playable
         mp4 beside it, then the middle frame as the PNG - LAST, the gallery's 'finished' signal."""
