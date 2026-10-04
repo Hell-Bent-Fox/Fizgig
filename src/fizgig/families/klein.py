@@ -34,22 +34,45 @@ KLEIN = FamilyDescription(
     lora_name_suffix="k9b",
     experimental=True,
 
-    # the old Klein Preferences rows (lora_trainer_gui.py "Model Paths"): one set of paths for both trainers
+    # the Preferences rows (the old hand-built "Model Paths (Klein 9B)" section, texts unchanged)
     model_files=(
-        ModelFile("base_dit", "DiT Base", True, f"{_BFL}/FLUX.2-klein-base-9b-fp8",
-                  "flux-2-klein-base-9b-fp8.safetensors", 9.6,
-                  "The undistilled base the LoRA trains on (BFL's fp8, or the bf16 from FLUX.2-klein-base-9B).",
-                  role="dit"),
-        ModelFile("vae", "VAE", True, f"{_BFL}/FLUX.2-dev", "ae.safetensors", 0.34,
-                  "ae.safetensors from the repo root, not vae/diffusion_pytorch_model.safetensors.", role="vae"),
-        ModelFile("text_encoder", "Text encoder", True, "Comfy-Org/vae-text-encorder-for-flux-klein-9b",
-                  "split_files/text_encoders/qwen_3_8b.safetensors", 16.4,
-                  "Qwen3-8B. Used for caching only, then unloaded before training steps.", role="text_encoder"),
-        ModelFile("distilled_dit", "DiT Distilled", False, f"{_BFL}/FLUX.2-klein-9b-fp8",
-                  "flux-2-klein-9b-fp8.safetensors", 9.5,
-                  "The 4-step model the workbench previews on.", role="preview_dit"),
+        ModelFile("base_dit", "Base DiT", True, f"{_BFL}/FLUX.2-klein-base-9b-fp8",
+                  "flux-2-klein-base-9b-fp8.safetensors", 9.5, role="dit", gated=True,
+                  hint="Klein 9B Base model (for training & precise profiling). Recommended: the fp8 version — same "
+                       "training quality, ~half the VRAM (stays resident at ~9.6GB, fits 16GB cards). The bf16 "
+                       "version is the larger alternative.",
+                  download_label="Download fp8 (recommended)",
+                  download_note="~9.5GB fp8 — Black Forest Labs (flux-2-klein-base-9b-fp8.safetensors)",
+                  alt_repo=f"{_BFL}/FLUX.2-klein-base-9B", alt_path="flux-2-klein-base-9b.safetensors",
+                  alt_label="Download bf16", alt_note="~17GB bf16 (flux-2-klein-base-9b.safetensors)"),
+        ModelFile("distilled_dit", "Distilled DiT", False, f"{_BFL}/FLUX.2-klein-9b-fp8",
+                  "flux-2-klein-9b-fp8.safetensors", 9.0, role="preview_dit", gated=True, fetch_optional=False,
+                  hint="Klein 9B Distilled model (for Repair Studio previews, fast profiling & diagnostics)",
+                  download_note="~9GB fp8 quantised — Black Forest Labs (flux-2-klein-9b-fp8.safetensors)"),
+        ModelFile("vae", "VAE / AE", True, f"{_BFL}/FLUX.2-dev", "ae.safetensors", 0.32, role="vae", gated=True,
+                  hint="Flux 2 AutoEncoder — use ae.safetensors from FLUX.2-dev root (NOT the vae/ subfolder "
+                       "Diffusers file)",
+                  download_note="~320MB  ·  get ae.safetensors from FLUX.2-dev root  ·  NOT "
+                                "vae/diffusion_pytorch_model.safetensors (Diffusers format, incompatible)"),
+        ModelFile("text_encoder", "Text Encoder", True, "Comfy-Org/vae-text-encorder-for-flux-klein-9b",
+                  "split_files/text_encoders/qwen_3_8b.safetensors", 15.0, role="text_encoder",
+                  hint="Qwen3-8B text encoder (used by Klein 9B)",
+                  download_note="~15GB single-file safetensors — Qwen3-8B packaged for Klein 9B (Comfy-Org)"),
     ),
     shares_prefs_with="klein",
+    prefs_title="Model Paths (Klein 9B)",
+    prefs_intro="Absolute paths to the four model files. Each row has a Download link that opens the HuggingFace "
+                "page in your browser.",
+    prefs_note="💡 Training Klein only? The Krea 2 Qwen3-VL text encoder is still worth having — the Captions tab "
+               "can caption ANY dataset with it, following an instruction you can edit, and it writes better "
+               "training captions than Florence-2. The download button below fetches it for you; nothing else about "
+               "Krea 2 is needed.",
+    fetch_note="Fetches the four files above plus the Krea 2 Qwen3-VL captioning text encoder (~39 GB all in) and "
+               "fills in these paths for you, plus the small helper models (Florence-2 captioner, face model for the "
+               "Look Filter and likeness scoring, EN→ZH translator, Gizmo's Whisper transcriber — ~1.9 GB) so "
+               "nothing stalls to download later and everything works offline. Black Forest Labs gate their "
+               "downloads, so you'll need a free HuggingFace token — Fizgig asks for it and tells you which pages to "
+               "accept the licence on.",
     text_encoder_label="Qwen3-8B",
     vae_label="FLUX.2 AE",
 

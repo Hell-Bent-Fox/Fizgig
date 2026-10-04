@@ -2,8 +2,8 @@
 
 Adding a family used to mean threading it through the GUI by hand (predicates, if-chains, Preferences
 blocks, preset dicts, command builders). A description holds the family's facts once; the GUI's generic
-paths read it. Klein, Krea 2 and MiniMax H3 are NOT described here: they keep their existing code paths
-untouched until this system has proven itself on a new family (Peter, 25 Sep 2026).
+paths read it - its Preferences section, Base Model rows, Multi Concept, Samples wording and queue summary
+included, so a new family plugs in without per-family GUI code.
 
 Every value that came from outside Fizgig carries its source (`source=` fields), so a later reader can
 re-check it when the upstream model or a speed LoRA moves on.
@@ -28,6 +28,26 @@ class ModelFile:
     role: str = ""                    # "dit" | "vae" | "text_encoder" | "training_adapter" | "speed_lora" |
     #                                   "preview_dit" (a separate model the workbench previews on, e.g. a distilled
     #                                   checkpoint; see preview_checkpoint_sampling) | ""
+    # Preferences row extras: the longer text under the row (else `note`), the Download link's label and the line
+    # beside it (else "~N GB - repo -> file"), and a second link to another build of the same file
+    hint: str = ""
+    download_label: str = ""
+    download_note: str = ""
+    alt_repo: str = ""
+    alt_path: str = ""
+    alt_label: str = ""
+    alt_note: str = ""
+    gated: bool = False               # the repo needs an accepted licence + a Hugging Face token to download
+    # the download button fetches it only with the section's optional tick (description.fetch_optional_label);
+    # None = not required -> optional
+    fetch_optional: Optional[bool] = None
+    # a file added after most users set the family up: its line in the one-time "new model files" popup (shown when
+    # the family's DiT is set but this file is not; description.announce_intro opens it). "" = never announced
+    announce: str = ""
+
+    @property
+    def fetch_is_optional(self) -> bool:
+        return (not self.required) if self.fetch_optional is None else bool(self.fetch_optional)
 
 
 @dataclass(frozen=True)
@@ -144,6 +164,9 @@ class FamilyOption:
     #                                   picked ("KEY=LABEL", matched as pick() matches)
     suggestions: tuple = ()           # entry: ready-made values offered in an editable dropdown ("6-49 · why")
     mode: str = ""                    # "finetune": shown and sent for a fine-tune only; "lora": for a LoRA only
+    # a queued run's one-line summary shows this while the option is away from its default ("{}" = its value;
+    # a check shows it while ticked); "" = never shown
+    summary: str = ""
 
     def choice_labels(self):
         return [c[0] for c in self.choices]
@@ -199,16 +222,37 @@ class FamilyDescription:
     model_files: tuple = ()
     text_encoder_label: str = ""
     vae_label: str = ""
-    # an old family already in the Preferences tab whose rows these model files are ("klein"): no section of its own
+    # the name its workbench files (Repair Studio presets folder, metrics table) were kept under before the family
+    # moved to the driver system ("klein"); "" = its key
     shares_prefs_with: str = ""
-    # a tip under the family's Preferences section (e.g. filling the paths by hand from a ComfyUI install)
+    # the family's Preferences section: its title ("" = "<display name> model paths"), the paragraph under the title
+    # ("" = a generic line), a tip at its foot (e.g. filling the paths by hand from a ComfyUI install), the line under
+    # the download button ("" = generated) and the label of the button's optional tick ("" = no tick: every file
+    # fetches)
+    # a line under the Training tab's Base Model picker while the family is selected (e.g. what its previews are)
+    model_note: str = ""
+    # the Samples tab's wording for the family, as (place, text) pairs over the generic text - places: "banner",
+    # "advanced", "flow", "neg", "cfg", "steps"; samples_cfg_free: previews render without CFG on a fixed schedule,
+    # so the Advanced card (flow shift, negative, CFG) and the sample-model / reference rows hide
+    samples_text: tuple = ()
+    samples_cfg_free: bool = False
+    prefs_title: str = ""
+    prefs_intro: str = ""
     prefs_note: str = ""
+    fetch_note: str = ""
+    fetch_optional_label: str = ""
+    # the "new model files" popup's opening line (the files themselves: ModelFile.announce)
+    announce_intro: str = ""
 
     # what one training item may be: "photo", "clip" (frames + optional sound), "voice" (sound only)
     media: tuple = ("photo",)
     # Multi Concept: extra subject folders, each its own dataset block (H3: reference distillation pairs each image
-    # only with others of its own subject - the reference rotation runs per block)
+    # only with others of its own subject - the reference rotation runs per block). multi_concept_defaults: the family
+    # options a click on the box sets ((option key, value) pairs, still editable after); multi_concept_hint: a line
+    # added to the box's hint
     multi_concept: bool = False
+    multi_concept_defaults: tuple = ()
+    multi_concept_hint: str = ""
     clip_spec: Optional[ClipSpec] = None
 
     # latent rules

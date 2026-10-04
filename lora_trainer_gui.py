@@ -4007,87 +4007,42 @@ class LoRATrainerGUI:
         _dismiss_lbl.bind("<Button-1>", lambda e: _dismiss_setup_prompt())
 
         def _check_model_paths(*_args):
-            # Hidden forever once dismissed; otherwise satisfied by EITHER family being
-            # usable — Klein's four paths, or Krea 2's training trio (the Turbo checkpoint is
-            # only for the Repair Studio / Explorer / Royale tools; previews use the Turbo LoRA).
+            # Hidden forever once dismissed; otherwise satisfied by any one family being usable (its
+            # description's required paths all set).
             if self.prefs.get("setup_prompt_dismissed"):
                 self._setup_prompt_frame.pack_forget()
                 return
-            klein_ok = all(self.prefs_vars[k].get().strip()
-                           for k in ("base_dit", "distilled_dit", "vae", "text_encoder"))
-            krea_ok = all(self.prefs_vars[k].get().strip()
-                          for k in ("krea2_raw_dit", "krea2_vae", "krea2_text_encoder"))
-            # standard-layer families count too: any one fully set up satisfies the prompt
-            described_ok = any(all(self.prefs_vars[k].get().strip() for k in _d.required_pref_keys)
-                               for _d in DESCRIBED_FAMILIES.values())
-            if klein_ok or krea_ok or described_ok:
+            if any(all(self.prefs_vars[k].get().strip() for k in _d.required_pref_keys)
+                   for _d in DESCRIBED_FAMILIES.values()):
                 self._setup_prompt_frame.pack_forget()
             else:
                 self._setup_prompt_frame.pack(fill=tk.X, pady=(20, 0),
                                                before=tools_card)
 
-        # Re-check whenever a model path (either family) changes
-        for _mk in ("base_dit", "distilled_dit", "vae", "text_encoder",
-                    "krea2_raw_dit", "krea2_vae", "krea2_text_encoder",
-                    *[k for _d in DESCRIBED_FAMILIES.values() for k in _d.required_pref_keys]):
+        # Re-check whenever a family's required model path changes
+        for _mk in {k for _d in DESCRIBED_FAMILIES.values() for k in _d.required_pref_keys}:
             self.prefs_vars[_mk].trace_add("write", _check_model_paths)
 
         # Initial check (deferred so tools_card exists)
         self.master.after(100, _check_model_paths)
 
-        def _check_minimax_extras():
-            # An H3 user (DiT set) missing the NEW files — the Audio VAE and the Turbo LoRA
-            # both arrived after most people set up their paths, so nothing else would ever
-            # tell them these exist (Peter). One popup, dismissable forever.
-            if self.prefs.get("minimax_extras_prompt_dismissed"):
-                return
-            if not str(self.prefs.get("minimax_dit", "") or "").strip():
-                return
-            missing = [label for key, label in (
-                ("minimax_audio_vae",
-                 "Audio VAE (~605 MB) — train on the sound in video clips, and on voices"),
-                ("minimax_turbo_lora",
-                 "Turbo LoRA (~780 MB) — fast 6-step in-training previews"),
-                ("minimax_circlestone_adapter",
-                 "Training adapter (Circlestone, ~620 MB) — sharper, higher likeness"))
-                if not str(self.prefs.get(key, "") or "").strip()]
-            if not missing:
-                return
-            win = tk.Toplevel(self.master)
-            win.title("MiniMax H3 — new model files")
-            win.configure(bg=COLORS["bg_deep"], padx=20, pady=16)
-            win.transient(self.master)
-            win.resizable(False, False)
-            tk.Label(win, text="Your MiniMax H3 setup is missing the new files",
-                     font=(FONT_FAMILY, 12, "bold"), bg=COLORS["bg_deep"],
-                     fg=COLORS["text_primary"]).pack(anchor=tk.W)
-            tk.Label(win, text="Fizgig can now train on video, sound and voices, and render "
-                               "fast Turbo previews. Your H3 model paths are set, but these "
-                               "are not:\n\n"
-                               + "\n".join(f"  •  {m}" for m in missing)
-                               + "\n\nPreferences has a download link on each row — or press "
-                                 "Download models for me and point it at your models folder.",
-                     font=(FONT_FAMILY, 10), justify=tk.LEFT, wraplength=520,
-                     bg=COLORS["bg_deep"], fg=COLORS["text_explain"]).pack(
-                anchor=tk.W, pady=(8, 12))
-            row = tk.Frame(win, bg=COLORS["bg_deep"])
-            row.pack(anchor=tk.E)
-
-            def _to_prefs():
-                win.destroy()
-                self.notebook.select(self.prefs_tab)
-
-            def _never():
-                self.prefs["minimax_extras_prompt_dismissed"] = True
-                save_prefs(self.prefs)
-                win.destroy()
-
-            ttk.Button(row, text="Open Preferences", command=_to_prefs).pack(side=tk.LEFT)
-            ttk.Button(row, text="Later", command=win.destroy).pack(side=tk.LEFT, padx=(8, 0))
-            ttk.Button(row, text="Don't ask again", command=_never).pack(side=tk.LEFT,
-                                                                         padx=(8, 0))
-        self._check_minimax_extras = _check_minimax_extras     # bound for tests / re-checks
-        self.master.after(700, _check_minimax_extras)
+        def _check_new_model_files():
+            # A family whose DiT is set but which is missing files added since most people set it up
+            # (ModelFile.announce: H3's Audio VAE, Turbo LoRA and Circlestone adapter) - nothing else would
+            # ever tell them these exist (Peter). One popup per family, dismissable forever.
+            for d in DESCRIBED_FAMILIES.values():
+                dismiss_key = f"{d.shares_prefs_with or d.key}_extras_prompt_dismissed"
+                if self.prefs.get(dismiss_key):
+                    continue
+                if not str(self.prefs.get(d.pref_for("dit"), "") or "").strip():
+                    continue
+                missing = [f.announce for f in d.model_files
+                           if f.announce and not str(self.prefs.get(f.pref_key, "") or "").strip()]
+                if missing:
+                    self._new_model_files_popup(d, missing, dismiss_key)
+                    return                      # one popup at a time; the next family's waits for the next start
+        self._check_new_model_files = _check_new_model_files     # bound for tests / re-checks
+        self.master.after(700, _check_new_model_files)
         # The audio-aware Training-tab rows (grey-outs, the voice-structure hint, the
         # per-category retirement row) refresh on folder-change traces — but the RESTORED
         # folder's trace fires during startup, before those widgets exist, and nothing
@@ -4156,6 +4111,39 @@ class LoRATrainerGUI:
                         or os.getcwd()))
         if folder:
             self._concept_folder_vars[0].set(folder)
+
+    def _new_model_files_popup(self, d, missing, dismiss_key):
+        """The "new model files" popup for one family (see _check_new_model_files)."""
+        win = tk.Toplevel(self.master)
+        win.title(f"{d.display_name} — new model files")
+        win.configure(bg=COLORS["bg_deep"], padx=20, pady=16)
+        win.transient(self.master)
+        win.resizable(False, False)
+        tk.Label(win, text=f"Your {d.display_name} setup is missing the new files",
+                 font=(FONT_FAMILY, 12, "bold"), bg=COLORS["bg_deep"],
+                 fg=COLORS["text_primary"]).pack(anchor=tk.W)
+        tk.Label(win, text=(f"{d.announce_intro} " if d.announce_intro else "")
+                 + f"Your {d.display_name} model paths are set, but these are not:\n\n"
+                 + "\n".join(f"  •  {m}" for m in missing)
+                 + "\n\nPreferences has a download link on each row — or press "
+                   "Download models for me and point it at your models folder.",
+                 font=(FONT_FAMILY, 10), justify=tk.LEFT, wraplength=520,
+                 bg=COLORS["bg_deep"], fg=COLORS["text_explain"]).pack(anchor=tk.W, pady=(8, 12))
+        row = tk.Frame(win, bg=COLORS["bg_deep"])
+        row.pack(anchor=tk.E)
+
+        def _to_prefs():
+            win.destroy()
+            self.notebook.select(self.prefs_tab)
+
+        def _never():
+            self.prefs[dismiss_key] = True
+            save_prefs(self.prefs)
+            win.destroy()
+
+        ttk.Button(row, text="Open Preferences", command=_to_prefs).pack(side=tk.LEFT)
+        ttk.Button(row, text="Later", command=win.destroy).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(row, text="Don't ask again", command=_never).pack(side=tk.LEFT, padx=(8, 0))
 
     def _sync_distill_weight_state(self):
         """Grey the teacher-weight box while identity-first is running the show.
@@ -4246,6 +4234,80 @@ class LoRATrainerGUI:
         self._sync_distill_weight_state()
         if self.minimax_multiconcept_var.get() and self.minimax_distill_var.get():
             self._warn_if_no_ref_dit()
+
+    _MULTICONCEPT_HINT = ("Each folder needs its OWN trigger word, in every caption — that is the only thing "
+                          "telling the subjects apart. Caption and prep every folder yourself first; this box is "
+                          "training-only.")
+
+    def _on_multiconcept_clicked(self):
+        """The family Multi Concept box CLICKED: apply the family's recipe (description.multi_concept_defaults - still
+        editable), then show the rows. Not on a family switch or a preset load: that would overwrite what the user
+        changed every time the tab is visited."""
+        d = self._family_desc()
+        if self.multiconcept_var.get() and d is not None:
+            changed = []
+            for key, value in d.multi_concept_defaults:
+                var = getattr(self, "_family_opt_vars", {}).get(key)
+                if var is not None and str(var.get()) != value:
+                    var.set(value)
+                    changed.append(f"{next((o.label for o in d.options if o.key == key), key)} = {value}")
+            if changed:
+                self.update_console("[multi concept] applied: " + ", ".join(changed) + "  (all still editable)\n")
+        self._on_multiconcept_toggle()
+
+    def _on_multiconcept_toggle(self):
+        """The family Multi Concept box and its folder row, for the selected family."""
+        d = self._family_desc()
+        offered = bool(d is not None and d.multi_concept)
+        self._set_widget_visible(self._mc_box, offered)
+        if not offered:
+            return
+        on = bool(self.multiconcept_var.get())
+        self._mc_hint.configure(text=" ".join(t for t in (self._MULTICONCEPT_HINT, d.multi_concept_hint) if t))
+        for w in (self._mc_dir_row, self._mc_hint):
+            if on and not w.winfo_manager():
+                w.pack(anchor=tk.W, fill=tk.X, pady=(2, 0))
+            elif not on and w.winfo_manager():
+                w.pack_forget()
+
+    def _multiconcept_on(self) -> bool:
+        """Multi Concept is ticked for the selected Base Model (the family box, or the old H3 row)."""
+        d = self._family_desc()
+        if d is not None:
+            return bool(d.multi_concept and getattr(self, "multiconcept_var", None) is not None
+                        and self.multiconcept_var.get())
+        return bool(getattr(self, "minimax_multiconcept_var", None) is not None
+                    and self.minimax_multiconcept_var.get() and self._multiconcept_arch())
+
+    def _multiconcept_problems(self) -> list:
+        """Start-time checks for the extra subject folders: each becomes its own [[datasets]] block, so it has to
+        exist, be distinct, and carry its own captions. The dataset layer refuses two blocks sharing a
+        cache_directory, and the cache path hashes a case-folded, slash-stripped path — so C:\\A and c:/a/ are the
+        SAME folder as far as it cares."""
+        if not self._multiconcept_on():
+            return []
+        errors = []
+        _seen = {self.image_folder_var.get().strip().lower().replace("\\", "/").rstrip("/")}
+        _extra = [v.get().strip() for v in getattr(self, "_concept_folder_vars", [])]
+        if not any(_extra):
+            errors.append("Multi Concept is on but no second subject folder is set — pick one, or turn the mode off.")
+        for _f in _extra:
+            if not _f:
+                continue
+            _norm = _f.lower().replace("\\", "/").rstrip("/")
+            if _norm in _seen:
+                errors.append(f"Multi Concept: {_f} is the same folder as another subject — each needs its own "
+                              f"folder.")
+                continue
+            _seen.add(_norm)
+            if not os.path.isdir(_f):
+                errors.append(f"Multi Concept: folder does not exist: {_f}")
+                continue
+            _ext = (self.dataset_caption_ext_var.get().strip() or ".txt")
+            if not any(fn.lower().endswith(_ext.lower()) for fn in os.listdir(_f)):
+                errors.append(f"Multi Concept: no {_ext} captions in {_f}. Caption both folders before training — "
+                              f"each subject needs its own trigger word in every caption, or they will blend.")
+        return errors
 
     def _on_minimax_multiconcept_toggle(self):
         """Show the extra folder row. Caption dropout is deliberately NOT touched.
@@ -4378,6 +4440,15 @@ class LoRATrainerGUI:
             self._minimax_sample_note.pack(anchor=tk.W, pady=(10, 0))
             if not self._is_minimax_arch() or self._is_refmod_arch():
                 self._minimax_sample_note.pack_forget()   # RefMod has no previews
+
+            # A family's own Base Model rows (options with tab="model": MiniMax H3's Training Base) and its note
+            # (description.model_note), rebuilt per family by _family_model_card_rows. Model-card options are
+            # preset-immune; Last Train and the queue carry them beside the preset.
+            self._model_opt_vars = {}
+            self._model_opts_frame = tk.Frame(model_card, bg=COLORS["bg_surface"])
+            self._family_model_note = tk.Label(model_card, text="", font=(FONT_FAMILY, 9),
+                                               fg=COLORS["text_explain"], bg=COLORS["bg_surface"],
+                                               wraplength=760, justify=tk.LEFT)
 
             # MiniMax H3 RefMod: the whole job is two dropdowns, shown here in place of the
             # Training-tab sections (which _apply_refmod_visibility hides). Registered in
@@ -5147,6 +5218,28 @@ class LoRATrainerGUI:
         self.minimax_multiconcept_var.trace_add("write", lambda *_a: self._refresh_minimax_adapter_hint())
         for _cv in self._concept_folder_vars:
             _cv.trace_add("write", lambda *_a: self._refresh_minimax_adapter_hint())
+
+        # --- Multi Concept — any family whose description offers it (description.multi_concept) -------------------
+        # Each extra subject folder becomes its own [[datasets]] block with its own cache folder (families/launch.py
+        # dataset_toml). Shares the subject-folder list with the old H3 rows above.
+        self.multiconcept_var = tk.BooleanVar(value=bool(self.settings.get(
+            "FAMILY_MULTICONCEPT", self.settings.get("MINIMAX_MULTICONCEPT", False))))
+        self._mc_box = tk.Frame(training_content, bg=COLORS["bg_surface"])
+        self._mc_box.grid(row=50, column=0, columnspan=3, sticky=tk.EW, padx=5, pady=(8, 0))
+        ttk.Checkbutton(self._mc_box, text="Multi Concept — a second subject in its own folder",
+                        variable=self.multiconcept_var, command=self._on_multiconcept_clicked).pack(anchor=tk.W)
+        self._mc_dir_row = ttk.Frame(self._mc_box)
+        ttk.Label(self._mc_dir_row, text="Subject 2 folder:").pack(side=tk.LEFT, padx=(20, 6))
+        ttk.Entry(self._mc_dir_row, textvariable=self._concept_folder_vars[0], state="readonly",
+                  width=52).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(self._mc_dir_row, text="Browse…", command=self._browse_concept_folder).pack(side=tk.LEFT,
+                                                                                              padx=(6, 0))
+        ttk.Button(self._mc_dir_row, text="Clear",
+                   command=lambda: self._concept_folder_vars[0].set("")).pack(side=tk.LEFT, padx=(4, 0))
+        self._mc_hint = ttk.Label(self._mc_box, text="", foreground=COLORS["text_explain"], font=HINT_FONT,
+                                  justify=tk.LEFT, wraplength=720)
+        if hasattr(self, "_auto_save_ds"):
+            self.multiconcept_var.trace_add("write", self._auto_save_ds)    # the [[datasets]] blocks follow it
 
         # --- Slow blocks (MiniMax only, experimental): depth-dependent LR -------------------
         self._minimax_slow_label = ttk.Label(training_content, text="Slower LR for blocks:")
@@ -6733,6 +6826,10 @@ class LoRATrainerGUI:
                 _v.set(str(_dirs[_i]).strip() if _i < len(_dirs) else "")
         if "MINIMAX_MULTICONCEPT" in preset and hasattr(self, "minimax_multiconcept_var"):
             self.minimax_multiconcept_var.set(bool(preset["MINIMAX_MULTICONCEPT"]))
+        if "FAMILY_MULTICONCEPT" in preset and hasattr(self, "multiconcept_var"):
+            self.multiconcept_var.set(bool(preset["FAMILY_MULTICONCEPT"]))
+        if hasattr(self, "multiconcept_var"):
+            self._on_multiconcept_toggle()
         # Re-run unconditionally: a preset that carries MINIMAX_CAPTION_DROPOUT (the Defaults one
         # does) would otherwise leave the box showing 0.05 while Multi Concept is on. Training
         # was never at risk - the command builder locks it either way - but the UI would lie.
@@ -6817,6 +6914,7 @@ class LoRATrainerGUI:
             if hasattr(self, "minimax_train_base_var"):
                 snapshot["__minimax_train_base__"] = minimax_train_base(
                     self.minimax_train_base_var.get())
+            snapshot["__model_options__"] = self._model_opt_values()
             with open(LAST_TRAIN_FILE, "w", encoding="utf-8") as f:
                 json.dump(snapshot, f, indent=2, default=str)
         except Exception as e:
@@ -6847,10 +6945,12 @@ class LoRATrainerGUI:
             # Training Base rides beside the preset, not in it (preset-immune by design) —
             # pop before applying so _apply_preset_values never sees it even by accident.
             _base = snapshot.pop("__minimax_train_base__", None)
+            _mopts = snapshot.pop("__model_options__", None)
             self._apply_preset_values(snapshot)
             if _base and hasattr(self, "minimax_train_base_var"):
                 self.minimax_train_base_var.set(MINIMAX_TRAIN_BASE_OPTIONS[
                     1 if minimax_train_base(_base) == "ref2va" else 0])
+            self._apply_model_opt_values(_mopts)
             messagebox.showinfo("Loaded",
                                 f"Restored settings from your last training launch.{_switched}")
         except Exception as e:
@@ -6957,6 +7057,7 @@ class LoRATrainerGUI:
             "minimax_train_base": minimax_train_base(
                 getattr(self, "minimax_train_base_var", None)
                 and self.minimax_train_base_var.get()),
+            "model_options": self._model_opt_values(),
         }
 
     def _apply_queue_item(self, item):
@@ -6975,6 +7076,7 @@ class LoRATrainerGUI:
         if _base and hasattr(self, "minimax_train_base_var"):
             self.minimax_train_base_var.set(MINIMAX_TRAIN_BASE_OPTIONS[
                 1 if minimax_train_base(_base) == "ref2va" else 0])
+        self._apply_model_opt_values(item.get("model_options"))
         folder = str(item.get("image_folder") or "").strip()
         if folder:
             self.image_folder_var.set(folder)   # traces regenerate Fizgig_train.toml
@@ -7005,7 +7107,7 @@ class LoRATrainerGUI:
         try:
             return json.dumps({k: item.get(k) for k in
                                ("architecture", "image_folder", "preset", "samples",
-                                "minimax_train_base")},
+                                "minimax_train_base", "model_options")},
                               sort_keys=True, default=str)
         except Exception:
             return repr(item)
@@ -7244,10 +7346,15 @@ class LoRATrainerGUI:
         try:
             from fizgig.dataset.image_dataset import IMAGE_EXTENSIONS
             _exts = {e.lower() for e in IMAGE_EXTENSIONS}
-            # Clips and voice recordings are training items too — count them or a MiniMax
-            # clip/audio folder reads "(0 images)" and looks like a queued mistake.
-            if "MiniMax" in str(item.get("architecture", "")):
-                _exts |= {".mp4"} | self.TRAINING_AUDIO_EXTENSIONS
+            # Clips and voice recordings are training items too — count them or a clip/audio
+            # folder reads "(0 images)" and looks like a queued mistake.
+            _qd = self._family_desc(item.get("architecture", ""))
+            _qmedia = set(_qd.media) if _qd is not None else (
+                {"clip", "voice"} if ARCHITECTURES.get(item.get("architecture", ""), {}).get("is_minimax") else set())
+            if "clip" in _qmedia:
+                _exts |= set(self.TRAINING_VIDEO_EXTENSIONS)
+            if "voice" in _qmedia:
+                _exts |= self.TRAINING_AUDIO_EXTENSIONS
             n_imgs = sum(1 for f in os.listdir(folder)
                          if os.path.splitext(f)[1].lower() in _exts) if os.path.isdir(folder) else 0
         except Exception:
@@ -7257,7 +7364,9 @@ class LoRATrainerGUI:
                 f"{os.path.basename(folder) or '?'} ({n_imgs} items)"]
         # The rate the run will actually use: Automagic owns it from the LR box's value; Adaptive LR
         # ignores the box and works between Min and Max (MiniMax retired Adaptive LR in place).
-        _is_mm = ARCHITECTURES.get(item.get("architecture", ""), {}).get("is_minimax")
+        _qdesc = self._family_desc(item.get("architecture", ""))
+        _is_mm = (ARCHITECTURES.get(item.get("architecture", ""), {}).get("is_minimax")
+                  or (_qdesc is not None and not _qdesc.adaptive_lr))
         _lr = p.get("LEARNING_RATE")
         if str(p.get("OPTIMIZER_TYPE") or "").strip().lower() == "automagic3":
             bits.append(f"Automagic from {_lr}")
@@ -7273,8 +7382,18 @@ class LoRATrainerGUI:
             v = p.get(key)
             if v not in (None, ""):
                 bits.append(f"{label} {v}")
-        # Detail Focus only means anything for MiniMax, and it's the whole point of queueing a
-        # shift sweep — without it two rows of an A/B look identical in the manager.
+        # A family's own options name their summary bits (FamilyOption.summary): without them two rows of
+        # an A/B (a shift sweep, say) look identical in the manager.
+        for _o in (_qdesc.options if _qdesc is not None else ()):
+            if not _o.summary or _o.key not in p:
+                continue
+            _v = str(p.get(_o.key) or "").strip()
+            if _o.kind == "check":
+                if _v in ("1", "True", "true"):
+                    bits.append(_o.summary.format(_v))
+            elif _v and _v != (_o.pick(_o.default) if _o.kind == "choice" else str(_o.default)):
+                bits.append(_o.summary.format(_v.split("·")[0].strip()))
+        # The old H3 trainer's own keys
         if ARCHITECTURES.get(item.get("architecture", ""), {}).get("is_minimax"):
             _sh = str(p.get("MINIMAX_LOWNOISE_PCT") or "").strip()
             if _sh:
@@ -7936,6 +8055,7 @@ class LoRATrainerGUI:
         # and silently becomes an ordinary run (tests/test_minimax_distill_gui.py).
         _grab("minimax_distill_var", "MINIMAX_DISTILL")
         _grab("minimax_multiconcept_var", "MINIMAX_MULTICONCEPT")
+        _grab("multiconcept_var", "FAMILY_MULTICONCEPT")
         _grab("grad_checkpoint_var", "GRADIENT_CHECKPOINTING")
         _grab("fp8_text_encoder_var", "FP8_TEXT_ENCODER")
         _grab("adaptive_lr_var", "ADAPTIVE_LR")
@@ -8718,9 +8838,8 @@ class LoRATrainerGUI:
     def _family_option_value(self, opt):
         """An option's current value: its own setting once set, else the old setting it maps (the old widget first),
         else its default - a Samples-tab option always reads that tab's live control. Checks read as "1" / ""."""
-        if opt.tab == "model":           # the Training Base row's own var (old H3 and RefMod share it)
-            var = getattr(self, self._MODEL_CARD_VARS.get(opt.setting, ""), None)
-            return opt.pick(var.get() if var is not None else opt.default)
+        if opt.tab == "model":           # a Base Model card row (_family_model_card_rows)
+            return opt.pick(self._model_opt_var(opt).get())
         e = self.entries.get(opt.setting) if opt.setting else None
         v = None
         if opt.tab == "samples" and e is not None:
@@ -8748,12 +8867,70 @@ class LoRATrainerGUI:
                 return sg
         return str(v)
 
-    # A model-card option's control: the existing row's var, keyed by the option's setting
-    _MODEL_CARD_VARS = {"MINIMAX_TRAIN_BASE": "minimax_train_base_var"}
+    def _model_card_desc(self):
+        """The description whose Base Model card rows show: the selected family's, or MiniMax H3's under RefMod (a
+        RefMod runs on H3's files and Training Base)."""
+        return self._rms_desc() if self._is_refmod_arch() else self._family_desc()
 
     def _family_model_card_opts(self):
-        d = self._family_desc()
+        d = self._model_card_desc()
         return [o for o in (d.options if d is not None else ()) if o.tab == "model"]
+
+    def _model_opt_var(self, opt):
+        """A model-card option's control var, made once per option key so it outlives family switches: its own
+        setting, else the setting it maps (MINIMAX_TRAIN_BASE's "ref2va"), else its default."""
+        v = self._model_opt_vars.get(opt.key)
+        if v is None:
+            raw = self.settings.get(opt.key, self.settings.get(opt.setting) if opt.setting else None)
+            v = tk.StringVar(value=opt.pick(raw if raw is not None else opt.default))
+            v.trace_add("write", lambda *_a, o=opt, var=v: self.settings.__setitem__(o.key, var.get()))
+            self._model_opt_vars[opt.key] = v
+        return v
+
+    def _model_opt_label(self, setting):
+        """The current label of the model-card option that maps `setting` (e.g. MINIMAX_TRAIN_BASE), or None."""
+        o = next((o for o in self._family_model_card_opts() if o.setting == setting), None)
+        return self._model_opt_var(o).get() if o is not None else None
+
+    def _model_opt_values(self):
+        """{option key: label} of the selected family's model-card rows (Last Train, the queue)."""
+        return {o.key: self._model_opt_var(o).get() for o in self._family_model_card_opts()}
+
+    def _apply_model_opt_values(self, vals):
+        for o in self._family_model_card_opts():
+            if isinstance(vals, dict) and vals.get(o.key):
+                self._model_opt_var(o).set(o.pick(vals[o.key]))
+
+    def _family_model_card_rows(self):
+        """Rebuild the Base Model card's family rows: one dropdown per model-card option (with its hint), then the
+        family's note. Packed right under the Base Model picker, above any RefMod controls."""
+        if not hasattr(self, "_model_opts_frame"):
+            return
+        f = self._model_opts_frame
+        for w in f.winfo_children():
+            w.destroy()
+        opts = self._family_model_card_opts()
+        for o in opts:
+            row = tk.Frame(f, bg=COLORS["bg_surface"])
+            row.pack(anchor=tk.W, pady=(10, 0))
+            tk.Label(row, text=f"{o.label}:", font=(FONT_FAMILY, 10), fg=COLORS["text_secondary"],
+                     bg=COLORS["bg_surface"]).pack(side=tk.LEFT, padx=(0, 8))
+            ttk.Combobox(row, textvariable=self._model_opt_var(o), values=list(o.choice_labels()), state="readonly",
+                         width=max(20, o.width or 36)).pack(side=tk.LEFT)
+            if o.hint:
+                tk.Label(f, text=o.hint, font=HINT_FONT, fg=COLORS["text_explain"], bg=COLORS["bg_surface"],
+                         wraplength=760, justify=tk.LEFT).pack(anchor=tk.W, pady=(2, 0))
+        d = self._family_desc()
+        note = d.model_note if d is not None else ""
+        self._family_model_note.configure(text=note)
+        _after = [w for w in (getattr(self, "_refmod_frame", None), getattr(self, "_minimax_sample_note", None))
+                  if w is not None and w.winfo_manager()]
+        _kw = {"before": _after[0]} if _after else {}
+        for w, on in ((f, bool(opts)), (self._family_model_note, bool(note))):
+            if on and not w.winfo_manager():
+                w.pack(anchor=tk.W, pady=(0 if w is f else 10, 0), **_kw)
+            elif not on and w.winfo_manager():
+                w.pack_forget()
 
     def _family_option_store(self, opt, value):
         """An option's value into its own setting (never the old key it was seeded from: the old H3 path reads
@@ -8921,7 +9098,7 @@ class LoRATrainerGUI:
         """Show each option row only where it applies to the training folder's media (FamilyOption.show_if_media /
         mixed_only - the launch applies the same rule, so a hidden row never sends anything)."""
         rows = getattr(self, "_family_opt_rows", None)
-        if not rows:
+        if not rows or self._family_desc() is None:     # rows left by the family just switched away from
             return
         from fizgig.families import launch as _fl
         media = _fl.dataset_media(self.image_folder_var.get().strip())
@@ -9372,7 +9549,7 @@ class LoRATrainerGUI:
         _note = getattr(self, "_minimax_sample_note", None)
         if _note is not None:
             _clipfam = "clip" in getattr(self._family_desc(), "media", ())
-            if (is_minimax and not self._is_refmod_arch()) or _clipfam:   # RefMod has no previews
+            if is_minimax and not self._is_refmod_arch():   # RefMod has no previews; a family has model_note
                 if not _note.winfo_manager():
                     _note.pack(anchor=tk.W, pady=(10, 0))
             elif _note.winfo_manager():
@@ -9382,7 +9559,7 @@ class LoRATrainerGUI:
         _brow = getattr(self, "_minimax_base_frame", None)
         if _brow is not None:
             _bhint = self._minimax_base_hint
-            if is_minimax or self._family_model_card_opts():
+            if is_minimax and not self._is_refmod_arch():     # the old H3 trainer's own row
                 if not _brow.winfo_manager():
                     _kw = {"before": _note} if (_note is not None
                                                 and _note.winfo_manager()) else {}
@@ -9391,6 +9568,8 @@ class LoRATrainerGUI:
             elif _brow.winfo_manager():
                 _brow.pack_forget()
                 _bhint.pack_forget()
+
+        self._family_model_card_rows()
 
         # The live-override REFERENCE image is a Klein edit-model feature. Neither native family
         # is an edit model, and their trainers ignore the field — so hide the picker rather than
@@ -9504,13 +9683,11 @@ class LoRATrainerGUI:
         self._sync_minimax_likeness_state()
         # The clips-only adapter advice shows and hides itself (text only under MiniMax).
         self._refresh_minimax_adapter_hint()
-        # Multi Concept also for a described family that offers it (MiniMax H3 through the driver)
-        _fdm = self._family_desc()
-        if _fdm is not None and _fdm.multi_concept:
-            self._set_widget_visible(self._minimax_mc_frame, True)
-        # The Multi Concept sub-rows are owned by its own toggle handler (they are hidden even
+        # Multi Concept: the family box by the description (description.multi_concept)
+        self._on_multiconcept_toggle()
+        # The old H3 Multi Concept sub-rows are owned by its own toggle handler (they are hidden even
         # under MiniMax until the box is ticked), so route them through it rather than the loop.
-        if is_minimax or (_fdm is not None and _fdm.multi_concept):
+        if is_minimax:
             self._on_minimax_multiconcept_toggle()
             self._sync_distill_weight_state()
         else:
@@ -9685,10 +9862,11 @@ class LoRATrainerGUI:
             # reference blocks — so the mod is optimised against ref2va. Switch the Training
             # Base there when the path is set; fl2va stays selectable for an experiment.
             try:
-                _bv = getattr(self, "minimax_train_base_var", None)
+                _o = next((o for o in self._family_model_card_opts() if o.setting == "MINIMAX_TRAIN_BASE"), None)
+                _bv = self._model_opt_var(_o) if _o is not None else None
                 if (_bv is not None and minimax_train_base(_bv.get()) != "ref2va"
                         and self._krea2_pref("minimax_ref_dit")):
-                    _bv.set(MINIMAX_TRAIN_BASE_OPTIONS[1])
+                    _bv.set(_o.pick("ref2va"))
                     self.update_console("[refmod] Training Base -> Reference (ref2va): a RefMod "
                                         "rides the ref2va path at generation, so it is optimised "
                                         "against that model\n")
@@ -13918,8 +14096,7 @@ class LoRATrainerGUI:
                 self._apply_samples_klein_only()
             # ...then let MiniMax override the wording that is still Klein's. Runs AFTER, so the
             # Klein path above is untouched.
-            self._apply_samples_minimax(bool(config.get("is_minimax"))
-                                        or "clip" in getattr(self._family_desc(), "media", ()))
+            self._apply_samples_minimax(bool(config.get("is_minimax")))
             self._on_distilled_samples_toggled()        # Klein's Distilled tick greys its fields; a no-op elsewhere
 
             # Sample length (clip) row — MiniMax only: the other families' preview stacks are
@@ -13969,7 +14146,13 @@ class LoRATrainerGUI:
             "neg": "Base samples only — Distilled ignores it",
             "cfg": "Base samples only — Distilled uses no CFG",
         }
-        _t = _MM if is_minimax else _KLEIN
+        # a described family's own wording over the generic (description.samples_text / samples_cfg_free)
+        _fd = self._family_desc()
+        if _fd is not None:
+            _t = dict(_KLEIN, **dict(_fd.samples_text))
+            is_minimax = bool(_fd.samples_cfg_free)
+        else:
+            _t = _MM if is_minimax else _KLEIN
 
         if getattr(self, "_samples_banner_sub", None) is not None:
             self._samples_banner_sub.configure(text=_t["banner"])
@@ -13991,7 +14174,7 @@ class LoRATrainerGUI:
                 else:
                     _adv_outer.pack(fill=tk.X, padx=36, pady=(0, 16))
         _d = self._family_desc()
-        if _d is not None and not is_minimax and not _d.train_preview_checkpoint:   # its own CFG wording
+        if _d is not None and not is_minimax and not _d.train_preview_checkpoint and not _d.samples_text:
             _t = dict(_t, flow=f"Not used for {_d.display_name} previews",
                       neg="Used when CFG Scale is above 1",
                       cfg=_d.preview_cfg_note or "1 = no CFG. Above 1 the negative prompt applies.")
@@ -14001,8 +14184,8 @@ class LoRATrainerGUI:
             if _w is not None:
                 _w.configure(text=_t[_key])
         # Steps note: _apply_samples_klein_only owns the Klein/Krea 2 wording, so only override.
-        if is_minimax and hasattr(self, "sample_steps_note"):
-            self.sample_steps_note.configure(text=_MM["steps"])
+        if is_minimax and "steps" in _t and hasattr(self, "sample_steps_note"):
+            self.sample_steps_note.configure(text=_t["steps"])
 
         # Klein's sample-model choice and its RAM cache have no MiniMax equivalent — previews
         # always render on the resident training DiT. The Reference row goes too: it exists
@@ -19998,13 +20181,10 @@ class LoRATrainerGUI:
     # The paths a family cannot train without. The optional rows (reference DiT, audio VAE,
     # Turbo LoRA) neither hold a section open nor count against its badge — a family whose only
     # gaps are optional is configured.
-    _PREFS_FAMILY_KEYS = {
-        "klein": ("base_dit", "distilled_dit", "vae", "text_encoder"),
-        "minimax": ("minimax_dit", "minimax_text_encoder", "minimax_vae"),
-    }
+    _PREFS_FAMILY_KEYS = {}     # family key -> required pref keys (filled by _generic_prefs_section)
     # Badge names — "2 paths needed if training Klein 9B" reads as advice, where a bare
     # "2 paths needed" reads as a problem: someone who never trains that family owes it nothing.
-    _PREFS_FAMILY_NAMES = {"klein": "Klein 9B", "minimax": "MiniMax H3"}
+    _PREFS_FAMILY_NAMES = {}
 
     def _prefs_family_section(self, parent, family, title, description):
         """A collapsible model-path section for one model family on the Preferences tab.
@@ -20050,30 +20230,36 @@ class LoRATrainerGUI:
         the fetch button) - no per-family Preferences code."""
         self._PREFS_FAMILY_KEYS = {**self._PREFS_FAMILY_KEYS, d.key: d.required_pref_keys}
         self._PREFS_FAMILY_NAMES = {**self._PREFS_FAMILY_NAMES, d.key: d.display_name}
-        title = f"{d.display_name}{' (experimental)' if d.experimental else ''} model paths"
+        title = d.prefs_title or f"{d.display_name}{' (experimental)' if d.experimental else ''} model paths"
         card, row = self._prefs_family_section(
             parent, d.key, title,
-            f"The files {d.display_name} training needs. Required rows must be filled; the rest are optional.")
+            d.prefs_intro or f"The files {d.display_name} training needs. Required rows must be filled; the rest are "
+                             f"optional.")
         _w = card
         while _w is not None and not isinstance(_w, CollapsibleFrame):
             _w = _w.master
         if _w is not None:
             _w._fizgig_described_family = d.key     # lets the old-family golden snapshots set this section aside
         for f in d.model_files:
-            hint = ("" if f.required else "OPTIONAL — ") + (f.note or "")
+            hint = f.hint or (("" if f.required else "OPTIONAL — ") + (f.note or ""))
             url = f"https://huggingface.co/{f.repo}/blob/main/{f.path}" if (f.repo and f.path) else None
-            note = f"~{f.size_gb:g} GB — {f.repo} → {os.path.basename(f.path)}" if url else None
+            note = f.download_note or (f"~{f.size_gb:g} GB — {f.repo} → {os.path.basename(f.path)}" if url else None)
+            alt = f"https://huggingface.co/{f.alt_repo}/blob/main/{f.alt_path}" if (f.alt_repo and f.alt_path) else None
             row = self._add_pref_row(card, row, f"{f.label}:", f.pref_key, hint, download_url=url,
-                                     download_note=note)
+                                     download_note=note, download_label=f.download_label or "Download",
+                                     download_url2=alt, download_label2=f.alt_label or "Download",
+                                     download_note2=f.alt_note or None)
+        if d.prefs_note:
+            tk.Label(card, text=d.prefs_note, font=(FONT_FAMILY, 9), fg=COLORS["text_secondary"],
+                     bg=COLORS["bg_surface"], wraplength=760, justify=tk.LEFT).grid(
+                row=row, column=0, columnspan=3, sticky=tk.W, pady=(12, 2))
+            row += 1
         total = sum(f.size_gb for f in d.model_files if f.repo)
         self._add_fetch_models_row(
             card, row, d.key,
-            f"Fetches every file above (~{total:.0f} GB) and fills in these paths for you, plus the Qwen3-VL "
-            f"captioner the Captions tab uses and the small helper models.")
-        if d.prefs_note:
-            tk.Label(card, text=d.prefs_note, font=(FONT_FAMILY, 9), fg=COLORS["text_explain"],
-                     bg=COLORS["bg_surface"], wraplength=760, justify=tk.LEFT).grid(
-                row=row + 2, column=0, columnspan=3, sticky=tk.W, pady=(12, 2))
+            d.fetch_note or f"Fetches every file above (~{total:.0f} GB) and fills in these paths for you, plus the "
+                            f"Qwen3-VL captioner the Captions tab uses and the small helper models.",
+            optional_label=d.fetch_optional_label or None)
 
     def create_prefs_tab(self):
         """Create the Preferences tab (Start-tab styled)."""
@@ -20089,192 +20275,10 @@ class LoRATrainerGUI:
             "and persist to prefs.json.",
         )
 
-        # The three model-family sections are collapsible, and smart about it: a family with a
-        # required path still blank starts open, a configured one starts closed. Click the
-        # header to toggle; the badge says which state you're in without opening anything.
-        models_card, next_row = self._prefs_family_section(
-            outer, "klein", "Model Paths (Klein 9B)",
-            "Absolute paths to the four model files. Each row has a Download link that opens the HuggingFace page "
-            "in your browser.",
-        )
-        next_row = self._add_pref_row(
-            models_card, next_row, "Base DiT:", "base_dit",
-            "Klein 9B Base model (for training & precise profiling). "
-            "Recommended: the fp8 version — same training quality, ~half the VRAM (stays resident at "
-            "~9.6GB, fits 16GB cards). The bf16 version is the larger alternative.",
-            download_url="https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/tree/main",
-            download_label="Download fp8 (recommended)",
-            download_note="~9.5GB fp8 — Black Forest Labs (flux-2-klein-base-9b-fp8.safetensors)",
-            download_url2="https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B/tree/main",
-            download_label2="Download bf16",
-            download_note2="~17GB bf16 (flux-2-klein-base-9b.safetensors)",
-        )
-        next_row = self._add_pref_row(
-            models_card, next_row, "Distilled DiT:", "distilled_dit",
-            "Klein 9B Distilled model (for Repair Studio previews, fast profiling & diagnostics)",
-            download_url="https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8/tree/main",
-            download_note="~9GB fp8 quantised — Black Forest Labs (flux-2-klein-9b-fp8.safetensors)",
-        )
-        next_row = self._add_pref_row(
-            models_card, next_row, "VAE / AE:", "vae",
-            "Flux 2 AutoEncoder — use ae.safetensors from FLUX.2-dev root (NOT the vae/ subfolder Diffusers file)",
-            download_url="https://huggingface.co/black-forest-labs/FLUX.2-dev/blob/main/ae.safetensors",
-            download_note="~320MB  ·  get ae.safetensors from FLUX.2-dev root  ·  NOT vae/diffusion_pytorch_model.safetensors (Diffusers format, incompatible)",
-        )
-        next_row = self._add_pref_row(
-            models_card, next_row, "Text Encoder:", "text_encoder",
-            "Qwen3-8B text encoder (used by Klein 9B)",
-            download_url="https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/blob/main/split_files/text_encoders/qwen_3_8b.safetensors",
-            download_note="~15GB single-file safetensors — Qwen3-8B packaged for Klein 9B (Comfy-Org)",
-        )
-        # Klein users routinely skip the whole Krea 2 card, and would never learn that one file
-        # in it is a better captioner than Florence-2 for THEIR datasets — captions are just
-        # .txt, so the model family is irrelevant. Worth saying here, where they are already
-        # filling in paths, rather than hoping they read the card below.
-        _qwen_tip = tk.Label(
-            models_card,
-            text="💡 Training Klein only? The Krea 2 Qwen3-VL text encoder is still worth having — "
-                 "the Captions tab can caption ANY dataset with it, following an instruction you "
-                 "can edit, and it writes better training captions than Florence-2. The download "
-                 "button below fetches it for you; nothing else about Krea 2 is needed.",
-            font=(FONT_FAMILY, 9), fg=COLORS["text_secondary"], bg=COLORS["bg_surface"],
-            wraplength=760, justify=tk.LEFT)
-        _qwen_tip.grid(row=next_row, column=0, columnspan=3, sticky=tk.W, pady=(12, 2))
-        next_row += 1
-        self._add_fetch_models_row(
-            models_card, next_row, "klein",
-            "Fetches the four files above plus the Krea 2 Qwen3-VL captioning text encoder "
-            "(~39 GB all in) and fills in these paths for you, plus the small helper models "
-            "(Florence-2 captioner, face model for the Look Filter and likeness scoring, EN→ZH "
-            "translator, Gizmo's Whisper transcriber — ~1.9 GB) so nothing stalls to download "
-            "later and everything works offline. "
-            "Black Forest Labs gate their downloads, so you'll need a free HuggingFace token — "
-            "Fizgig asks for it and tells you which pages to accept the licence on.")
-        next_row += 1
-
-        # MiniMax H3 model paths — third family, beside the other two now that clip+audio
-        # training has outgrown its bottom-of-the-page beginnings.
-        mm_card, mr = self._prefs_family_section(
-            outer, "minimax", "Model Paths (MiniMax H3 — experimental)",
-            "Image-only LoRA training for MiniMax's ~33B H3 omni DiT. Train on the pruned int8 DiT "
-            "— the same file ComfyUI runs — quantized to NF4 at load, so the resident base is "
-            "~11 GB. The Qwen3-VL-32B text encoder and the video VAE are only needed for the "
-            "one-time caching pass; the compact nvfp4 TE is recommended. Trains on stills, or on "
-            "short video clips — and with the audio VAE set, on their sound too.",
-        )
-        mr = self._add_pref_row(
-            mm_card, mr, "DiT:", "minimax_dit",
-            "MiniMax H3 DiT — the training base. Use the PRUNED int8 file "
-            "(minimax_h3_fl2va_pruned_int8_convrot.safetensors, ~21 GB): it is the one ComfyUI "
-            "runs, so your LoRA trains against the weights it will be deployed on, and its "
-            "curve-table AdaLN is a target a LoRA can actually use. The ~66 GB bf16 file also "
-            "works. The pruned file KEEPS its int8 weights (~21 GB on the GPU, what the reference "
-            "trainer does); the bf16 file is quantized to NF4 at load (~11 GB, a little lossier).",
-            download_url="https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
-            download_note="~21GB — Comfy-Org/MiniMax-H3 → diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors (fl2va is the trainable variant; the 66GB bf16 file works too)",
-        )
-        mr = self._add_pref_row(
-            mm_card, mr, "DiT (reference):", "minimax_ref_dit",
-            "OPTIONAL — used when the Training tab's Training Base is set to Reference "
-            "(ref2va), and for reference distillation ('Learn identity from'). This is the "
-            "ref2va model, a DIFFERENT fine-tune from the fl2va one above and not just another "
-            "quantization of it: it is what ComfyUI's Reference-to-Video workflow loads, and "
-            "the only H3 build that accepts reference images. A LoRA trained on it is most "
-            "faithful deployed on it. Leave blank if you only train on the standard base.",
-            download_url="https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
-            download_note="~21GB — Comfy-Org/MiniMax-H3 -> diffusion_models/"
-                          "minimax_h3_ref2va_pruned_int8_convrot.safetensors (the pruned int8 "
-                          "build, same shape as the fl2va one above; you may already have it if "
-                          "you use the r2v workflow)",
-        )
-        mr = self._add_pref_row(
-            mm_card, mr, "Qwen3-VL-32B TE:", "minimax_text_encoder",
-            "Qwen3-VL-32B text encoder — nvfp4 (the compact ComfyUI file) or bf16 both work; the "
-            "loader detects which you gave it. The nvfp4 file keeps its packed weights (~15.7 GB "
-            "on the GPU); bf16 is NF4-quantized at load (~14 GB). Used only while caching caption "
-            "embeddings, then offloaded before training. (The int8_convrot TE "
-            "variant is NOT supported — its rotated weights can't be dequantized here.)",
-            download_url="https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-            download_label="Download nvfp4 (recommended)",
-            download_note="~15.7GB nvfp4-awq — the same TE ComfyUI uses, so you may already have it; "
-                          "identical conditioning to bf16 (validated), just a slower one-off load",
-            download_url2="https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/text_encoders/qwen3vl_32b_minimax_h3_bf16.safetensors",
-            download_label2="bf16",
-            download_note2="~51.5GB bf16 — the full-precision original; loads faster, 3.3x the disk",
-        )
-        mr = self._add_pref_row(
-            mm_card, mr, "Video VAE:", "minimax_vae",
-            "The H3 video VAE — encodes each training image to a 24-channel latent (used only "
-            "during caching).",
-            download_url="https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/vae/minimax_h3_video_vae_fp16.safetensors",
-            download_note="~4.9GB — Comfy-Org/MiniMax-H3 → vae/minimax_h3_video_vae_fp16.safetensors",
-        )
-        mr = self._add_pref_row(
-            mm_card, mr, "Audio VAE:", "minimax_audio_vae",
-            "OPTIONAL — set this to train on the sound in your video clips. H3 generates audio and "
-            "video together, so a clip with sound can teach it a voice, and nothing else can. "
-            "Used only during caching, and only by clips: a folder of stills never loads it, and "
-            "neither does a clip you muted (a _mute on the filename trains that clip's video and "
-            "ignores its sound). Leave blank and clips train silent, exactly as they did before.",
-            download_url="https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/vae/minimax_h3_audio_vae_fp32.safetensors",
-            download_note="~605MB — Comfy-Org/MiniMax-H3 → vae/minimax_h3_audio_vae_fp32.safetensors",
-        )
-        mr = self._add_pref_row(
-            mm_card, mr, "Turbo LoRA:", "minimax_turbo_lora",
-            "OPTIONAL — fast in-training previews. With this set, previews render in 6 steps "
-            "with the community Turbo LoRA applied at 75% on top of your training LoRA — the "
-            "same pairing fast ComfyUI inference uses — instead of the full 20-step pass. It "
-            "touches PREVIEWS ONLY: the Turbo is switched in for the sample render and out "
-            "again before the next training step, and your saved LoRA never contains it. "
-            "Steps and strength are adjustable on the Samples tab.",
-            download_url="https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora/blob/main/minimax_h3_turbo_v4_step600.safetensors",
-            download_note="~780MB — larryvrh/MiniMax-H3-Turbo-Lora → "
-                          "minimax_h3_turbo_v4_step600.safetensors (you may already have it in "
-                          "ComfyUI's loras folder)",
-        )
-        mr = self._add_pref_row(
-            mm_card, mr, "Training adapter (Circlestone):", "minimax_circlestone_adapter",
-            "NEEDED when the Training adapter dropdown says Circlestone (the default) — one "
-            "file for both bases (fl2va and ref2va). "
-            "A frozen LoRA that de-distills the base while yours learns: sharper eyes, cleaner skin "
-            "and better prompt-following than Ostris's on any dataset with stills. On for every "
-            "training step, off for previews, never in your saved LoRA. The updater fetches it; so "
-            "does the download button below.",
-            download_url=MINIMAX_CIRCLESTONE_URL,
-            download_note="~620MB — circlestone-labs/MiniMax-H3-Image-Training-Adapter → "
-                          "minimax_h3_image_training_adapter.safetensors",
-        )
-        mr = self._add_pref_row(
-            mm_card, mr, "Training adapter (Ostris fl2va):", "minimax_training_adapter",
-            "OPTIONAL — Ostris's adapter for the standard fl2va base, used when the Training tab's "
-            "adapter dropdown says Ostris: it learns a video look faster than Circlestone when the "
-            "dataset is clips only.",
-            download_url="https://huggingface.co/ostris/minimax_h3_training_adapter/blob/main/minimax_h3_training_adapter_v1.safetensors",
-            download_note="~155MB — ostris/minimax_h3_training_adapter → minimax_h3_training_adapter_v1.safetensors",
-        )
-        mr = self._add_pref_row(
-            mm_card, mr, "Training adapter (Ostris ref2va):", "minimax_ref_training_adapter",
-            "OPTIONAL — Ostris's adapter for the Reference (ref2va) base: picked automatically when "
-            "the dropdown says Ostris and the Training Base is ref2va or the run is a distillation run.",
-            download_url="https://huggingface.co/ostris/minimax_h3_training_adapter/blob/main/minimax_h3_ref2va_training_adapter_v1.safetensors",
-            download_note="~155MB — ostris/minimax_h3_training_adapter → minimax_h3_ref2va_training_adapter_v1.safetensors",
-        )
-        self._add_fetch_models_row(
-            mm_card, mr, "minimax",
-            "Fetches the DiT, text encoder, both VAEs, the Turbo LoRA and the three training adapters above, plus the Krea 2 Qwen3-VL captioning "
-            "text encoder (~47 GB all in), and fills in these paths for you — plus the small "
-            "helper models (Florence-2 captioner, face model for the Look "
-            "Filter and likeness scoring, EN→ZH translator, Gizmo's Whisper transcriber — "
-            "~1.9 GB) so nothing stalls to download later and everything works offline. No "
-            "HuggingFace account needed — none of these are gated. The "
-            "reference DiT is left out unless you tick it above: another 21 GB, and it is only "
-            "used by identity mode.",
-            optional_label="Include the reference DiT (+21 GB)")
-
-        # Families added through the standard layer: one section each, generated from the description.
+        # One collapsible model-path section per family, built from its description (a family with a required path
+        # still blank starts open, a configured one closed; the header badge says which).
         for _desc in DESCRIBED_FAMILIES.values():
-            if not _desc.shares_prefs_with:     # e.g. Klein (driver) reads the Klein rows above
-                self._generic_prefs_section(outer, _desc)
+            self._generic_prefs_section(outer, _desc)
 
         # Card 1b: which GPU. Only when the machine actually has more than one - a chooser with a
         # single entry is noise, and the whole feature is a no-op there.
@@ -20684,18 +20688,7 @@ class LoRATrainerGUI:
                  ).grid(row=row + 1, column=0, columnspan=3, sticky=tk.W, pady=(0, 2))
         return row + 2
 
-    _HF_GATED_URLS = [
-        ("Base DiT — accept the licence",
-         "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8"),
-        ("Distilled DiT — accept the licence",
-         "https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8"),
-        ("VAE — accept the licence",
-         "https://huggingface.co/black-forest-labs/FLUX.2-dev"),
-        ("Then create a READ token here",
-         "https://huggingface.co/settings/tokens"),
-    ]
-
-    def _ask_hf_token(self):
+    def _ask_hf_token(self, gated=(), name="these"):
         """Modal token prompt. Returns the token, or '' if cancelled.
 
         Not simpledialog.askstring: its prompt is a Label, so the four URLs you have to visit
@@ -20704,7 +20697,7 @@ class LoRATrainerGUI:
         with Copy and Open buttons."""
         result = {"token": ""}
         dlg = tk.Toplevel(self.master)
-        dlg.title("HuggingFace token — Klein downloads")
+        dlg.title(f"HuggingFace token — {name} downloads")
         dlg.configure(bg=BG_COLOR)
         dlg.transient(self.master)
         dlg.resizable(True, False)
@@ -20714,14 +20707,13 @@ class LoRATrainerGUI:
         btn_row = ttk.Frame(dlg)
         btn_row.pack(side=tk.BOTTOM, pady=(6, 12))
 
-        tk.Label(dlg, text="Black Forest Labs gate the Klein downloads",
+        tk.Label(dlg, text=f"The {name} downloads are gated",
                  font=(FONT_FAMILY, 11, "bold"), fg=COLORS["text_primary"], bg=BG_COLOR
                  ).pack(anchor=tk.W, padx=14, pady=(14, 2))
         tk.Label(dlg,
-                 text="They require every user to accept the licence themselves — which is also why "
-                      "Fizgig can't download these for you without a token of your own. Sign in to "
-                      "HuggingFace, accept on all three pages, then paste a read token below. "
-                      "Krea 2 needs none of this; those files aren't gated.",
+                 text="Their makers require every user to accept the licence themselves — which is also "
+                      "why Fizgig can't download these for you without a token of your own. Sign in to "
+                      "HuggingFace, accept on each licence page below, then paste a read token.",
                  font=(FONT_FAMILY, 10), fg=COLORS["text_explain"], bg=BG_COLOR,
                  wraplength=620, justify=tk.LEFT).pack(anchor=tk.W, padx=14, pady=(0, 10))
 
@@ -20735,7 +20727,13 @@ class LoRATrainerGUI:
             btn.config(text="copied")
             btn.after(1200, lambda: btn.config(text="Copy"))
 
-        for i, (label, url) in enumerate(self._HF_GATED_URLS):
+        _seen, _urls = set(), []
+        for f in gated:                          # the family's gated model files: one licence page per repo
+            if f.repo not in _seen:
+                _seen.add(f.repo)
+                _urls.append((f"{f.label} — accept the licence", f"https://huggingface.co/{f.repo}"))
+        _urls.append(("Then create a READ token here", "https://huggingface.co/settings/tokens"))
+        for i, (label, url) in enumerate(_urls):
             tk.Label(rows, text=label, font=(FONT_FAMILY, 9), fg=COLORS["text_secondary"],
                      bg=BG_COLOR).grid(row=i * 2, column=0, columnspan=3, sticky=tk.W,
                                        pady=(6 if i else 0, 0))
@@ -20750,8 +20748,9 @@ class LoRATrainerGUI:
                        command=lambda u=url: webbrowser.open(u)
                        ).grid(row=i * 2 + 1, column=2, padx=(6, 0))
 
-        ttk.Button(dlg, text="Open all three licence pages",
-                   command=lambda: [webbrowser.open(u) for _, u in self._HF_GATED_URLS[:3]]
+        _n = len(_urls) - 1
+        ttk.Button(dlg, text=f"Open all {_n} licence page{'s' if _n != 1 else ''}",
+                   command=lambda: [webbrowser.open(u) for _, u in _urls[:-1]]
                    ).pack(anchor=tk.W, padx=14, pady=(12, 0))
 
         tk.Label(dlg, text="Paste your token:", font=(FONT_FAMILY, 10),
@@ -20782,14 +20781,16 @@ class LoRATrainerGUI:
             messagebox.showinfo("Already downloading", "A model download is already running.")
             return
         token = ""
-        if family == "klein":
-            # Klein's repos are gated: BFL require each user to accept the licence themselves,
-            # which is exactly why these can't be bundled or pre-fetched on anyone's behalf.
-            # An HF_TOKEN already in the environment (the container's documented env var for
-            # exactly this) satisfies the gate with no prompt — only ask when there isn't one.
+        _fd = DESCRIBED_FAMILIES_BY_KEY.get(family)
+        _gated = [f for f in (_fd.model_files if _fd is not None else ()) if f.gated and f.repo]
+        if _gated:
+            # Gated repos (Klein's, from BFL) need each user to accept the licence themselves, which is exactly
+            # why these can't be bundled or pre-fetched on anyone's behalf. An HF_TOKEN already in the environment
+            # (the container's documented env var for exactly this) satisfies the gate with no prompt — only ask
+            # when there isn't one.
             token = os.environ.get("HF_TOKEN", "").strip()
             if not token:
-                token = self._ask_hf_token()
+                token = self._ask_hf_token(_gated, _fd.display_name)
                 if not token:
                     return
 
@@ -20810,8 +20811,8 @@ class LoRATrainerGUI:
             cmd = [sys.executable, "-m", "fizgig.scripts.fetch_models", "--progress",
                    "--family", "tools", "--family", family]
             _opt = getattr(self, f"_fetch_optional_{family}", None)
-            if (_opt is not None and _opt.get()) or any(d.key == family for d in DESCRIBED_FAMILIES.values()):
-                cmd.append("--include-optional")      # standard-layer families always fetch their whole list
+            if (_opt.get() if _opt is not None else True):
+                cmd.append("--include-optional")      # no optional tick: the family's whole list
             env = self._cuda_env_for_subprocess(dict(os.environ))
             env["PYTHONPATH"] = os.path.join(FIZGIG_DIR, "src")
             env["PYTHONUNBUFFERED"] = "1"
@@ -32188,8 +32189,7 @@ class LoRATrainerGUI:
         The Start folder stays the single source of truth for Captions, Image Prep, the Look
         filter and the gallery; only the TOML writer and validation ever see this list."""
         folders = [self.image_folder_var.get().strip()]
-        if (getattr(self, "minimax_multiconcept_var", None) is not None
-                and self.minimax_multiconcept_var.get() and self._multiconcept_arch()):
+        if self._multiconcept_on():
             for var in getattr(self, "_concept_folder_vars", []):
                 extra = var.get().strip()
                 # Skip blanks and duplicates — the dataset layer hard-fails on a repeated
@@ -32846,36 +32846,6 @@ class LoRATrainerGUI:
                                   "model from the one above and the only H3 build that takes "
                                   "reference images.")
                 _check_num("References each", self.entries["MINIMAX_DISTILL_REFS"].get(), int, 1)
-            # Multi Concept: each extra folder becomes its own [[datasets]] block, so it has to
-            # exist, be distinct, and carry its own captions. The dataset layer refuses two
-            # blocks sharing a cache_directory, and the cache path hashes a case-folded,
-            # slash-stripped path — so C:\A and c:/a/ are the SAME folder as far as it cares.
-            if (getattr(self, "minimax_multiconcept_var", None)
-                    and self.minimax_multiconcept_var.get()):
-                _seen = {self.image_folder_var.get().strip().lower()
-                         .replace("\\", "/").rstrip("/")}
-                _extra = [v.get().strip() for v in getattr(self, "_concept_folder_vars", [])]
-                if not any(_extra):
-                    errors.append("Multi Concept is on but no second subject folder is set — "
-                                  "pick one, or turn the mode off.")
-                for _f in _extra:
-                    if not _f:
-                        continue
-                    _norm = _f.lower().replace("\\", "/").rstrip("/")
-                    if _norm in _seen:
-                        errors.append(f"Multi Concept: {_f} is the same folder as another "
-                                      f"subject — each needs its own folder.")
-                        continue
-                    _seen.add(_norm)
-                    if not os.path.isdir(_f):
-                        errors.append(f"Multi Concept: folder does not exist: {_f}")
-                        continue
-                    _ext = (self.dataset_caption_ext_var.get().strip() or ".txt")
-                    if not any(fn.lower().endswith(_ext.lower()) for fn in os.listdir(_f)):
-                        errors.append(
-                            f"Multi Concept: no {_ext} captions in {_f}. Caption both folders "
-                            f"before training — each subject needs its own trigger word in "
-                            f"every caption, or they will blend.")
         else:
             vae_model = self._get_path("VAE_MODEL")
             if not vae_model:
@@ -32954,12 +32924,13 @@ class LoRATrainerGUI:
         # and a prompt slider read no captions.
         from fizgig.dataset.image_dataset import IMAGE_EXTENSIONS as _IMG_EXT
         _media_ext = set(e.lower() for e in _IMG_EXT)
-        if config.get("is_minimax"):
+        if "clip" in self._arch_media():                # a family that trains clips: they need captions too
             _media_ext |= set(self.TRAINING_VIDEO_EXTENSIONS)
         _prompt_slider = bool(self._family_desc() is not None and self._family_slider_on(source="prompts"))
         errors.extend(checks.training_folder(
             self.image_folder_var.get().strip(), self.dataset_caption_ext_var.get().strip(),
             check_captions=not self._refmod_plain_encode() and not _prompt_slider, media_exts=_media_ext))
+        errors.extend(self._multiconcept_problems())
 
         if errors:
             error_message = "Please fix the following issues:\n\n" + "\n".join(f"• {e}" for e in errors)
@@ -33294,9 +33265,10 @@ class LoRATrainerGUI:
             # Canonical key ("fl2va"/"ref2va"), never the display label. Preset-immune by
             # design — the var is outside self.entries and _collect_preset_values skips it.
             "MINIMAX_TRAIN_BASE": minimax_train_base(
-                getattr(self, "minimax_train_base_var", None)
-                and self.minimax_train_base_var.get()),
+                self._model_opt_label("MINIMAX_TRAIN_BASE") if self._is_refmod_arch() else
+                (getattr(self, "minimax_train_base_var", None) and self.minimax_train_base_var.get())),
             "MINIMAX_MULTICONCEPT": bool(self.minimax_multiconcept_var.get()),
+            "FAMILY_MULTICONCEPT": bool(self.multiconcept_var.get()),
             "MINIMAX_CONCEPT_DIRS": [v.get().strip() for v in
                                      getattr(self, "_concept_folder_vars", [])],
             "MINIMAX_BASE_QUANT": self.entries["MINIMAX_BASE_QUANT"].get(),
