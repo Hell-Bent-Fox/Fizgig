@@ -8,8 +8,9 @@ from fizgig.families.klein import KLEIN
 from fizgig.families.krea2 import KREA2
 from fizgig.families.minimax import MINIMAX
 from fizgig.families.qwen_image import QWEN_IMAGE_21
+from fizgig.families.sdxl import SDXL
 
-FAMILIES = {d.key: d for d in (KLEIN, MINIMAX, KREA2, QWEN_IMAGE_21)}
+FAMILIES = {d.key: d for d in (KLEIN, MINIMAX, KREA2, QWEN_IMAGE_21, SDXL)}
 
 for _d in FAMILIES.values():
     _problems = _d.validate()
@@ -59,9 +60,13 @@ def family_of_lora(path: str) -> Optional[FamilyDescription]:
     except Exception:
         return None
     for d in training_families():
-        from fizgig.families.lorafile import lokr_modules
-        mods = [m for m in (d.lora.module_of(k) for k in keys) if m is not None]
-        mods += [m for m, _ in lokr_modules(d, keys) if m is not None and m.startswith(d.block_prefix + ".")]
+        from fizgig.families.lorafile import lokr_modules, lora_pairs
+        try:
+            # every naming the readers accept (own keys, kohya-flattened, another trainer's via alias_flat)
+            mods = [m for m, *_ in lora_pairs(d, keys) if m is not None]
+        except ValueError:
+            continue
+        mods += [m for m, _ in lokr_modules(d, keys) if m is not None]
         if not mods:
             continue
         drv = d.load_driver()

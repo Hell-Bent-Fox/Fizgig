@@ -44,6 +44,9 @@ class ModelFile:
     # a file added after most users set the family up: its line in the one-time "new model files" popup (shown when
     # the family's DiT is set but this file is not; description.announce_intro opens it). "" = never announced
     announce: str = ""
+    # a part that ships inside another model file (a single-file checkpoint's VAE / text encoders): the pref key of
+    # that file, used when this row is left empty - the row stays as an optional override (e.g. a fixed VAE)
+    inside: str = ""
 
     @property
     def fetch_is_optional(self) -> bool:
@@ -508,6 +511,17 @@ class FamilyDescription:
     def pref_for(self, role: str) -> str:
         """Pref key of the model file with this role ("" if the family has none)."""
         return next((f.pref_key for f in self.model_files if f.role == role), "")
+
+    def model_path(self, role: str, lookup) -> str:
+        """The path for a role, given lookup(pref_key) -> the user's setting: the role's own file, or - for a part
+        that ships inside another file (ModelFile.inside) and is left empty - that file's."""
+        f = next((m for m in self.model_files if m.role == role), None)
+        if f is None:
+            return ""
+        p = str(lookup(f.pref_key) or "").strip()
+        if not p and f.inside:
+            p = str(lookup(f.inside) or "").strip()
+        return p
 
     def block_ids(self) -> list:
         return [f"{self.block_prefix}_{i}" for i in range(self.n_blocks)]

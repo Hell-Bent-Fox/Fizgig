@@ -68,7 +68,7 @@ def _s(x):
 
 
 def _model(inputs, desc, role):
-    return (inputs.get("models") or {}).get(desc.pref_for(role), "")
+    return desc.model_path(role, (inputs.get("models") or {}).get)
 
 
 def edit_on(desc, inputs):

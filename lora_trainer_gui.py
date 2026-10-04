@@ -14902,7 +14902,7 @@ class LoRATrainerGUI:
     def _explorer_ensure_engine_family(self, desc):
         """Standard-layer family: the same WorkbenchEngine as Repair Studio, previews with the family's speed LoRA
         whenever its file is set in Preferences."""
-        paths = {r: self.prefs_vars.get(desc.pref_for(r), tk.StringVar()).get().strip()
+        paths = {r: self._wb_model_path(desc, r)
                  for r in ("dit", "vae", "text_encoder")}
         labels = {f.role: f.label for f in desc.model_files}
         for role, p in paths.items():
@@ -17753,7 +17753,7 @@ class LoRATrainerGUI:
             return
         plan = None
         if mode != "weights":
-            paths = {r: self.prefs_vars.get(desc.pref_for(r), tk.StringVar()).get().strip()
+            paths = {r: self._wb_model_path(desc, r)
                      for r in ("dit", "vae", "text_encoder")}
             labels_ = {f.role: f.label for f in desc.model_files}
             for role, pth in paths.items():
@@ -19739,7 +19739,7 @@ class LoRATrainerGUI:
     def _repair_engine_plan_family(self, desc):
         """Standard-layer family: one WorkbenchEngine over the family's driver. The first DiT radio = previews with
         the family's speed LoRA (when its file is set in Preferences), the second = its default sampling."""
-        paths = {r: self.prefs_vars.get(desc.pref_for(r), tk.StringVar()).get().strip()
+        paths = {r: self._wb_model_path(desc, r)
                  for r in ("dit", "vae", "text_encoder")}
         labels = {f.role: f.label for f in desc.model_files}
         for role, p in paths.items():
@@ -21181,7 +21181,7 @@ class LoRATrainerGUI:
 
     def _royale_validate_models_family(self, desc):
         """Standard-layer family: the WorkbenchEngine, previews with the family's speed LoRA when it is set."""
-        paths = {r: self.prefs_vars.get(desc.pref_for(r), tk.StringVar()).get().strip()
+        paths = {r: self._wb_model_path(desc, r)
                  for r in ("dit", "vae", "text_encoder")}
         labels = {f.role: f.label for f in desc.model_files}
         for role, p in paths.items():
@@ -27984,9 +27984,9 @@ class LoRATrainerGUI:
 
     def _wb_model_path(self, desc, role, must_exist=False):
         """A description's model file (by role) from Preferences."""
-        key = desc.pref_for(role) if desc is not None else ""
-        v = self.prefs_vars.get(key) if (key and hasattr(self, "prefs_vars")) else None
-        p = v.get().strip() if v is not None else ""
+        if desc is None or not hasattr(self, "prefs_vars"):
+            return ""
+        p = desc.model_path(role, lambda k: (self.prefs_vars[k].get() if k in self.prefs_vars else ""))
         return p if (p and (not must_exist or os.path.exists(p))) else ""
 
     def _wb_video_kwargs(self, desc, base_mode="auto", audio=True):
