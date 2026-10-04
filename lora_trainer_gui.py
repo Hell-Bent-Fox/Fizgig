@@ -21944,11 +21944,11 @@ class LoRATrainerGUI:
         self._repair_bank_chips = {}
         tk.Label(self._repair_bank_strip, text="Library:", bg=COLORS["bg_surface"],
                  fg=COLORS["text_secondary"], font=(FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(0, 6))
-        # Donor all on / all off (every family, shown while a donor is loaded): the donor rows' ENABLE ticks, strengths
-        # kept, one render
+        # Donor all on / all off (every family, shown while a donor is loaded): every donor slider to 1 (ticked) or 0,
+        # one render
         self._repair_donor_bulk_row = tk.Frame(sliders_card, bg=COLORS["bg_surface"])
-        for _txt, _on, _tip in (("Donor: all on", True, "Tick every donor row (strengths kept)."),
-                                ("Donor: all off", False, "Untick every donor row (strengths kept).")):
+        for _txt, _on, _tip in (("Donor: all on", True, "Every donor slider to 1 (and ticked)."),
+                                ("Donor: all off", False, "Every donor slider to 0.")):
             _b = ttk.Button(self._repair_donor_bulk_row, text=_txt, command=lambda o=_on: self._repair_bulk_donor(o),
                             width=len(_txt) + 2)
             _b.pack(side=tk.LEFT, padx=(0, 6))
@@ -29565,13 +29565,15 @@ class LoRATrainerGUI:
         self._schedule_preview(force=True)
 
     def _repair_bulk_donor(self, on):
-        """Donor all on / all off: every donor row's enable tick (the strengths are left as they are), one render."""
+        """Donor all on / all off: every donor slider to 1 (its row ticked, so the 1 counts) or to 0, one render."""
         self._repair_master_mutating = True
         try:
             for v in self.repair_block_vars.values():
-                var = v.get("donor_enabled")
-                if var is not None:
-                    var.set(bool(on))
+                if v.get("donor_strength") is None:
+                    continue
+                if on:
+                    v["donor_enabled"].set(True)
+                v["donor_strength"].set(1.0 if on else 0.0)
         finally:
             self._repair_master_mutating = False
         self._schedule_preview(force=True)
