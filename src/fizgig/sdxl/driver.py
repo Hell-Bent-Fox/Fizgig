@@ -65,9 +65,10 @@ class _TextEncoders:
 
     def __init__(self, path, device):
         from diffusers import StableDiffusionXLPipeline
-        # the pipeline's single-file loader reads the CLIPs out of the checkpoint; the UNet is passed as None so it
-        # is never built (the pipeline needs the small VAE to construct, so that one loads and is dropped)
-        pipe = StableDiffusionXLPipeline.from_single_file(path, torch_dtype=DTYPE, config=CONFIG_REPO, unet=None)
+        # the pipeline's single-file loader reads the CLIPs out of the checkpoint. It cannot be built without its UNet
+        # and VAE, so those load on the CPU too and are dropped at once (about 10 s at the cache stage)
+        pipe = StableDiffusionXLPipeline.from_single_file(path, torch_dtype=DTYPE, config=CONFIG_REPO)
+        pipe.unet = pipe.vae = None
         self.tok1, self.tok2 = pipe.tokenizer, pipe.tokenizer_2
         self.te1 = pipe.text_encoder.to(device).eval().requires_grad_(False)
         self.te2 = pipe.text_encoder_2.to(device).eval().requires_grad_(False)
