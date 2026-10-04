@@ -44,6 +44,19 @@ class _Loaded:
         self.is_loaded = True
 
 
+def _locked(fn):
+    """Run under the engine's wiring lock: a LoRA is wired onto the live DiT before its weights reach the GPU, so a
+    render on another thread (the block library builder, a preview) must never run while one is being wired or
+    unwired - a donor swapped mid-library-build died in F.linear with its weights still on the CPU."""
+    import functools
+
+    @functools.wraps(fn)
+    def run(self, *a, **k):
+        with self._wire_lock:
+            return fn(self, *a, **k)
+    return run
+
+
 def _apply_lora(target, sd, multiplier, device, dtype):
     """Normalize foreign formats, build the network, apply it live, load the weights.
     Mirrors the verified Context-LoRA / preview path (ensure_kohya -> apply_to ->
@@ -129,6 +142,7 @@ def _collect_adaln_pairs(dit, sd):
 
 class H3RepairEngine:
     def __init__(self):
+        self._wire_lock = threading.RLock()   # renders vs LoRA wiring (see _locked)
         self.pipeline: Optional[_Loaded] = None
         self.dit = None
         self.decoder = None            # fp16 video VAE decoder, parked on CPU between decodes
@@ -415,6 +429,7 @@ class H3RepairEngine:
         self.encoder = enc.to(torch.float32).eval()
         return self.encoder
 
+    @_locked
     def set_turbo_strength(self, strength: float) -> None:
         """Re-dial the built-in Turbo LoRA live. 0 switches it OFF — every module disabled
         and the AdaLN injection removed — so the render is the base plus your LoRAs at the
@@ -568,6 +583,7 @@ class H3RepairEngine:
             raise RuntimeError("Primary already loaded — call reset() to swap.")
         self._wire_primary(path)
 
+    @_locked
     def _wire_primary(self, path: str) -> None:
         from safetensors.torch import load_file
         from fizgig.networks.lora import ensure_kohya_lora_state_dict
@@ -629,6 +645,7 @@ class H3RepairEngine:
             raise RuntimeError("Donor already loaded — unload_donor() or reset() first.")
         self._wire_donor(path)
 
+    @_locked
     def _wire_donor(self, path: str) -> None:
         from safetensors.torch import load_file
         from fizgig.networks.lora import ensure_kohya_lora_state_dict
@@ -646,6 +663,7 @@ class H3RepairEngine:
             self.donor_hash = None
         logger.info("H3 donor loaded: %s (%d blocks)", path, len(self.donor_block_ids))
 
+    @_locked
     def unload_donor(self) -> None:
         if self.donor_network is not None:
             self.donor_network.set_enabled(False)
@@ -1092,6 +1110,7 @@ class H3RepairEngine:
                 pass
 
     # ----- preview -----------------------------------------------------------
+    @_locked
     def generate_preview(self, state, *, seed: Optional[int] = None,
                          prompt: Optional[str] = None, width: Optional[int] = None,
                          height: Optional[int] = None, steps: Optional[int] = None,
@@ -1190,6 +1209,7 @@ class H3RepairEngine:
         return Image.fromarray(arr)
 
     # ----- clip primitives (Repair Studio video mode / effect lattice) --------
+    @_locked
     def render_latent(self, state, *, seed: Optional[int] = None,
                       prompt: Optional[str] = None, width: Optional[int] = None,
                       height: Optional[int] = None, frames: Optional[int] = None,
@@ -1918,6 +1938,7 @@ class H3RepairEngine:
         return min(idxs)
 
     # ----- teardown ----------------------------------------------------------
+    @_locked
     def reset(self) -> None:
         """Full unload — drop networks (break forward-hook ref cycles), unpatch the Turbo's
         AdaLN forwards, then the DiT + decoder."""

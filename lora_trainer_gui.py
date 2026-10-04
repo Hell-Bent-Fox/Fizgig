@@ -27104,6 +27104,20 @@ class LoRATrainerGUI:
     def _unload_repair_donor(self):
         if self.repair_engine is None or self.repair_engine.donor_network is None:
             return
+        lock = getattr(self.repair_engine, "_wire_lock", None)
+        if lock is not None:
+            # a render holds the engine (H3: renders and LoRA wiring share a lock) - stop it and come back, rather
+            # than freeze the window until the clip finishes
+            if not lock.acquire(blocking=False):
+                try:
+                    self.repair_engine.request_cancel()
+                except Exception:
+                    pass
+                self._repair_cache_stop_build(wait_s=0.0)
+                self.repair_status_var.set("Stopping the current render, then unloading the donor…")
+                self.master.after(200, self._unload_repair_donor)
+                return
+            lock.release()
         self.repair_engine.unload_donor()
         self._repair_donor_loaded = False
         # Hide donor sub-rows + master section toggles + revert donor master radio
