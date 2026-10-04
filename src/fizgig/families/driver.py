@@ -216,6 +216,10 @@ class FamilyDriver:
         save_preview writes."""
         raise NotImplementedError
 
+    # set by the workbench on a card with room: decode / decode_audio leave the VAE on the GPU between calls (training
+    # leaves it False, so the VAE never sits in VRAM beside the training model between previews)
+    keep_vae_resident = False
+
     def decode_audio(self, vae, audio):
         """A video family's sound on its own: generate()'s audio -> waveform [channels, L] (float, -1..1, on CPU), or
         None (no sound decoder configured). The workbench decodes a clip's frames and its sound separately. Default:

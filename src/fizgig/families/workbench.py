@@ -713,8 +713,10 @@ class WorkbenchEngine:
 
     def reset(self):
         from fizgig.utils.device import release_module_tensors
-        for m in (self.dit, self.vae):
-            if m is not None:
+        # a driver's VAE may be a dict of modules (a video family's: picture + sound decoders)
+        vaes = list(self.vae.values()) if isinstance(self.vae, dict) else [self.vae]
+        for m in [self.dit] + vaes:
+            if isinstance(m, torch.nn.Module):
                 try:
                     release_module_tensors(m)
                 except Exception:

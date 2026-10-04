@@ -294,6 +294,8 @@ class VideoWorkbenchEngine(ClipContract, WorkbenchEngine):
         super().ensure_pipeline(dit_path, vae_path, text_encoder_path, speed_lora_path=speed_lora_path, device=device,
                                 lowmem=lowmem, precision=precision, blocks_to_swap=blocks_to_swap,
                                 preview_sampling=preview_sampling)
+        # a card with room keeps the decoders on the GPU between renders (moving a video VAE each time costs seconds)
+        self.driver.keep_vae_resident = not self.lowmem
         self._speed_strength = self.speed.strength if self.speed is not None else None
 
     # ---- hooks -------------------------------------------------------------------------------------------------
@@ -343,11 +345,18 @@ class VideoWorkbenchEngine(ClipContract, WorkbenchEngine):
         names = [n for n in (PRIMARY, DONOR) if self.net.has(n)] if no_lora else []
         for n in names:
             self.net.set_enabled(n, False)
-        act = None if (no_lora or frames < 1) else self._act_for_render()
+        # Turbo Preview: the same setup key generate_preview builds, plus the clip's length and speed strength
+        self._act_ctx = None
+        if not no_lora and not self._act_bypass:
+            self._act_ctx = ((id(self.dit), self.primary_path, self.primary_hash, self.donor_path, self._speed_path,
+                              round(float(getattr(state, "primary_scale", 1.0)), 4),
+                              round(float(getattr(state, "donor_scale", 1.0)), 4), prompt, int(seed), width, height,
+                              frames, turbo_strength), self._cache_sig(state))
+        act = self._act_for_render()
         key = None
         if act is not None:
             k, sig = self._act_ctx
-            key = repr((k, steps, cfg, frames, turbo_strength, bool(self.int8_attention)))
+            key = repr((k, steps, cfg, bool(self.int8_attention)))
 
         def _step(done, total):
             if act is not None:
@@ -375,6 +384,7 @@ class VideoWorkbenchEngine(ClipContract, WorkbenchEngine):
                 with act.render(self.dit, self._act_modules, key, sig):
                     out = _generate()
         finally:
+            self._act_ctx = None
             for n in names:
                 self.net.set_enabled(n, True)
             if names:

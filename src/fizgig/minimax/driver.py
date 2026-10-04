@@ -655,14 +655,14 @@ class MiniMaxDriver(FamilyDriver):
         and passes its steps and CFG; its full-model AdaLN rows, and a context LoRA's, are injected for the render,
         the training adapter's taken off - and the training set put back after."""
         if not getattr(self, "_frozen_adaln", None):
-            return self._generate(dit, cond, width, height, steps, seed, cfg, neg_cond, frames, audio)
+            return self._generate(dit, cond, width, height, steps, seed, cfg, neg_cond, frames, audio, on_step)
         try:
             self._patch_adaln(dit, ("context", "speed"))
-            return self._generate(dit, cond, width, height, steps, seed, cfg, neg_cond, frames, audio)
+            return self._generate(dit, cond, width, height, steps, seed, cfg, neg_cond, frames, audio, on_step)
         finally:
             self._patch_adaln(dit, ("adapter", "context"))     # the training set back (nothing if none)
 
-    def _generate(self, dit, cond, width, height, steps, seed, cfg, neg_cond, frames, audio):
+    def _generate(self, dit, cond, width, height, steps, seed, cfg, neg_cond, frames, audio, on_step=None):
         from fizgig.minimax import sampling
         device = next(p for p in dit.parameters() if p.device.type != "meta").device
         frames = int(self.options.get("preview_frames", 1) if frames is None else frames)
@@ -674,16 +674,18 @@ class MiniMaxDriver(FamilyDriver):
             unc = neg_cond["hidden_states"]
             unc = (unc[None] if unc.dim() == 2 else unc).to(device, DTYPE)
         lat, arows, width, height, frames = self._ladder(sampling, dit, txt, unc, width, height, steps, cfg, seed,
-                                                         device, frames)
+                                                         device, frames, on_step=on_step)
         want_audio = want_audio and frames > 1
         return {"latent": lat.cpu(), "audio": arows.cpu() if (want_audio and arows is not None) else None,
                 "size": (width, height)}
 
-    def _ladder(self, sampling, dit, txt, unc, width, height, steps, cfg, seed, device, frames):
+    def _ladder(self, sampling, dit, txt, unc, width, height, steps, cfg, seed, device, frames, on_step=None):
         """The old previews' OOM ladder: an out-of-memory render - or one paging into system RAM, which Windows never
         raises - retries one rung down, a shorter clip first (141 -> 56 -> 22 -> still never: 22 is the floor), then
         the resolution down the standard sizes to 512. Both caps stick for later epochs; a resolution step prints the
-        marker the GUI writes back into the Samples tab. At the floor of both it re-raises."""
+        marker the GUI writes back into the Samples tab. At the floor of both it re-raises.
+        on_step(done, total) (the workbench): called as each step ends - the next one's start - and may raise to
+        cancel, which leaves as RenderCancelled, never as a ladder retry."""
         from fizgig.minimax.common import clip_fallback_frames, next_preview_res
         if getattr(self, "_small_card", False):
             from fizgig.minimax.common import cap_preview_res_small_card
@@ -691,9 +693,17 @@ class MiniMaxDriver(FamilyDriver):
         cap = getattr(self, "_res_cap", None)
         if cap and (cap[0] < width or cap[1] < height):
             width, height = min(width, cap[0]), min(height, cap[1])
-        state = {"wh": (width, height), "frames": frames, "slow_told": False}
+        state = {"wh": (width, height), "frames": frames, "slow_told": False, "cancel": None}
 
         def slow(seconds, step, total):
+            if on_step is not None:
+                try:
+                    on_step(step, total)
+                except Exception as e:      # the workbench's cancel: out of the sampler, past the ladder
+                    state["cancel"] = e
+                    return True
+                if seconds <= 120.0:        # polled every step; the paging notice keeps its own threshold
+                    return False
             w, h = state["wh"]
             f = state["frames"]
             if (f > 1 and clip_fallback_frames(f) > 1) or next_preview_res(w, h) != (w, h):
@@ -715,9 +725,13 @@ class MiniMaxDriver(FamilyDriver):
             try:
                 lat, arows = sampling.sample_image(dit, txt, width=width, height=height, steps=steps, cfg_scale=cfg,
                                                    uncond_embeds=unc, seed=seed, device=device, dtype=DTYPE,
-                                                   num_frames=frames, return_audio=True, on_slow_step=slow)
+                                                   num_frames=frames, return_audio=True, on_slow_step=slow,
+                                                   **({"slow_step_s": 0.0} if on_step is not None else {}))
                 return lat, arows, width, height, frames
             except oom:
+                if state["cancel"] is not None:
+                    from fizgig.families.workbench import RenderCancelled
+                    raise RenderCancelled() from state["cancel"]
                 gc.collect()
                 torch.cuda.empty_cache()
                 nf = clip_fallback_frames(frames) if frames > 1 else 1
@@ -789,9 +803,10 @@ class MiniMaxDriver(FamilyDriver):
             px = dec.decode(lat)[0]
             return Image.fromarray((px.permute(1, 2, 0).clamp(0, 1) * 255).byte().cpu().numpy())
         finally:
-            vae["video"].to("cpu")
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            if not self.keep_vae_resident:
+                vae["video"].to("cpu")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
     @torch.no_grad()
     def decode_audio(self, vae, audio):
@@ -803,9 +818,10 @@ class MiniMaxDriver(FamilyDriver):
         try:
             return adec.decode(unpack_audio(audio).to(device, torch.float32))[0].float().clamp(-1, 1).cpu()
         finally:
-            vae["audio"].to("cpu")
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            if not self.keep_vae_resident:
+                vae["audio"].to("cpu")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
     def save_preview(self, result, path):
         """The old previews' contract: a clip writes every 2nd frame as JPEG in <stem>.clip/, the wav and a playable
