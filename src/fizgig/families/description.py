@@ -327,6 +327,9 @@ class FamilyDescription:
     # Repair Studio / Explorer / Royale renders take comfy-kitchen's INT8 attention (fizgig/modules/int8_attention.py:
     # the family's attention calls attend() first). Inference only; the Profiler keeps exact attention
     int8_attention: bool = False
+    # Repair Studio's Turbo Preview tick (families/act_cache.py): a slider change replays the unchanged blocks on
+    # step 1 - the same picture as a full render
+    activation_cache: bool = False
     workbench_follows_samples: bool = False   # Repair Studio / Explorer / Royale previews take the Samples tab's steps,
     #                                   CFG, negative prompt and turbo strength (else the family's fixed preview recipe)
     preview_cfg: float = 1.0

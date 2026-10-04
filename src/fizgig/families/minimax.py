@@ -209,6 +209,7 @@ MINIMAX = FamilyDescription(
     media=("photo", "clip", "voice"),
     multi_concept=True,
     int8_attention=True,              # workbench renders: comfy-kitchen's INT8 attention
+    activation_cache=True,            # Turbo Preview: step-1 replay, identical to a full render
     adaptive_lr=False,
     slider_training=True,             # prompt pairs, photo pairs and clip pairs (driver: _slider_loss / predict)
     loss_watch=False,

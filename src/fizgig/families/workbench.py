@@ -10,6 +10,9 @@ picks it, else with the family's default sampling. Memory follows the trainer's 
 when a prompt changes, and the DiT parks on CPU while it runs whenever both would not fit; on cards under 20 GB the
 DiT also parks for the VAE decode.
 
+Turbo Preview (description.activation_cache, switched by the tab's tick through `turbo_preview`): a slider-only change
+replays the blocks before the earliest changed one from the last render (families/act_cache.py).
+
 A LoRA's load strength (state.primary_scale / donor_scale) scales the whole file and every block slider is relative
 to it. The bake folds the sliders in; a primary-only file leaves the load strength out (it is used at that strength),
 while a file with a donor in it bakes each LoRA at its own strength and is used at 1.0.
@@ -104,7 +107,13 @@ class WorkbenchEngine:
         self._cancel_event = threading.Event()
         self.on_step = None                 # (done, total) per denoising step, from the render thread
         self._baseline_key = self._baseline_img = None
-        self._turbo_enabled = False         # no activation cache: the speed LoRA already makes previews short
+        # Turbo Preview: the activation cache (families/act_cache.py) when the description offers one and the tab's
+        # tick is on
+        self._turbo_enabled = False
+        self._act = None
+        self._act_modules = None
+        self._act_ctx = None                # (key, sig) generate_preview hands its render; None = no cache
+        self._act_bypass = False
         self._last_frame_latent = None      # Royale's shared workers read it; there is no latent chaining here
         # description.workbench_follows_samples: the GUI keeps this dict current from the Samples tab - steps, cfg,
         # negative, turbo (strength; 0 = no speed LoRA). None = the family's fixed preview recipe.
@@ -194,6 +203,7 @@ class WorkbenchEngine:
         self.primary_block_ids = self.net.adapter_blocks(PRIMARY)
         self.primary_hash = self._hash(path)
         self._invalidate_baseline_cache()
+        self._invalidate_activation_cache()
         logger.info("%s primary: %s (%d Linears, %d blocks)", self.desc.display_name, path, n,
                     len(self.primary_block_ids))
 
@@ -214,6 +224,7 @@ class WorkbenchEngine:
         self.primary_block_ids = self.net.adapter_blocks(PRIMARY)
         self.primary_hash = self._hash(path)
         self._invalidate_baseline_cache()
+        self._invalidate_activation_cache()
         return True
 
     def load_donor(self, path):
@@ -228,6 +239,7 @@ class WorkbenchEngine:
         self.donor_network = self.net
         self.donor_path = path
         self.donor_block_ids = self.net.adapter_blocks(DONOR)
+        self._invalidate_activation_cache()
 
     def unload_donor(self):
         if self.donor_network is not None:
@@ -235,6 +247,7 @@ class WorkbenchEngine:
             self.donor_network = None
             self.donor_path = None
             self.donor_block_ids = set()
+            self._invalidate_activation_cache()
 
     @staticmethod
     def _hash(path):
@@ -258,7 +271,22 @@ class WorkbenchEngine:
             self.net.set_strength(name, float(getattr(state, f"{who}_scale", 1.0)))
 
     def mark_blocks_changed(self, blocks):
-        pass                                # every render is a full forward (no activation cache)
+        pass                                # the activation cache compares slider values itself
+
+    # ---- Turbo Preview ------------------------------------------------------------------------------
+    @property
+    def turbo_preview(self):
+        return bool(self._turbo_enabled and getattr(self.desc, "activation_cache", False))
+
+    @turbo_preview.setter
+    def turbo_preview(self, on):
+        self._turbo_enabled = bool(on)
+        self._invalidate_activation_cache()
+
+    @staticmethod
+    def _cache_sig(state):
+        return {b: (round(float(bs.primary_strength), 4), bool(bs.primary_enabled),
+                    round(float(bs.donor_strength), 4), bool(bs.donor_enabled)) for b, bs in state.blocks.items()}
 
     # ---- cancellation -------------------------------------------------------------------------------
     def request_cancel(self):
@@ -421,7 +449,15 @@ class WorkbenchEngine:
         else:
             neg_cond = None
 
+        act = self._act_for_render()
+        if act is not None:
+            key, sig = self._act_ctx
+            key = repr((key, steps, cfg, None if sigmas is None else [float(v) for v in sigmas], options,
+                        neg_cond is not None, bool(self.int8_attention)))
+
         def _step(done, total):
+            if act is not None:
+                act.step(done)
             cb = self.on_step
             if cb is not None:
                 try:
@@ -432,16 +468,37 @@ class WorkbenchEngine:
                 raise RenderCancelled()
 
         from fizgig.modules import int8_attention as _i8a
-        with _i8a.renders(self.int8_attention):
-            lat = self.driver.generate(self.dit, self._cond_to_device(cond), width, height, steps=steps,
-                                       seed=int(seed), cfg=cfg, sigmas=sigmas, options=options, noise=noise,
-                                       on_step=_step, **({"neg_cond": neg_cond} if neg_cond is not None else {}),
-                                       **({"refs": [r.to(self.device) for r in refs]} if refs else {}))
+
+        def _generate():
+            with _i8a.renders(self.int8_attention):
+                return self.driver.generate(self.dit, self._cond_to_device(cond), width, height, steps=steps,
+                                            seed=int(seed), cfg=cfg, sigmas=sigmas, options=options, noise=noise,
+                                            on_step=_step, **({"neg_cond": neg_cond} if neg_cond is not None else {}),
+                                            **({"refs": [r.to(self.device) for r in refs]} if refs else {}))
+        if act is None:
+            lat = _generate()
+        else:
+            try:
+                with act.render(self.dit, self._act_modules, key, sig):
+                    lat = _generate()
+            except torch.OutOfMemoryError:
+                # the cache's share of the card was the difference: give it back and render plainly
+                logger.warning("Turbo Preview: out of memory with the cache - rendering without it")
+                self._invalidate_activation_cache()
+                act = None
+                lat = _generate()
         if self.lowmem:
             self._park_dit("cpu")
             self.vae.to(self.device)
         try:
-            return self.driver.decode(self.vae, lat, width, height)
+            try:
+                return self.driver.decode(self.vae, lat, width, height)
+            except torch.OutOfMemoryError:
+                if self._act is None or not self._act.out:
+                    raise
+                logger.warning("Turbo Preview: out of memory decoding beside the cache - cache dropped")
+                self._invalidate_activation_cache()
+                return self.driver.decode(self.vae, lat, width, height)
         finally:
             if self.lowmem:
                 self.vae.to("cpu")
@@ -480,7 +537,30 @@ class WorkbenchEngine:
                                   ref_mp=ref_mp, size=(width, height))[0]
         except (TypeError, ValueError):
             neg = None
-        return self.render(cond, width, height, seed, steps=steps, noise=noise, refs=refs, neg_cond=neg)
+        self._act_ctx = None
+        if override_ctx is None and noise is None and not self._act_bypass:
+            self._act_ctx = ((id(self.dit), self.primary_path, self.primary_hash, self.donor_path, self._speed_path,
+                              self._settings_key(), round(float(getattr(state, "primary_scale", 1.0)), 4),
+                              round(float(getattr(state, "donor_scale", 1.0)), 4),
+                              prompt if prompt is not None else state.prompt, ref, round(float(ref_mp), 4),
+                              int(seed), width, height), self._cache_sig(state))
+        try:
+            return self.render(cond, width, height, seed, steps=steps, noise=noise, refs=refs, neg_cond=neg)
+        finally:
+            self._act_ctx = None
+
+    def _act_for_render(self):
+        """The activation cache for this render, or None (Turbo off, no family cache, a streamed DiT, or a render
+        generate_preview did not set up: prompt / seed travel, the baseline)."""
+        if not self.turbo_preview or self._act_ctx is None or getattr(self, "swapped", 0) or self.dit is None:
+            return None
+        if self._act is None:
+            from fizgig.families.act_cache import ActivationCache
+            self._act = ActivationCache()
+        if self._act_modules is None:
+            from fizgig.families.act_cache import block_modules
+            self._act_modules = block_modules(self.driver, self.dit)
+        return self._act if self._act_modules else None
 
     def generate_baseline(self, state):
         """The primary with every slider at 1.0 (at its load strength), donor off. Cached until the prompt, seed,
@@ -495,7 +575,11 @@ class WorkbenchEngine:
         base.ref_image_path = getattr(state, "ref_image_path", "")
         base.ref_megapixels = getattr(state, "ref_megapixels", 1.0)
         base.primary_scale = float(getattr(state, "primary_scale", 1.0))
-        img = self.generate_preview(base)
+        self._act_bypass = True             # the baseline would overwrite the tweaked render's cache
+        try:
+            img = self.generate_preview(base)
+        finally:
+            self._act_bypass = False
         self._baseline_key, self._baseline_img = key, img
         return img
 
@@ -503,7 +587,10 @@ class WorkbenchEngine:
         self._baseline_key = self._baseline_img = None
 
     def _invalidate_activation_cache(self):
-        pass
+        if self._act is not None and self._act.out:
+            self._act.clear()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     # ---- prompt travel (Royale) -------------------------------------------------------------------------
     @property
@@ -614,6 +701,8 @@ class WorkbenchEngine:
         self.primary_hash = None
         self._prompt_cache = {}
         self._invalidate_baseline_cache()
+        self._invalidate_activation_cache()
+        self._act_modules = None
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

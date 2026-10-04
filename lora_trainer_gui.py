@@ -17986,6 +17986,7 @@ class LoRATrainerGUI:
         dit, speed_path, ck = self._workbench_preview_model(desc)
         if self._explorer_engine is None or getattr(self._explorer_engine, "desc", None) is not desc:
             self._explorer_engine = desc.make_workbench_engine()
+        self._explorer_engine.turbo_preview = True     # Turbo Preview wherever the family has it, as old Klein's
         if desc.workbench_follows_samples:
             self._explorer_engine.preview_settings = self._samples_settings_for(desc)
         try:
@@ -22027,13 +22028,10 @@ class LoRATrainerGUI:
                                                    before=self._repair_sliders_container)
         except Exception:
             pass
-        # Turbo Preview (activation cache) is Klein-only. Krea 2 and H3 always full-forward:
-        # the per-step resume compounds across a multi-step chain, and on H3 it was MEASURED
-        # (18 Aug, real 33B): a resumed render retains ~6% of a block tweak's visible effect —
-        # a preview that lies about the bake. forward_cached stays on the model as the
-        # building block for a future multi-step-aware cache.
+        # Turbo Preview (activation cache: step-1 replay) wherever the family has one
+        # (description.activation_cache).
         try:
-            if krea2:
+            if desc is not None and not desc.activation_cache:
                 self._repair_turbo_chk.pack_forget()
             elif self._repair_turbo_chk.winfo_manager() == "":
                 self._repair_turbo_chk.pack(side=tk.RIGHT)
@@ -22626,8 +22624,8 @@ class LoRATrainerGUI:
         res_combo.pack(side=tk.LEFT)
         res_combo.bind("<<ComboboxSelected>>", lambda e: self._on_preview_param_changed())
         self._repair_res_combo = res_combo
-        # Turbo Preview toggle (Klein activation cache). Hidden in Krea 2 mode — krea's 8-step
-        # denoise makes the per-step cache too lossy, so Krea 2 always does the full forward.
+        # Turbo Preview toggle (the activation cache): shown for families that have one
+        # (_apply_repair_family_ui).
         self.repair_turbo_var = tk.BooleanVar(value=True)
         self._repair_turbo_chk = ttk.Checkbutton(params_frame, text="Turbo Preview",
                                      variable=self.repair_turbo_var,
@@ -23737,6 +23735,7 @@ class LoRATrainerGUI:
         dit, speed_path, ck = self._workbench_preview_model(desc, follow or self.repair_dit_choice_var.get() != "base")
         if self.repair_engine is None or getattr(self.repair_engine, "desc", None) is not desc:
             self.repair_engine = desc.make_workbench_engine()
+        self.repair_engine.turbo_preview = self.repair_turbo_var.get()
         sp = desc.preview_speed()
         steps = ck.steps if ck else (sp.settings.steps if speed_path else desc.default_sampling().steps)
         if follow:
@@ -23836,8 +23835,9 @@ class LoRATrainerGUI:
         # RTX 20-series up) and silently through PyTorch's where it doesn't (AMD, older
         # cards, a missing wheel) — Peter, 5 Sep: on by default, no switch.
         self.repair_engine.int8_attention = True
-        # _turbo_enabled stays False: the activation-cache resume was measured to under-apply
-        # tweaks ~16x on H3 (see _apply_repair_family_ui) — previews always full-forward.
+        # Turbo Preview = H3's exact pass-1 resume (the every-step replay under-applied tweaks
+        # ~16x on H3 and is never used)
+        self.repair_engine.turbo_preview = self.repair_turbo_var.get()
         self.repair_status_var.set(f"Loading {desc.display_name} (the base takes a minute)…")
         return dict(dit_path=dit_path, vae_path=vae_path, text_encoder_path=te_path, device="cuda",
                     speed_lora_path=turbo_path,
@@ -27199,8 +27199,11 @@ class LoRATrainerGUI:
     def _on_turbo_toggled(self):
         """Sync Turbo Preview checkbox to the engine and invalidate cache on toggle."""
         if self.repair_engine is not None:
-            self.repair_engine._turbo_enabled = self.repair_turbo_var.get()
-            self.repair_engine._invalidate_activation_cache()
+            if hasattr(type(self.repair_engine), "turbo_preview"):
+                self.repair_engine.turbo_preview = self.repair_turbo_var.get()
+            else:
+                self.repair_engine._turbo_enabled = self.repair_turbo_var.get()
+                self.repair_engine._invalidate_activation_cache()
 
     def _force_regenerate_preview(self):
         if self.repair_engine is not None:

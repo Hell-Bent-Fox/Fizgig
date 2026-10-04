@@ -46,10 +46,23 @@ class H3WorkbenchEngine(H3RepairEngine):
                         turbo_lora_strength=0.75, te_cache_dir="", audio_vae_path="", base_mode="auto", **_ignored):
         """The generic call (the family's speed LoRA = H3's Turbo) mapped onto the H3 engine's own: base precision is
         H3's planner (base_mode auto / stream / nf4), not the generic precision preference."""
-        return super().ensure_pipeline(dit_path, vae_path, text_encoder_path, device=device,
-                                       turbo_lora_path=speed_lora_path or turbo_lora_path,
-                                       turbo_lora_strength=turbo_lora_strength, te_cache_dir=te_cache_dir,
-                                       audio_vae_path=audio_vae_path, base_mode=base_mode)
+        out = super().ensure_pipeline(dit_path, vae_path, text_encoder_path, device=device,
+                                      turbo_lora_path=speed_lora_path or turbo_lora_path,
+                                      turbo_lora_strength=turbo_lora_strength, te_cache_dir=te_cache_dir,
+                                      audio_vae_path=audio_vae_path, base_mode=base_mode)
+        self.resume_enabled = self.turbo_preview          # the load turns the resume on; the tick has the last word
+        return out
+
+    # ---- Turbo Preview: the tick is the H3 engine's exact pass-1 resume (resume_enabled) ----------------------------
+    @property
+    def turbo_preview(self):
+        return bool(getattr(self, "_turbo_wanted", True))
+
+    @turbo_preview.setter
+    def turbo_preview(self, on):
+        self._turbo_wanted = bool(on)
+        self.resume_enabled = bool(on)
+        self._invalidate_activation_cache()
 
     # ---- the family LoRA's switches the Profiler's ablation uses (engine.net.set_enabled / set_outside) ------------
     @property
