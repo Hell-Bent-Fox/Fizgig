@@ -1648,6 +1648,33 @@ def _convert_diffusers_flux_lora(weights_sd: Dict[str, torch.Tensor]) -> Dict[st
     return converted
 
 
+def _peft_normalize(weights_sd: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """Two PEFT export quirks, straightened before conversion:
+      - the adapter name left in the key (PEFT's own state dict): blocks.0.attn.qkv_proj.lora_A.default.weight
+        -> blocks.0.attn.qkv_proj.lora_A.weight
+      - a module saved twice, once under diffusion_model. / transformer. and once bare: the prefixed one is kept (both
+        map to the same module, and a file seen in the wild held DIFFERENT weights under the bare copy)."""
+    import re
+    pat = re.compile(r"\.(lora_[AB])\.(?!weight$)[^.]+\.weight$")
+    out: Dict[str, torch.Tensor] = {}
+    renamed = 0
+    for k, v in weights_sd.items():
+        nk = pat.sub(lambda m: f".{m.group(1)}.weight", k)
+        renamed += nk != k
+        out[nk] = v
+    if renamed:
+        logger.info(f"[peft→kohya] {renamed} keys carried a PEFT adapter name (lora_A.<name>.weight) - read as lora_A/B")
+    prefixed = {k[len(p):] for k in out for p in ("diffusion_model.", "transformer.") if k.startswith(p)}
+    dup = [k for k in out if k in prefixed]
+    if dup:
+        mods = {k.rsplit(".lora_", 1)[0].rsplit(".alpha", 1)[0] for k in dup}
+        logger.warning(f"[peft→kohya] {len(mods)} module(s) are in the file twice, prefixed and bare (e.g. "
+                       f"{sorted(mods)[0]}) - the prefixed copy is used, the bare one ignored")
+        for k in dup:
+            del out[k]
+    return out
+
+
 def peft_to_kohya(weights_sd: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     """Convert a PEFT/diffusers-format LoRA (or LyCORIS-prefixed LoKR/LoHa) state
     dict to Fizgig/kohya module-name convention.
@@ -1673,6 +1700,7 @@ def peft_to_kohya(weights_sd: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor
       - `transformer.`     (AI-Toolkit, OneTrainer OMI format)
       - `lora_transformer_` (OneTrainer legacy-diffusers format — dots already flattened)
     """
+    weights_sd = _peft_normalize(weights_sd)
     # Check for diffusers-style Flux keys (transformer_blocks / single_transformer_blocks)
     # These need full key remapping + QKV fusion, not just prefix stripping.
     # Checked FIRST: Krea 2 and Flux both say `transformer_blocks.` in diffusers form, and the
