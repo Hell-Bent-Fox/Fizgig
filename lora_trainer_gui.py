@@ -21944,6 +21944,15 @@ class LoRATrainerGUI:
         self._repair_bank_chips = {}
         tk.Label(self._repair_bank_strip, text="Library:", bg=COLORS["bg_surface"],
                  fg=COLORS["text_secondary"], font=(FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(0, 6))
+        # Donor all on / all off (every family, shown while a donor is loaded): the donor rows' ENABLE ticks, strengths
+        # kept, one render
+        self._repair_donor_bulk_row = tk.Frame(sliders_card, bg=COLORS["bg_surface"])
+        for _txt, _on, _tip in (("Donor: all on", True, "Tick every donor row (strengths kept)."),
+                                ("Donor: all off", False, "Untick every donor row (strengths kept).")):
+            _b = ttk.Button(self._repair_donor_bulk_row, text=_txt, command=lambda o=_on: self._repair_bulk_donor(o),
+                            width=len(_txt) + 2)
+            _b.pack(side=tk.LEFT, padx=(0, 6))
+            ToolTip(_b, _tip + " One render for the lot.")
         # The sliders live in their own host: a family switch rebuilds the panel by
         # destroying the host's children, and the bulk row must survive that.
         _host = tk.Frame(sliders_card, bg=COLORS["bg_surface"])
@@ -26876,6 +26885,8 @@ class LoRATrainerGUI:
             # Show donor sub-rows + master section toggles + enable the "Donor" master target radio
             for vars_ in self.repair_block_vars.values():
                 vars_["donor_rowf"].grid()
+            if not self._repair_donor_bulk_row.winfo_manager():
+                self._repair_donor_bulk_row.pack(side=tk.TOP, anchor=tk.W, pady=(0, 6), before=self._repair_sliders_host)
             self._repair_master_donor_radio.state(["!disabled"])
             for cat in self.repair_donor_category_vars:
                 self.repair_donor_category_vars[cat].set(False)
@@ -27120,11 +27131,11 @@ class LoRATrainerGUI:
             lock.release()
         self.repair_engine.unload_donor()
         self._repair_donor_loaded = False
-        # Hide donor sub-rows + master section toggles + revert donor master radio
+        # Hide the donor sub-rows, their ticks and strengths kept: the next donor (a swap is an unload + load) picks
+        # up where these were left (Peter, 4 Oct)
         for vars_ in self.repair_block_vars.values():
             vars_["donor_rowf"].grid_remove()
-            vars_["donor_enabled"].set(True)
-            vars_["donor_strength"].set(0.0)
+        self._repair_donor_bulk_row.pack_forget()
         # donor toggles removed — donor blocks managed via master sliders
         self._repair_master_donor_radio.state(["disabled"])
         if self.repair_master_target_var.get() == "donor":
@@ -29553,6 +29564,18 @@ class LoRATrainerGUI:
             self._repair_master_mutating = False
         self._schedule_preview(force=True)
 
+    def _repair_bulk_donor(self, on):
+        """Donor all on / all off: every donor row's enable tick (the strengths are left as they are), one render."""
+        self._repair_master_mutating = True
+        try:
+            for v in self.repair_block_vars.values():
+                var = v.get("donor_enabled")
+                if var is not None:
+                    var.set(bool(on))
+        finally:
+            self._repair_master_mutating = False
+        self._schedule_preview(force=True)
+
     def _reset_repair_sliders(self):
         from fizgig.repair_studio.state import SliderState
         # Family-correct layout — the Klein default's block ids match nothing on Krea 2 / H3
@@ -31879,9 +31902,6 @@ class LoRATrainerGUI:
             d_color = "#888" if d_active else grey_fg
             v["donor_tag_lbl"].configure(foreground=d_color)
             v["donor_lbl"].configure(foreground=d_color if d_active else grey_fg)
-            if donor_ids is not None and not d_active:
-                v["donor_enabled"].set(True)
-                v["donor_strength"].set(0.0)
 
     # ---------------- Presets (built-in + user JSON) -----------------
 
