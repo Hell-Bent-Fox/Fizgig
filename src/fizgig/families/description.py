@@ -110,11 +110,13 @@ class LoRAFormat:
 
 @dataclass(frozen=True)
 class ClipSpec:
-    """What a video family's clips must be (descriptions with "clip" in media). The launch refuses an off-spec clip
-    with the reason (driver.media_problem) - it never converts one."""
+    """What a video family's clips must be (descriptions with "clip" in media). The dataset decodes and checks every
+    clip against it, and the launch refuses an off-spec clip with the reason before anything caches
+    (families/clips.py) - Fizgig never converts one."""
     fps: int = 24
-    frame_step: int = 17              # frame counts frame_offset + n * frame_step (H3: 17n + 5)
+    frame_step: int = 17              # frame counts frame_offset + n * frame_step (H3: 17n + 5), up to max_frames
     frame_offset: int = 5
+    max_frames: int = 124
     edge_multiple: int = 32           # width and height
     audio_rate: int = 32000
     audio_channels: int = 2

@@ -591,8 +591,8 @@ def _preview_flags(desc, st, plan, cmd):
         dflt = desc.preview_speed_defaults()[1]
         try:
             if desc.samples_turbo_pace:        # H3's row: N steps at M% (the Steps box is the plain-model count)
-                ts = float(str(st.get("MINIMAX_TURBO_STRENGTH", "") or round(100 * dflt))) / 100.0
-                turbo_steps = str(st.get("MINIMAX_TURBO_STEPS", "") or "").strip() or str(desc.preview_speed_defaults()[0])
+                ts = float(str(st.get("FAMILY_TURBO_PACE", "") or round(100 * dflt))) / 100.0
+                turbo_steps = str(st.get("FAMILY_TURBO_STEPS", "") or "").strip() or str(desc.preview_speed_defaults()[0])
             else:
                 ts = float(str(st.get("FAMILY_TURBO_STRENGTH", "") or dflt))
         except ValueError:
@@ -778,17 +778,51 @@ def start_problems(desc, inputs):
             continue
         spec = str(vals.get(opt.key, opt.default) or "all").split("·")[0].strip() or "all"
         if spec.lower() != "all":
-            from fizgig.minimax.common import parse_block_spec
+            from fizgig.utils.block_spec import parse_block_spec
             try:
                 parse_block_spec(spec, opt.counts_blocks)
             except ValueError as e:
                 out.append(f"{opt.label}: {e}")
-    from fizgig.dataset.image_dataset import IMAGE_EXTENSIONS
+    from fizgig.dataset.image_dataset import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
     exts = {e.lower() for e in IMAGE_EXTENSIONS}
     if "clip" in desc.media:
-        exts |= {".mp4"}                     # the clip formats the dataset layer reads
+        exts |= {e.lower() for e in VIDEO_EXTENSIONS}       # the clip formats the dataset layer reads
     out += checks.training_folder(_s(v.get("image_folder")), _s(v.get("caption_ext", ".txt")),
                                   check_captions=not slider_on(desc, inputs, "prompts"), media_exts=exts)
+    out += clip_problems(desc, _s(v.get("image_folder")))
+    return out
+
+
+_CLIP_CHECKED = {}          # (path, mtime, size) -> problem: a Start re-check does not probe an unchanged clip again
+
+
+def clip_problems(desc, folder):
+    """Every clip in the training folder that is off the family's ClipSpec, with the reason - before anything
+    caches, so a wrong frame rate or frame count is refused at Start, not found an hour into caching. Plus the
+    driver's own media checks (media_problem) for anything the spec cannot say."""
+    if "clip" not in desc.media or not desc.clip_spec or not folder or not os.path.isdir(folder):
+        return []
+    from fizgig.families import clips
+    from fizgig.dataset.image_dataset import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
+    vid = {e.lower() for e in VIDEO_EXTENSIONS}
+    aud = {e.lower() for e in AUDIO_EXTENSIONS} if "voice" in desc.media else set()
+    driver, out = None, []
+    for name in sorted(os.listdir(folder)):
+        path = os.path.join(folder, name)
+        ext = os.path.splitext(name)[1].lower()
+        if ext not in vid | aud or not os.path.isfile(path):
+            continue
+        st = os.stat(path)
+        key = (path, st.st_mtime, st.st_size)
+        if key not in _CLIP_CHECKED:
+            why = clips.problem(path, desc.clip_spec, desc.display_name) if ext in vid else ""
+            if not why and desc.driver:
+                if driver is None:
+                    driver = desc.load_driver()
+                why = driver.media_problem(path)
+            _CLIP_CHECKED[key] = why
+        if _CLIP_CHECKED[key]:
+            out.append(_CLIP_CHECKED[key])
     return out
 
 

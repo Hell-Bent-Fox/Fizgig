@@ -1,10 +1,9 @@
 """FamilyDriver: the one interface a new model family implements (the "driver" behind Fizgig's standard layer).
 
-Fizgig's generic code - caching, training, previews, the LoRA layer, the fetcher, the GUI path and (later) the
-workbench tools - talks to a family ONLY through its FamilyDescription (facts) and its FamilyDriver (model code).
-A new family is: a description + a driver + its model package. Nothing else in Fizgig changes to add it.
-
-Klein, Krea 2 and MiniMax H3 are not drivers; they keep their own code paths until this layer is proven.
+Fizgig's generic code - caching, training, previews, the LoRA layer, the fetcher, the GUI path and the workbench
+tools - talks to a family ONLY through its FamilyDescription (facts) and its FamilyDriver (model code).
+A new family is: a description + a driver + its model package. Nothing else in Fizgig changes to add it. Every
+family Fizgig trains (Klein 9B, MiniMax H3, Krea 2, Qwen Image 2.1) is one; docs/drivers/ is the guide.
 
 Conventions every driver follows:
 * Latents are (C, h, w) tensors in the family's normalised space (what the DiT is trained on).
@@ -88,9 +87,15 @@ class FamilyDriver:
         return False
 
     def media_problem(self, path: str) -> str:
-        """Why this clip or sound file cannot train as it is ("" = fine), against the description's clip_spec. Only
-        called for families whose media include "clip" / "voice"."""
+        """Why this clip or sound file cannot train as it is ("" = fine), beyond the description's clip_spec (the
+        launch checks every clip against the spec itself, families/clips.py). Only called for families whose media
+        include "clip" / "voice"."""
         return ""
+
+    def clip_bucket_cap(self, free_gb: float, width: int, height: int) -> tuple:
+        """The largest (width, height) of this shape a clip can be cached at in `free_gb` of free VRAM - encoding a
+        clip holds many frames at once, so a size that suits the photos may not fit. Default: no cap."""
+        return width, height
 
     # ---- family training options (optional) ------------------------------------------------------
     options = {}
@@ -344,8 +349,9 @@ class FamilyDriver:
     def plan_run(self, precision: str, blocks_to_swap: int, *, group, run: dict) -> Optional[tuple]:
         """The family's own Auto plan, or None for the shared one (quant.plan over the description's train_memory).
         Called when the precision is "auto" or the swap is -1; `run` carries what the plan may weigh (dit_path,
-        network_type / dim, lokr_factor, optimizer_type, training_adapter, context_lora_path, ema_decay, preview
-        frames / size). Returns (precision, blocks_to_swap, why)."""
+        network_type / dim, lokr_factor, optimizer_type, training_adapter, context_lora_path, ema_decay); preview
+        settings a family plans for reach it as its own options (set_options). Returns (precision, blocks_to_swap,
+        why)."""
         return None
 
     def load_planned(self, path, device, precision: str, blocks_to_swap: int) -> Optional[tuple]:

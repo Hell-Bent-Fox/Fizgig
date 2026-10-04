@@ -607,11 +607,14 @@ class ImageDirectoryDatasource:
         caption_extension: Optional[str] = None,
         control_directory: Optional[str] = None,
         extra_extensions: tuple = (),
+        family=None,
     ):
         self.image_directory = image_directory
         self.caption_extension = caption_extension
         self.control_directory = control_directory
         self.extra_extensions = tuple(extra_extensions)
+        # the FamilyDescription whose clips these are (its clip_spec checks and decodes them); None = stills only
+        self.family = family
         self.caption_only = False
         self.has_control = False
         self._current_idx = 0
@@ -716,12 +719,12 @@ class ImageDirectoryDatasource:
             return image_path, [Image.new("RGB", AUDIO_SENTINEL_RESO)], caption, None
         if os.path.splitext(image_path)[1].lower() in {e.lower() for e in VIDEO_EXTENSIONS}:
             # A clip arrives as its frames, which the resize step downstream already handles as a
-            # list. Imported lazily and only inside this branch: the dataset layer stays free of
-            # model imports at load time, and only MiniMax datasets ever glob a video in the
-            # first place.
-            from fizgig.minimax.clip import read_frames, validate
-            frames = read_frames(image_path)
-            validate(image_path, frames=len(frames))
+            # list. Checked against the family's ClipSpec; only a family whose media include clips
+            # ever globs one.
+            from fizgig.families import clips
+            spec = self.family.clip_spec
+            frames = clips.read_frames(image_path)
+            clips.validate(image_path, spec, self.family.display_name, frames=len(frames))
             imgs = [Image.fromarray(f) for f in frames]
             _, caption = self.get_caption(idx)
             controls = None
@@ -732,15 +735,13 @@ class ImageDirectoryDatasource:
                 if len(cps) != 1 or os.path.splitext(cps[0])[1].lower() not in {e.lower() for e in VIDEO_EXTENSIONS}:
                     raise ValueError(f"{os.path.basename(image_path)}: a clip pairs with exactly one clip of the same "
                                      f"name in the second folder (found: {[os.path.basename(p) for p in cps]})")
-                pf = read_frames(cps[0])
-                from fizgig.minimax.clip import GRID_FRAMES
-                if len(pf) not in GRID_FRAMES:
-                    # the VAE encodes 17n+5 frames only: an edit that dropped frames is held on its last frame up to
-                    # the next length it can encode
-                    want = next((g for g in GRID_FRAMES if g >= len(pf)), GRID_FRAMES[-1])
-                    logger.info(f"[slider] {os.path.basename(cps[0])}: {len(pf)} frames -> {want} (last frame held; "
-                                f"H3 encodes 5, 22, 39, 56 ... frames)")
-                    pf = (list(pf) + [pf[-1]] * want)[:want]
+                # the VAE encodes the family's frame grid only: an edit that dropped frames is held on its last
+                # frame up to the next length it can encode
+                pf, n_before = clips.hold_to_grid(clips.read_frames(cps[0]), spec)
+                if len(pf) != n_before:
+                    logger.info(f"[slider] {os.path.basename(cps[0])}: {n_before} frames -> {len(pf)} (last frame held;"
+                                f" {self.family.display_name} encodes "
+                                f"{', '.join(str(g) for g in clips.grid_frames(spec)[:4])} ... frames)")
                 controls = [Image.fromarray(f) for f in pf]
             return image_path, imgs, caption, controls
 
@@ -851,15 +852,19 @@ class ImageDataset(torch.utils.data.Dataset):
         if image_directory is None:
             raise ValueError("image_directory must be specified")
 
-        # Only MiniMax H3 can train on clips and voice recordings, so only its datasets glob for
+        # Clips and voice recordings are globbed only for a family whose description's media include
         # them. Kept on the dataset as well as handed to the datasource, because
         # prepare_for_training re-derives what counts as a training item when it cross-checks
         # the cache — and if the two answers disagree, every clip's cache is discarded as an
         # orphan and the run trains on nothing.
-        _extra = VIDEO_EXTENSIONS + AUDIO_EXTENSIONS if architecture == ARCHITECTURE_MINIMAX else ()
+        self.family = _described_family(architecture)
+        _media = tuple(getattr(self.family, "media", ()) or ())
+        _extra = ((VIDEO_EXTENSIONS if "clip" in _media else ()) +
+                  (AUDIO_EXTENSIONS if "voice" in _media else ()))
         self.extra_extensions = _extra
         self.datasource = ImageDirectoryDatasource(image_directory, caption_extension,
-                                                   control_directory, extra_extensions=_extra)
+                                                   control_directory, extra_extensions=_extra,
+                                                   family=self.family)
 
         if self.cache_directory is None:
             self.cache_directory = self.image_directory
@@ -928,8 +933,9 @@ class ImageDataset(torch.utils.data.Dataset):
         if not self._clip_free_gb:
             return bucket_reso                       # CPU, or no way to ask — leave it alone
 
-        from fizgig.minimax.vae import MiniMaxH3VideoVAEEncoder
-        planned = MiniMaxH3VideoVAEEncoder.plan_clip_bucket(self._clip_free_gb, *bucket_reso)
+        if getattr(self, "_clip_driver", None) is None:
+            self._clip_driver = self.family.load_driver()
+        planned = self._clip_driver.clip_bucket_cap(self._clip_free_gb, *bucket_reso)
         if tuple(planned) != tuple(bucket_reso) and image_key not in self._clip_capped:
             self._clip_capped.add(image_key)
             logger.warning(

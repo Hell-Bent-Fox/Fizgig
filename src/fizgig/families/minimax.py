@@ -319,8 +319,9 @@ MINIMAX = FamilyDescription(
     precision_label="Base Precision",
     precision_after_states=True,
     preview_park_optimizer=True,      # the old previews' optimizer-state park (~2.5 GB back for the render)
-    clip_spec=ClipSpec(fps=24, frame_step=17, frame_offset=5, edge_multiple=32, audio_rate=32000, audio_channels=2,
-                       mute_suffix="_mute", note="src/fizgig/minimax/clip.py FPS / GRID_FRAMES / SIZE_STEP"),
+    # H3's clock (24 fps), its VAE's 17n+5 frame grid (5 ... 124) and /32 edges, its 32 kHz stereo audio VAE
+    clip_spec=ClipSpec(fps=24, frame_step=17, frame_offset=5, max_frames=124, edge_multiple=32, audio_rate=32000,
+                       audio_channels=2, mute_suffix="_mute", note="minimax/model.py FPS, pixel_frames_for_latent"),
 
     latent_channels=24,
     spatial_factor=16,                # dataset/image_dataset.py LATENT_SPATIAL_FACTOR[minimaxh3]

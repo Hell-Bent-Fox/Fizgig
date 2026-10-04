@@ -186,15 +186,9 @@ class MiniMaxDriver(FamilyDriver):
                                           batch_size=args.batch_size or 16, **common), datasets, device)
         return True
 
-    def media_problem(self, path):
-        from fizgig.minimax.clip import ClipRejected, is_video, validate
-        if not is_video(path):
-            return ""
-        try:
-            validate(path)
-        except ClipRejected as e:
-            return str(e)
-        return ""
+    def clip_bucket_cap(self, free_gb, width, height):
+        from fizgig.minimax.vae import MiniMaxH3VideoVAEEncoder
+        return MiniMaxH3VideoVAEEncoder.plan_clip_bucket(free_gb, width, height)
 
     # ---- the old trainer's training options (--family_option KEY=VALUE) ------------------------------
     #   photo_blocks / clip_blocks / audio_blocks   e.g. 20-49: that modality's steps train only these blocks (the

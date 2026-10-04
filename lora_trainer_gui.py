@@ -1449,8 +1449,8 @@ class LoRATrainerGUI:
             "SAMPLE_NEGATIVE": "blurry, low detail, noisy, washed out, oversaturated, distorted anatomy, extra limbs, duplicate objects, text, watermark, logo, frame, cropped subject, flat lighting, muddy colors",
             "SAMPLE_CFG_SCALE": 1.0,
             # MiniMax Turbo previews (used only when the Turbo LoRA is set in Preferences)
-            "MINIMAX_TURBO_STEPS": 6,
-            "MINIMAX_TURBO_STRENGTH": 75,
+            "FAMILY_TURBO_STEPS": 6,
+            "FAMILY_TURBO_PACE": 75,
             # Florence captioning settings
             "CAPTION_TRIGGER_WORD": "",
             "CAPTION_MODEL": "MiaoshouAI/Florence-2-base-PromptGen",
@@ -5179,7 +5179,7 @@ class LoRATrainerGUI:
                           "SAMPLE_SEED", "SAMPLE_EVERY_N_EPOCHS", "SAMPLE_EVERY_N_STEPS",
                           "SAMPLE_AT_FIRST", "SAMPLE_FLOW_SHIFT", "SAMPLE_NEGATIVE",
                           "SAMPLE_CFG_SCALE", "SAMPLE_FRAMES",
-                          "MINIMAX_TURBO_STEPS", "MINIMAX_TURBO_STRENGTH")
+                          "FAMILY_TURBO_STEPS", "FAMILY_TURBO_PACE")
 
     def _queue_snapshot(self):
         """Capture the currently configured run as a queue item."""
@@ -5756,7 +5756,7 @@ class LoRATrainerGUI:
         "SAMPLE_SEED", "SAMPLE_EVERY_N_EPOCHS", "SAMPLE_EVERY_N_STEPS",
         "SAMPLE_AT_FIRST", "SAMPLE_FLOW_SHIFT",
         "SAMPLE_NEGATIVE", "SAMPLE_CFG_SCALE", "SAMPLE_FRAMES",
-        "MINIMAX_TURBO_STEPS", "MINIMAX_TURBO_STRENGTH",
+        "FAMILY_TURBO_STEPS", "FAMILY_TURBO_PACE",
         "RESUME_TRAINING",
     }
 
@@ -10526,11 +10526,11 @@ class LoRATrainerGUI:
         self._turbo_pace_row = tk.Frame(prompt_card, bg=COLORS["bg_surface"])
         self._turbo_pace_row.grid(row=10, column=1, columnspan=2, sticky=tk.W, pady=4)
         self.turbo_steps_entry = ttk.Entry(self._turbo_pace_row, width=5)
-        self.turbo_steps_entry.insert(0, str(self.settings.get("MINIMAX_TURBO_STEPS", 6)))
+        self.turbo_steps_entry.insert(0, str(self.settings.get("FAMILY_TURBO_STEPS", 6)))
         self.turbo_steps_entry.pack(side=tk.LEFT)
         ttk.Label(self._turbo_pace_row, text="steps at").pack(side=tk.LEFT, padx=6)
         self.turbo_strength_entry = ttk.Entry(self._turbo_pace_row, width=5)
-        self.turbo_strength_entry.insert(0, str(self.settings.get("MINIMAX_TURBO_STRENGTH", 75)))
+        self.turbo_strength_entry.insert(0, str(self.settings.get("FAMILY_TURBO_PACE", 75)))
         self.turbo_strength_entry.pack(side=tk.LEFT)
         ttk.Label(self._turbo_pace_row, text="% strength").pack(side=tk.LEFT, padx=(6, 0))
         self._turbo_pace_hint = tk.Label(prompt_card,
@@ -10687,8 +10687,8 @@ class LoRATrainerGUI:
         self.entries["SAMPLE_NEGATIVE"] = self.sample_negative_entry
         self.entries["SAMPLE_CFG_SCALE"] = self.sample_cfg_scale_entry
         self.entries["SAMPLE_FRAMES"] = self.sample_frames_combo
-        self.entries["MINIMAX_TURBO_STEPS"] = self.turbo_steps_entry
-        self.entries["MINIMAX_TURBO_STRENGTH"] = self.turbo_strength_entry
+        self.entries["FAMILY_TURBO_STEPS"] = self.turbo_steps_entry
+        self.entries["FAMILY_TURBO_PACE"] = self.turbo_strength_entry
         # a workbench that follows the Samples tab (Qwen) picks up every edit here
         for _v in (self.sample_steps_var, self.sample_cfg_scale_var, self.sample_negative_var):
             _v.trace_add("write", self._push_samples_to_workbench)
@@ -29060,8 +29060,8 @@ class LoRATrainerGUI:
                 "FAMILY_EMA": self.entries["FAMILY_EMA"].get(),
                 "FAMILY_PRECISION": self.entries["FAMILY_PRECISION"].get(),
                 "FAMILY_TURBO_STRENGTH": self.entries["FAMILY_TURBO_STRENGTH"].get(),
-                **({"MINIMAX_TURBO_STEPS": self.entries["MINIMAX_TURBO_STEPS"].get(),       # H3's Turbo preview row
-                    "MINIMAX_TURBO_STRENGTH": self.entries["MINIMAX_TURBO_STRENGTH"].get()}
+                **({"FAMILY_TURBO_STEPS": self.entries["FAMILY_TURBO_STEPS"].get(),       # H3's Turbo preview row
+                    "FAMILY_TURBO_PACE": self.entries["FAMILY_TURBO_PACE"].get()}
                    if self._family_desc().samples_turbo_pace else {}),
                 "FAMILY_EDIT": self._family_edit_on(),
                 "FAMILY_EDIT_DIR": self.entries["FAMILY_EDIT_DIR"].get().strip(),
