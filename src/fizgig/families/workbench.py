@@ -89,6 +89,9 @@ class WorkbenchEngine:
         self.te_path = None
         self.device = "cuda"
         self.speed = None                   # the SpeedLoRA previews use, or None (default sampling)
+        # comfy-kitchen's INT8 attention for this family's renders (description.int8_attention; the Profiler turns it
+        # off for its measurements)
+        self.int8_attention = bool(getattr(description, "int8_attention", False))
         self.lowmem = False
 
         self.primary_network = None         # the FamilyLoRA once a primary is attached (the tabs test for None)
@@ -428,10 +431,12 @@ class WorkbenchEngine:
             if self._cancel_event.is_set():
                 raise RenderCancelled()
 
-        lat = self.driver.generate(self.dit, self._cond_to_device(cond), width, height, steps=steps, seed=int(seed),
-                                   cfg=cfg, sigmas=sigmas, options=options, noise=noise, on_step=_step,
-                                   **({"neg_cond": neg_cond} if neg_cond is not None else {}),
-                                   **({"refs": [r.to(self.device) for r in refs]} if refs else {}))
+        from fizgig.modules import int8_attention as _i8a
+        with _i8a.renders(self.int8_attention):
+            lat = self.driver.generate(self.dit, self._cond_to_device(cond), width, height, steps=steps,
+                                       seed=int(seed), cfg=cfg, sigmas=sigmas, options=options, noise=noise,
+                                       on_step=_step, **({"neg_cond": neg_cond} if neg_cond is not None else {}),
+                                       **({"refs": [r.to(self.device) for r in refs]} if refs else {}))
         if self.lowmem:
             self._park_dit("cpu")
             self.vae.to(self.device)

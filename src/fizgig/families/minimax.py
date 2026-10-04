@@ -208,6 +208,7 @@ MINIMAX = FamilyDescription(
     ft_learning_rate=3e-5,            # the tested H3 fine-tune rate (1e-4 destroys; 1e-5 too slow to judge from)                    # the old rotation FT (component windows on an NF4 trunk, int8 ConvRot saves)
     media=("photo", "clip", "voice"),
     multi_concept=True,
+    int8_attention=True,              # workbench renders: comfy-kitchen's INT8 attention
     adaptive_lr=False,
     slider_training=True,             # prompt pairs, photo pairs and clip pairs (driver: _slider_loss / predict)
     loss_watch=False,

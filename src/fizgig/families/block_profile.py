@@ -168,6 +168,9 @@ def run_ablation(engine, *, prompt, class_prompt="", seeds=(1,), width=768, heig
            "seeds": list(seeds), "size": [width, height], "prompt": prompt, "class_prompt": class_prompt,
            "thumbs": {}, "pics": {}, "scores": {}}
     state = engine.default_state(width, height)
+    # exact attention for a measurement: comfy-kitchen's INT8 kernel (~1.6% per call) would ride on every score
+    _i8a_was = getattr(engine, "int8_attention", False)
+    engine.int8_attention = False
     try:
         for kind, text in prompts:
             res["pics"][kind], res["scores"][kind], res["thumbs"][kind] = {}, {}, {}
@@ -186,6 +189,7 @@ def run_ablation(engine, *, prompt, class_prompt="", seeds=(1,), width=768, heig
                     if on_progress:
                         on_progress(done, total, kind, cid)
     finally:
+        engine.int8_attention = _i8a_was
         engine.net.set_enabled(PRIMARY, True)
         engine.net.set_outside(PRIMARY, True)
         for bs in state.blocks.values():

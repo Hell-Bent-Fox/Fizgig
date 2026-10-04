@@ -8,6 +8,7 @@ from typing import Optional, Union
 
 import torch
 
+from fizgig.modules import int8_attention as _int8_attention
 from fizgig.modules.sdpa import sdpa_backend_ctx
 
 try:
@@ -176,10 +177,12 @@ def attention(
             x = torch.cat(x, dim=0)
             q, k, v = None, None, None
         else:
-            with sdpa_backend_ctx():
-                x = torch.nn.functional.scaled_dot_product_attention(
-                    q, k, v, attn_mask=attn_params.attention_mask, dropout_p=drop_rate
-                )
+            x = _int8_attention.attend(q, k, v, attn_params.attention_mask)   # an opted-in render only
+            if x is None:
+                with sdpa_backend_ctx():
+                    x = torch.nn.functional.scaled_dot_product_attention(
+                        q, k, v, attn_mask=attn_params.attention_mask, dropout_p=drop_rate
+                    )
             q, k, v = None, None, None
 
     elif attn_params.attn_mode == "xformers":

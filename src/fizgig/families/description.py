@@ -324,6 +324,9 @@ class FamilyDescription:
     speed_loras: tuple = ()           # SpeedLoRA entries
     preview_steps: int = 20
     preview_cfg_note: str = ""         # the Samples tab's line under CFG Scale ("" = a plain default line)
+    # Repair Studio / Explorer / Royale renders take comfy-kitchen's INT8 attention (fizgig/modules/int8_attention.py:
+    # the family's attention calls attend() first). Inference only; the Profiler keeps exact attention
+    int8_attention: bool = False
     workbench_follows_samples: bool = False   # Repair Studio / Explorer / Royale previews take the Samples tab's steps,
     #                                   CFG, negative prompt and turbo strength (else the family's fixed preview recipe)
     preview_cfg: float = 1.0

@@ -163,8 +163,13 @@ def prefix_segments(image_ids: torch.Tensor, prefix_len: int) -> list:
 
 
 def _sdpa(q, k, v, mask=None):
-    """q/k/v in [B, S, H, D] (diffusers layout); SDPA wants [B, H, S, D]; bool mask True = attend."""
-    out = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), attn_mask=mask)
+    """q/k/v in [B, S, H, D] (diffusers layout); SDPA wants [B, H, S, D]; bool mask True = attend. An opted-in
+    workbench render takes comfy-kitchen's INT8 kernel where no mask excludes a token (fizgig/modules/int8_attention)."""
+    from fizgig.modules import int8_attention as _i8a
+    qt, kt, vt = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+    out = _i8a.attend(qt, kt, vt, mask)
+    if out is None:
+        out = F.scaled_dot_product_attention(qt, kt, vt, attn_mask=mask)
     return out.transpose(1, 2)
 
 
