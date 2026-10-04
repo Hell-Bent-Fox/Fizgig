@@ -434,8 +434,11 @@ class MiniMaxDriver(FamilyDriver):
         audio = cond.get("audio_latent")
         if audio is not None and audio.dim() == 3:
             audio = audio[0]                                                   # cached (2T, 32), batched
+        # audio_weight (CLI only, default 1.0 = parity): the weight on the sound term for clips that carry it - audio is
+        # ~4% of the packed sequence, so parity may teach a voice too quietly. Stills and muted clips have no sound term.
         loss, s = compute_loss(dit, lat.to(DTYPE), cond["hidden_states"].to(DTYPE), sigma=sigma.to(lat.device),
                                noise=noise, audio_latent=audio,
+                               audio_weight=float(self.options.get("audio_weight") or 1.0),
                                video_weight=0.0 if cond.get("audio_only") else 1.0)
         info = {"t": float(s)}
         hn = float(self.options.get("highnoise_lr") or 1.0)

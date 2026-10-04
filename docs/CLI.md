@@ -407,6 +407,7 @@ H3's own settings are `--family_option name=value` pairs (the GUI's Training-tab
 - `tread=0.5@2-47` — TREAD token routing on clip steps (half the video tokens skip blocks 2-46).
 - `clip_still_as_photo=1` — each clip's cached sharpest face frame trains as a photo (needs `--aux clip_still=1` at caching).
 - `caption_dropout` — a few percent of steps train with no caption.
+- `audio_weight=W` — command line only: the weight on the sound part of the loss for clips that carry sound (default 1.0, equal to the picture). Sound is only ~4% of each clip's sequence, so raise it if a voice isn't being learned. Stills and muted clips ignore it.
 - `stop_category=audio|visual stop_epoch=N stop_mode=anchor|stop` — mixed datasets: finish the smaller category early (anchor = 10% LR with its epoch report live; stop = skip its steps).
 - `distill=1 distill_weight=W distill_phase1=N` with `--dit` on the ref2va DiT — reference distillation (the text cache needs `--aux distill=1 --aux distill_refs=K`).
 - `train_token_refiner=1` — adds the text token refiner to the LoRA targets (recommended off).
