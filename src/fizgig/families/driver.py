@@ -3,7 +3,7 @@
 Fizgig's generic code - caching, training, previews, the LoRA layer, the fetcher, the GUI path and the workbench
 tools - talks to a family ONLY through its FamilyDescription (facts) and its FamilyDriver (model code).
 A new family is: a description + a driver + its model package. Nothing else in Fizgig changes to add it. Every
-family Fizgig trains (Klein 9B, MiniMax H3, Krea 2, Qwen Image 2.1) is one; docs/drivers/ is the guide.
+family Fizgig trains (Klein 9B, MiniMax H3, Krea 2, Qwen Image 2.1, SDXL, Anima) is one; docs/drivers/ is the guide.
 
 Conventions every driver follows:
 * Latents are (C, h, w) tensors in the family's normalised space (what the DiT is trained on).
