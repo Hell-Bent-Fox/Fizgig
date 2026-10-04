@@ -26,6 +26,9 @@ DTYPE = torch.bfloat16
 _BLOCK_MODULES = ("attn.qkv_proj", "attn.out_proj", "mlp.fc1", "mlp.fc2")
 
 
+
+_ADALN_ROWS = {}          # (dit id, file, mtime) -> a frozen file's unscaled AdaLN rows (MiniMaxDriver._adaln_pairs)
+
 class _TrainableOff:
     """compute_distill_loss's teacher switch (its lora_disabled zeroes `unet_loras` multipliers): here the family
     LoRA's trainable scale goes to 0 for the teacher pass - the frozen adapter and context stay on, as before."""
@@ -608,21 +611,29 @@ class MiniMaxDriver(FamilyDriver):
     def _adaln_pairs(dit, path, strength):
         """A LoRA file's full-model AdaLN rows as (AdalnProj, A, B * strength) - the old _prefilter_frozen_lora's
         AdaLN half (the Linears are the family LoRA's)."""
-        from safetensors.torch import load_file
-        from fizgig.networks.lora import ensure_kohya_lora_state_dict
-        sd = ensure_kohya_lora_state_dict(load_file(path))
-        parents = {f"lora_unet_{n.replace('.', '_')}_linear": m for n, m in dit.named_modules()
-                   if type(m).__name__ == "AdalnProj"}
-        out = []
-        for name, ap in parents.items():
-            down, up = sd.get(f"{name}.lora_down.weight"), sd.get(f"{name}.lora_up.weight")
-            lin = ap.linear.base if hasattr(ap.linear, "base") else ap.linear
-            # rows that fit the Linear itself (a LoRA trained on this pruned base) ride the family LoRA, as the old
-            # _prefilter_frozen_lora kept them; only full-model rows (another input width) are injected
-            if (down is not None and up is not None and up.shape[0] == lin.out_features
-                    and down.shape[1] != lin.in_features):
-                out.append((ap, down.clone(), up.clone() * float(strength)))
-        return out
+        import os
+        key = (id(dit), path, os.path.getmtime(path))
+        raw = _ADALN_ROWS.get(key)
+        if raw is None:
+            # read once per file: a strength change (the workbench's Dial / Confirm) only rescales the rows
+            from safetensors.torch import load_file
+            from fizgig.networks.lora import ensure_kohya_lora_state_dict
+            sd = ensure_kohya_lora_state_dict(load_file(path))
+            parents = {f"lora_unet_{n.replace('.', '_')}_linear": m for n, m in dit.named_modules()
+                       if type(m).__name__ == "AdalnProj"}
+            raw = []
+            for name, ap in parents.items():
+                down, up = sd.get(f"{name}.lora_down.weight"), sd.get(f"{name}.lora_up.weight")
+                lin = ap.linear.base if hasattr(ap.linear, "base") else ap.linear
+                # rows that fit the Linear itself (a LoRA trained on this pruned base) ride the family LoRA, as the
+                # old _prefilter_frozen_lora kept them; only full-model rows (another input width) are injected
+                if (down is not None and up is not None and up.shape[0] == lin.out_features
+                        and down.shape[1] != lin.in_features):
+                    raw.append((ap, down.clone(), up.clone()))
+            while len(_ADALN_ROWS) >= 4:    # a run holds a file per role (adapter, context, speed) at most
+                _ADALN_ROWS.pop(next(iter(_ADALN_ROWS)))
+            _ADALN_ROWS[key] = raw
+        return [(ap, down.clone(), up * float(strength)) for ap, down, up in raw]
 
     def frozen_file_added(self, dit, path, strength, role):
         """A frozen file's full-model AdaLN rows (an older H3 LoRA trained with AdaLN on, as a Context LoRA): the
