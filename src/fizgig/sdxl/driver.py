@@ -182,12 +182,12 @@ class SDXLDriver(FamilyDriver):
                    return_dict=False)[0]
 
     # ---- training -------------------------------------------------------------------------------
-    def training_loss(self, dit, latents, cond, generator, *, min_t=0.0, max_t=1.0, refs=None, diff_ref=None,
-                      diff_weight=0.0):
+    def noise_latents(self, latents, generator, *, min_t=0.0, max_t=1.0):
+        """A noised training input: a uniform DDPM timestep in [min_t, max_t] and the noise it was made with."""
         device = latents.device
         x0 = latents.float()
-        h, w = x0.shape[-2] * 8, x0.shape[-1] * 8
-        lo, hi = int(round(min_t * 999)), max(int(round(min_t * 999)) + 1, int(round(max_t * 999)) + 1)
+        lo = int(round(min_t * 999))
+        hi = max(lo + 1, int(round(max_t * 999)) + 1)
         t = int(torch.randint(lo, min(hi, 1000), (1,), generator=generator).item())
         noise = torch.randn(x0.shape, generator=generator)
         off = float(self.options.get("noise_offset") or 0.0)
@@ -196,16 +196,38 @@ class SDXLDriver(FamilyDriver):
             noise = noise + off * torch.randn((x0.shape[0], x0.shape[1], 1, 1), generator=generator)
         noise = noise.to(device)
         a = self._alphas(device)[t]
-        xt = a.sqrt() * x0 + (1 - a).sqrt() * noise
-        pred = self._unet(dit, xt, torch.tensor([t], device=device), cond, h, w).float()
+        return {"xt": a.sqrt() * x0 + (1 - a).sqrt() * noise, "t": t, "a": a, "x0": x0, "noise": noise,
+                "hw": (x0.shape[-2] * 8, x0.shape[-1] * 8)}
+
+    def predict(self, dit, state, cond):
+        """The UNet's output (epsilon, or v for a v-pred checkpoint) at a noise_latents() state."""
+        h, w = state["hw"]
+        xt = state["xt"]
+        return self._unet(dit, xt, torch.tensor([state["t"]], device=xt.device), cond, h, w)
+
+    def training_loss(self, dit, latents, cond, generator, *, min_t=0.0, max_t=1.0, refs=None, diff_ref=None,
+                      diff_weight=0.0):
+        st = self.noise_latents(latents, generator, min_t=min_t, max_t=max_t)
+        a, x0, noise = st["a"], st["x0"], st["noise"]
+        pred = self.predict(dit, st, cond).float()
         target = (a.sqrt() * noise - (1 - a).sqrt() * x0) if self._v_pred() else noise
-        loss = F.mse_loss(pred, target)
+        if diff_ref is not None and diff_weight > 0.0:
+            # image-pair slider: latent cells where the two poles differ count more (Krea 2 / Qwen's formula)
+            d = (x0 - diff_ref.to(x0.device).float()).abs().mean(dim=1).flatten(1)          # (1, h*w)
+            dm = d.mean(dim=1, keepdim=True)
+            r = (d / dm.clamp_min(1e-8)).clamp(max=8.0)
+            wgt = (1.0 - float(diff_weight)) + float(diff_weight) * r
+            wgt = wgt / wgt.mean(dim=1, keepdim=True).clamp_min(1e-8)
+            wgt = torch.where(dm > 1e-6, wgt, torch.ones_like(wgt))   # identical pair: uniform, never all-zero
+            loss = ((pred - target).pow(2).mean(dim=1).flatten(1) * wgt).mean()
+        else:
+            loss = F.mse_loss(pred, target)
         gamma = float(self.options.get("min_snr") or 0.0)
         if gamma:
             # Min-SNR weighting (Hang et al. 2023), the SDXL trainers' default gamma 5
             snr = float(a / (1 - a))
             loss = loss * (min(snr, gamma) / ((snr + 1) if self._v_pred() else snr))
-        return loss, {"t": t / 999.0}
+        return loss, {"t": st["t"] / 999.0}
 
     # ---- sampling -------------------------------------------------------------------------------
     @torch.no_grad()

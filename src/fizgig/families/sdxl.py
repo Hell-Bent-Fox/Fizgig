@@ -11,11 +11,11 @@ _MID = ("MID",)
 _OUT = ("OUT00", "OUT01", "OUT02", "OUT03", "OUT04", "OUT05")
 
 
-def _preset(rank, lr=1e-4, adaptive=None, epochs=20, mp="1.0", alpha=None):
+def _preset(rank, lr=1e-4, adaptive=None, epochs=20, mp="1.0", alpha=None, slider=False):
     lo, hi = adaptive or ("1e-4", "4e-4")
     return {
         "NETWORK_DIM": rank, "NETWORK_ALPHA": rank if alpha is None else alpha, "NETWORK_TYPE": "LoRA (standard)",
-        "LEARNING_RATE": lr,
+        "LEARNING_RATE": lr, "FAMILY_SLIDER": slider,
         "MAX_TRAIN_EPOCHS": epochs, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42,
         "ADAPTIVE_LR": adaptive is not None, "ADAPTIVE_LR_MIN": lo, "ADAPTIVE_LR_MAX": hi,
         "OPTIMIZER_TYPE": "adamw", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
@@ -119,6 +119,9 @@ SDXL = FamilyDescription(
     # SDXL's per-epoch loss swings with its uniform timesteps, so Adaptive LR's plateau detector reacts to noise:
     # hidden and never sent (Peter, 5 Oct 2026)
     adaptive_lr=False,
+    # Slider LoRAs (prompt pairs, or before/after photo pairs): epsilon prediction works as Concept Sliders' SDXL
+    # recipe does - the target is built from the UNet's own predictions (families/train.py)
+    slider_training=True,
     workbench_follows_samples=True,   # previews take the Samples tab's steps, CFG and negative
     helper_files=((_SDXL, ("model_index.json", "*/config.json", "tokenizer/*", "tokenizer_2/*", "scheduler/*")),),
 
@@ -158,6 +161,9 @@ SDXL = FamilyDescription(
         # output scale, so the same 1e-4 moves it half as far per step)
         ("✨ SDXL Strong (rank 32, alpha 16, 1e-4)", _preset(32, lr=1e-4, alpha=16)),      # the default (Peter)
         ("✨ SDXL Standard (rank 16, alpha 8, 1e-4)", _preset(16, lr=1e-4, alpha=8)),
+        # Slider: rank 4 at half-rank alpha, 2e-4, short (Concept Sliders / AI-Toolkit; Qwen's sliders were clear by
+        # ~160 steps). Not yet measured on SDXL.
+        ("✨ SDXL Slider (rank 4, alpha 2, 2e-4)", _preset(4, lr=2e-4, alpha=2, epochs=30, slider=True)),
     ),
 
     options=(
