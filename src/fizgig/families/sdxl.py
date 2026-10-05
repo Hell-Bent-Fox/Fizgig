@@ -161,9 +161,8 @@ SDXL = FamilyDescription(
         # output scale, so the same 1e-4 moves it half as far per step)
         ("✨ SDXL Strong (rank 32, alpha 16, 1e-4)", _preset(32, lr=1e-4, alpha=16)),      # the default (Peter)
         ("✨ SDXL Standard (rank 16, alpha 8, 1e-4)", _preset(16, lr=1e-4, alpha=8)),
-        # Slider: rank 4 at half-rank alpha, 2e-4, short (Concept Sliders / AI-Toolkit; Qwen's sliders were clear by
-        # ~160 steps). Not yet measured on SDXL.
-        ("✨ SDXL Slider (rank 4, alpha 2, 2e-4)", _preset(4, lr=2e-4, alpha=2, epochs=30, slider=True)),
+        # Slider: the default's rank 32 / alpha 16 at 1e-4 (Peter, 5 Oct 2026). Not yet measured on SDXL.
+        ("✨ SDXL Slider (rank 32, alpha 16, 1e-4)", _preset(32, lr=1e-4, alpha=16, epochs=30, slider=True)),
     ),
 
     options=(
