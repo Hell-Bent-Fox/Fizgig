@@ -56,6 +56,9 @@ Fine-tuning by card size, for photos at 1 MP:
 - **Repair Studio:** its own negative prompt box for models that preview with CFG (SDXL, Anima), saved separately from the Samples tab's. A 1024 preview size, which SDXL and Anima start at.
 - **Slider practice images** now use the Samples tab's CFG and negative prompt, matching your previews.
 - **Problem images excluded in an earlier run train again.** They contribute as normal until they get stuck, and if they do, they're excluded straight away without new recaptions. Exclusions are now kept per model, so a Krea 2 exclusion no longer affects SDXL on the same photos.
+- **Checkpoint to LoRA works with every fine-tune,** SDXL and Anima included: it turns a fine-tuned checkpoint into a LoRA at the ranks you pick, which loads in ComfyUI in full.
+- **LoHa LoRAs in the Profiler and Extract,** on every model. Extract turns a LoHa into a standard LoRA. Repair Studio, LoRA the Explorer and LoRA Royale already loaded them.
+- **More LoRAs from other trainers load:** SDXL LoRAs saved in diffusers naming, as diffusers' own training scripts write them, now work everywhere, alongside kohya, LyCORIS, PEFT and ComfyUI-style files.
 
 LoRAs keep the same format and load in ComfyUI as before.
 
