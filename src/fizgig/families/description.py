@@ -251,7 +251,8 @@ class FamilyDescription:
     # extracted at; an empty block list = every block. The tab adds Custom (a block pick). () = all blocks only
     extract_presets: tuple = ()
     # the Samples tab's wording for the family, as (place, text) pairs over the generic text - places: "banner",
-    # "advanced", "flow", "neg", "cfg", "steps"; samples_cfg_free: previews render without CFG on a fixed schedule,
+    # "advanced", "flow", "neg", "cfg", "steps", and "sampler" (added after the Steps line: the sampler and schedule
+    # previews use, for a family sensitive to them); samples_cfg_free: previews render without CFG on a fixed schedule,
     # so the Advanced card (flow shift, negative, CFG) and the sample-model / reference rows hide
     samples_text: tuple = ()
     samples_cfg_free: bool = False

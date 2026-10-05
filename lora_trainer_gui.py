@@ -11163,7 +11163,8 @@ class LoRATrainerGUI:
                 else:
                     _adv_outer.pack(fill=tk.X, padx=36, pady=(0, 16))
         _d = self._family_desc()
-        if _d is not None and not is_minimax and not _d.train_preview_checkpoint and not _d.samples_text:
+        if (_d is not None and not is_minimax and not _d.train_preview_checkpoint
+                and not {k for k, _ in _d.samples_text} - {"sampler"}):
             _t = dict(_t, flow=f"Not used for {_d.display_name} previews",
                       neg="Used when CFG Scale is above 1",
                       cfg=_d.preview_cfg_note or "1 = no CFG. Above 1 the negative prompt applies.")
@@ -11289,6 +11290,9 @@ class LoRATrainerGUI:
                       + (f" - set the {sp.name} in Preferences for {sp_steps}-step previews" if sp else "")))
         if desc.train_preview_checkpoint and hasattr(self, "sample_steps_note"):     # Klein's own line
             self.sample_steps_note.configure(text="Base samples only — Distilled is locked at 4 steps")
+        _sampler = dict(desc.samples_text).get("sampler")
+        if _sampler and hasattr(self, "sample_steps_note"):      # a family that names its sampler (SDXL)
+            self.sample_steps_note.configure(text=f"{self.sample_steps_note.cget('text')} · {_sampler}")
         # the reference row: live where the family's previews take a picture (Krea 2's vision path, Qwen's edits)
         _kind = desc.reference_kind
         if hasattr(self, "sample_ref_entry"):

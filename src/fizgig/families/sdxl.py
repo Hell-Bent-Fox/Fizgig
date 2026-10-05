@@ -149,6 +149,7 @@ SDXL = FamilyDescription(
                       "extra legs, fused fingers, too many fingers, long neck,mask"),
     preview_cfg_note="SDXL needs CFG: 3 is the default, 3 to 5 the usual range (Juggernaut's skin turns waxy above "
                      "6-7). Above 1 the negative prompt applies.",
+    samples_text=(("sampler", "sampler DPM++ 2M SDE, Karras schedule (in ComfyUI: dpmpp_2m_sde / karras)"),),
     preview_width=1024,
     preview_height=1024,
     repair_size=1024,                 # a 1 MP model; a 1024 render at 30 steps took 3.3 s on a 5090
