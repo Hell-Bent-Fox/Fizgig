@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=yrz0l6URGGk"><img src="assets/hero.png" alt="Fizgig LoRA & Fine-tune Studio — watch the full video tutorial" width="600"></a>
+  <a href="https://www.youtube.com/watch?v=yrz0l6URGGk"><img src="logo.jpg" alt="Fizgig LoRA & Fine-tune Studio — watch the full video tutorial" width="600"></a>
 </p>
 
 <p align="center">
