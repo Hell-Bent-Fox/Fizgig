@@ -12,7 +12,8 @@ bit-identical to extracting that rank alone.
 
 Architecture-agnostic: keys are flattened to the kohya convention
 (``blocks.0.attn.wq.weight`` -> ``lora_unet_blocks_0_attn_wq``), which is what the Klein,
-Krea 2 and MiniMax H3 LoRA loaders all expect.
+Krea 2 and MiniMax H3 LoRA loaders all expect. A checkpoint that names its model under a prefix
+(Anima's ``net.``, SDXL's ``model.diffusion_model.``) has it dropped first, so ComfyUI maps the keys.
 
 Pre-quantized checkpoints are decoded before the diff, not after — see `dense_weight`. That
 matters for MiniMax H3, where 200 of the 264 comparable matrices are stored as int8 ConvRot
@@ -108,9 +109,39 @@ def is_lora_target(key: str, shape) -> bool:
     return not any(s in low for s in _SKIP_SUBSTRINGS)
 
 
-def lora_key(model_key: str) -> str:
-    """blocks.0.attn.wq.weight -> lora_unet_blocks_0_attn_wq"""
+def lora_key(model_key: str, prefix: str = "") -> str:
+    """blocks.0.attn.wq.weight -> lora_unet_blocks_0_attn_wq; a checkpoint's own prefix (`prefix`) is dropped first"""
+    if prefix and model_key.startswith(prefix):
+        model_key = model_key[len(prefix):]
     return "lora_unet_" + model_key[: -len(".weight")].replace(".", "_")
+
+
+def model_prefixes() -> list:
+    """The prefixes a model file can name its diffusion model's weights under: each fine-tune family's own
+    (FTSpec.file_prefix - Anima's "net.", a single-file SDXL checkpoint's "model.diffusion_model.") and ComfyUI's
+    "diffusion_model.". Longest first."""
+    out = {"diffusion_model."}
+    try:
+        from fizgig.families.registry import training_families
+        for d in training_families():
+            if d.finetune:
+                try:
+                    p = d.load_driver().ft_spec(None).file_prefix
+                except Exception:
+                    p = ""
+                if p:
+                    out.add(p)
+    except Exception:
+        pass
+    return sorted(out, key=len, reverse=True)
+
+
+def model_prefix(keys) -> str:
+    """The prefix most of a checkpoint's keys share from model_prefixes(), or "" (Klein, Krea 2, Qwen, H3 files)."""
+    keys = list(keys)
+    counts = {p: sum(k.startswith(p) for k in keys) for p in model_prefixes()}
+    best = max(counts, key=counts.get) if counts else ""
+    return best if counts.get(best, 0) else ""
 
 
 def factor_multi(delta: torch.Tensor, ranks: Iterable[int]) -> dict:
@@ -171,8 +202,12 @@ def extract_diff_loras(
     if only_tuned:
         say(f"note: {only_tuned} key(s) exist only in the trained file and are ignored")
 
+    prefix = model_prefix(base_keys)
+    if prefix:
+        # a checkpoint carrying more than the diffusion model (SDXL's text encoders and VAE): only the model's keys
+        say(f"model weights under '{prefix}' - the rest of the file is not compared")
     keys = [k for k in sorted(base_keys & tune_keys)
-            if is_lora_target(k, h_base.get_slice(k).get_shape())]
+            if k.startswith(prefix) and is_lora_target(k, h_base.get_slice(k).get_shape())]
     if not keys:
         raise RuntimeError("no comparable 2-D weights found — are these the same architecture?")
     say(f"{len(keys)} candidate matrices, ranks {ranks}, device {dev}")
@@ -196,7 +231,7 @@ def extract_diff_loras(
                 progress(i + 1, len(keys), k)
             continue
         total_norm += nrm
-        lk = lora_key(k)
+        lk = lora_key(k, prefix)
         for r, (up, down) in factor_multi(d, ranks).items():
             sd[r][f"{lk}.lora_up.weight"] = up
             sd[r][f"{lk}.lora_down.weight"] = down
