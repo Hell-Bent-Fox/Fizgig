@@ -29,7 +29,7 @@ The full field list, with comments, is `FamilyDescription` in `src/fizgig/famili
 | `network_types=("lora", "lokr")` | LoKR as well as LoRA. | — |
 | `edit_training` | Edit LoRAs from before/after photo pairs, with edit previews. | `supports_references = True`, `load_reference_text_encoder`, `encode_text_with_references`, and `refs=` in `training_loss` / `generate`. |
 | `slider_training`, `slider_guidance`, `slider_ultra_blocks` | Slider LoRAs (a strength dial between two looks), from image pairs or prompts. | `training_loss(diff_ref=, diff_weight=)` for pairs; `noise_latents` and `predict` for prompt sliders. |
-| `finetune`, `ft_learning_rate` | Full fine-tuning of the base model on an NF4 trunk: every part at once when the card holds them all, otherwise one part at a time (rotations). | `ft_spec(dit)` returning an `FTSpec`: the block list, the parts to rotate through, the file layout if your loader splits weights, and `file_prefix` if the file names its DiT weights under a prefix (Anima's `net.`). Check it with a fine-tune at learning rate 1e-30 (the Training tab refuses 0): the saved file must equal the source, tensor for tensor, apart from weights that were exactly zero. |
+| `finetune`, `ft_learning_rate` | Full fine-tuning of the base model on an NF4 trunk: the whole model at once when the card holds it, otherwise the fewest windows that fit. Optional, and can be added after the family ships. | `ft_spec(dit)` returning an `FTSpec`, plus measured memory figures. [FINETUNE.md](FINETUNE.md) covers it step by step. |
 
 ## Training aids
 

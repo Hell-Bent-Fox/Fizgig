@@ -220,4 +220,5 @@ The dataset TOML is the same format every family uses ([CLI.md](../CLI.md)). Whe
 ## Next
 
 - [ABILITIES.md](ABILITIES.md): switch on edit training, sliders, fine-tuning, Turbo Preview, compile and more, one field at a time.
+- [FINETUNE.md](FINETUNE.md): full fine-tuning, if you want it now. It's optional and can come later.
 - [VIDEO.md](VIDEO.md): if your model also trains on clips.

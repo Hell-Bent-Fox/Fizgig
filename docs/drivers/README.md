@@ -1,6 +1,6 @@
 # Adding a model to Fizgig: the driver system
 
-Every model Fizgig trains — Klein 9B, MiniMax H3, Krea 2, Qwen Image 2.1 — runs through one shared layer in `src/fizgig/families/`. A model is added as a **family**, and a family is three pieces:
+Every model Fizgig trains — Klein 9B, MiniMax H3, Krea 2, Qwen Image 2.1, SDXL and Anima — runs through one shared layer in `src/fizgig/families/`. A model is added as a **family**, and a family is three pieces:
 
 | Piece | Where | What it holds |
 |---|---|---|
@@ -23,9 +23,10 @@ You don't edit the GUI, the trainer or the tools. If your model needs something 
 2. **[A stills model](STILLS.md)**: the minimum description and driver for an image model, step by step.
 3. **[A video model](VIDEO.md)**: what a model that trains on clips (and optionally sound) adds.
 4. **[Abilities](ABILITIES.md)**: the optional features a description switches on, and what each one asks of the driver.
-5. **[Before you ship](CHECKLIST.md)**: the checks a new family must pass, and what a finished family includes (research, parity, fast presets, compile, INT8 attention, default negative and more).
+5. **[Fine-tuning](FINETUNE.md)**: optional. Full fine-tuning of the base model, which you, the maintainer or anyone else can add after the family ships.
+6. **[Before you ship](CHECKLIST.md)**: the checks a new family must pass, and what a finished family includes (research, parity, fast presets, compile, INT8 attention, default negative and more).
 
-The four existing families are the best reference. Read them side by side:
+The existing families are the best reference. Read them side by side:
 
 | Family | Description | Driver | Worth reading for |
 |---|---|---|---|
@@ -33,6 +34,8 @@ The four existing families are the best reference. Read them side by side:
 | Klein 9B | `families/klein.py` | `klein/driver.py` | A preview checkpoint (Distilled), fp8 files, Model Area presets, Repair Studio categories |
 | Krea 2 | `families/krea2.py` | `krea2/driver.py` | Named block areas (text fusion, I/O), a vision path for reference pictures, compile |
 | MiniMax H3 | `families/minimax.py` | `minimax/driver.py` | Video and sound, family options, its own cache layout and workbench engine |
+| SDXL | `families/sdxl.py` | `sdxl/driver.py` | A UNet through diffusers, any single-file checkpoint, conv LoRAs, kohya LDM names (`alias_flat`), a default negative |
+| Anima | `families/anima.py` | `anima/driver.py` | A vendored DiT, parity measured against ComfyUI, fine-tuning with measured memory figures and a `file_prefix` |
 
 ## Entry points: what calls your driver
 

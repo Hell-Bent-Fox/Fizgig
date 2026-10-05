@@ -9,7 +9,8 @@ Klein 9B and MiniMax H3 now run on Fizgig's new driver system, the same engine a
 - **Klein:** trains on the new engine with your existing model files and presets. The first run on each dataset caches it again, which happens automatically. In-training previews still use Klein Distilled at 4 steps.
 - **MiniMax H3:** photos, clips and voice, sliders, RefMod and fine-tuning all work as before. Your saved H3 settings carry over.
 - **Fine-tuning on every model:** pick Fine-tune on the Training tab for Klein, MiniMax H3, Krea 2, Qwen Image 2.1 or Anima. It's new for Klein and Anima.
-- **Fine-tuning trains the whole model at once when your card has room** (Anima from 10 GB, Qwen Image 2.1 on 32 GB, Klein and Krea 2 on 48 GB), and rotates through its parts when it doesn't. The Training tab shows which your card gets.
+- **Fine-tuning packs as much of the model into each window as your card holds.** The whole model trains at once when it fits (Anima from 10 GB, Qwen Image 2.1 from 24 GB, Klein on 32 GB), and Krea 2 and MiniMax H3 go from four windows to two on a 32 GB card. The Training tab shows what your card gets, and a new Window size setting gives you more headroom if you want it.
+- **Klein fine-tunes on 16 GB cards,** streaming the blocks it isn't training from system memory.
 - **The new Profiler** now covers Klein and MiniMax H3 too.
 - **Repair Studio:** moving a slider now re-renders only the blocks after the change, on every family, with the same picture as a full render. It's on by default and can be switched off with the tick on the Setup card.
 
