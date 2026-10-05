@@ -145,7 +145,8 @@ ANIMA = FamilyDescription(
     presets=(
         # community values (Oct 2026), higher than the card's light-touch 2e-5: characters at rank 8-16 and 1e-4
         # (sd-scripts guides, HF discussions), styles at 5e-5. Not yet measured in Fizgig.
-        ("✨ Anima Character (rank 16, 1e-4)", _preset(16, 1e-4)),
+        # 50 epochs: the character guides aim for ~1,000-1,500 steps on 20-30 images; every epoch is saved
+        ("✨ Anima Character (rank 16, 1e-4)", _preset(16, 1e-4, epochs=50)),
         ("✨ Anima Style (rank 16, 5e-5)", _preset(16, 5e-5)),
         ("✨ Anima Official (rank 32, 2e-5)", _preset(32, 2e-5)),
     ),
