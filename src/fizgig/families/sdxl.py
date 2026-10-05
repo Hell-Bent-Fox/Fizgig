@@ -128,12 +128,15 @@ SDXL = FamilyDescription(
     ),
 
     options=(
-        FamilyOption("SDXL_MIN_SNR", "Min-SNR weighting", choices=(("γ 5 (recommended)", "min_snr=5"),
-                                                                 ("off", "min_snr=0")),
-                     hint="Evens out how much the noisiest and cleanest steps count; gamma 5 is the SDXL trainers' "
-                          "default (Kohya, the Hugging Face guide, Civitai).", section="other"),
-        FamilyOption("SDXL_NOISE_OFFSET", "Noise offset", kind="entry", tokens="noise_offset={}", default="0.0357",
-                     width=8, hint="0.0357 is what SDXL base was trained with; 0 turns it off.", section="other"),
+        # A/B 5 Oct 2026 (Juggernaut v9, 115 photos, 1 MP, rank 16 adaptive, 8 epochs, every checkpoint re-rendered
+        # with the same sampler, prompts and seeds): Min-SNR 5 + offset 0.0357 reached the likeness no sooner and
+        # wandered at epoch 4; plain MSE locked it from epoch 4. One run each, so off by default, kept as options.
+        FamilyOption("SDXL_MIN_SNR", "Min-SNR weighting", choices=(("off", "min_snr=0"), ("γ 5", "min_snr=5")),
+                     hint="Evens out how much the noisiest and cleanest steps count. Common in other SDXL trainers; in "
+                          "Fizgig's A/B it gave no gain, so it starts off.", section="other"),
+        FamilyOption("SDXL_NOISE_OFFSET", "Noise offset", kind="entry", tokens="noise_offset={}", default="0",
+                     width=8, hint="0.0357 is the offset SDXL base was trained with; 0 (off) trained as well in "
+                                   "Fizgig's A/B.", section="other"),
     ),
     notes=(
         ("Captions: each CLIP reads 77 tokens (about 60 words); anything longer is cut off.",
