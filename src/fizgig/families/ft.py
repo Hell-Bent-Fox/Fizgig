@@ -121,6 +121,13 @@ def _read(src, loc):
     return t if t.dtype in (torch.bfloat16, torch.float16, torch.float32) else t.to(torch.bfloat16)
 
 
+def _master_bytes(header, fkey, parts=1):
+    """Bytes the master of one file tensor takes (one part of a fused tensor): its own precision as _read keeps it,
+    so fp32 counts 4 bytes a value - everything else is held at 2 (bf16 / fp16)."""
+    n = int(torch.Size(header[fkey]["shape"]).numel()) // parts
+    return n * (4 if header[fkey].get("dtype") == "F32" else 2)
+
+
 def _merge(base: torch.Tensor, trained: torch.Tensor) -> torch.Tensor:
     """The master after training: `base` (the master, in the file's precision) plus what training changed in the bf16
     copy it trained - the whole of `trained` for a bf16 file, and for an fp16 / fp32 one the change alone, so the
@@ -176,7 +183,7 @@ class DiskMaster:
             sh = list(self._f.header[fk]["shape"])
             sh[0] //= parts
             self._shape[k] = tuple(sh)
-        need = sum(2 * int(torch.Size(s).numel()) for s in self._shape.values())
+        need = sum(_master_bytes(self._f.header, fk, parts) for fk, _part, parts in self._loc.values())
         self.est_gb = need / 1e9
         free = shutil.disk_usage(scratch_dir).free
         if free < need * 1.1:
@@ -367,7 +374,7 @@ class Rotator:
                     missing.append(k)
                 else:
                     self.loc[k] = loc
-            gb = sum(2 * int(torch.Size(src.header[fk]["shape"]).numel()) // n
+            gb = sum(_master_bytes(src.header, fk, n)
                      for k, (fk, _p, n) in self.loc.items() if k in {t[0] for t in self.targets}) / 1e9
         if missing:
             raise RuntimeError(f"[finetune] {len(missing)} weights are not in {os.path.basename(path)} under the "
