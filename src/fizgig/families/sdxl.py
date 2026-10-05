@@ -14,7 +14,8 @@ _OUT = ("OUT00", "OUT01", "OUT02", "OUT03", "OUT04", "OUT05")
 def _preset(rank, lr=1e-4, adaptive=None, epochs=20, mp="1.0", alpha=None):
     lo, hi = adaptive or ("1e-4", "4e-4")
     return {
-        "NETWORK_DIM": rank, "NETWORK_ALPHA": rank if alpha is None else alpha, "NETWORK_TYPE": "LoRA (standard)", "LEARNING_RATE": lr,
+        "NETWORK_DIM": rank, "NETWORK_ALPHA": rank if alpha is None else alpha, "NETWORK_TYPE": "LoRA (standard)",
+        "LEARNING_RATE": lr,
         "MAX_TRAIN_EPOCHS": epochs, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42,
         "ADAPTIVE_LR": adaptive is not None, "ADAPTIVE_LR_MIN": lo, "ADAPTIVE_LR_MAX": hi,
         "OPTIMIZER_TYPE": "adamw", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
