@@ -229,7 +229,12 @@ class AnimaDriver(FamilyDriver):
         under "net."; checkpoints keep that layout, so ComfyUI loads them as it loads the base."""
         from fizgig.families.ft import FTSpec
         return FTSpec(blocks="blocks", components=("self_attn", "cross_attn", "mlp.layer1", "mlp.layer2"),
-                      file_prefix="net.")
+                      file_prefix="net.",
+                      # measured 5 Oct on a 5090: window peaks 2.7-3.7 GB at 0.25 MP, 4.0-4.3 GB at 1 MP (1.92 GB
+                      # allocated at planning, 0.93 GB NF4 trunk) -> resident base 2.4 GB at 1 MP (+0.1; the planner
+                      # keeps 1.5 GB besides); the attention windows grew 1.7 GB/MP from 0.25 to 1 MP. Calibrated at
+                      # 1 MP, so smaller runs plan with ~0.6 GB to spare. A simulated 8 GB card plans the 4 full windows
+                      overhead_gb=2.5, calib_mp=1.0, act_gb_per_mp=2.0)
 
     def compile_blocks(self, dit, boundary="inside", blocks_to_swap=0):
         """torch.compile the 28 blocks in place, after the LoRA has wrapped its Linears. Each block does its own
