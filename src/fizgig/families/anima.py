@@ -85,7 +85,7 @@ ANIMA = FamilyDescription(
     optimizers=("adamw8bit", "adamw"),
     network_types=("lora",),
     helper_files=(("circlestone-labs/Anima-Base-v1.0-Diffusers",
-                   ("text_encoder/config.json", "tokenizer/*", "t5_tokenizer/*")),),
+                   ("tokenizer/*", "t5_tokenizer/*")),),
     workbench_follows_samples=True,   # previews take the Samples tab's steps, CFG and negative
 
     sampling=(

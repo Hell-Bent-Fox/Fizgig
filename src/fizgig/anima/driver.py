@@ -29,6 +29,14 @@ T5_EOS = 1
 CONTEXT_LEN = 512
 SHIFT = 3.0
 
+# Qwen3 0.6B as Anima uses it (Anima-Base-v1.0-Diffusers text_encoder/config.json), spelled out: that file stores
+# rope_theta under rope_parameters (transformers 5), which older transformers ignore and fall back to 10000 - a
+# different text encoding from position 1 on
+QWEN3_06B = dict(vocab_size=151936, hidden_size=1024, intermediate_size=3072, num_hidden_layers=28,
+                 num_attention_heads=16, num_key_value_heads=8, head_dim=128, hidden_act="silu",
+                 max_position_embeddings=32768, rms_norm_eps=1e-6, rope_theta=1000000.0, attention_bias=False,
+                 tie_word_embeddings=False, use_sliding_window=False)
+
 DIT_CONFIG = dict(
     max_img_h=512, max_img_w=512, max_frames=128, in_channels=16, out_channels=16, patch_spatial=2, patch_temporal=1,
     model_channels=2048, concat_padding_mask=True, crossattn_emb_channels=1024, pos_emb_cls="rope3d",
@@ -62,7 +70,7 @@ class _TextEncoder:
         # tokenizer_config.json is written by a newer transformers than Fizgig pins and does not load in it
         self.t5 = PreTrainedTokenizerFast(tokenizer_file=hf_hub_download(HELPER, "t5_tokenizer/tokenizer.json"),
                                           eos_token="</s>", pad_token="<pad>", unk_token="<unk>")
-        model = Qwen3Model(Qwen3Config.from_pretrained(HELPER, subfolder="text_encoder"))
+        model = Qwen3Model(Qwen3Config(**QWEN3_06B))
         sd = {k[len("model."):] if k.startswith("model.") else k: v for k, v in load_file(path).items()}
         missing, unexpected = model.load_state_dict(sd, strict=False)
         if missing or [k for k in unexpected if not k.startswith("lm_head")]:
