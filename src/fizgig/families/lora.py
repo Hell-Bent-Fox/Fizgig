@@ -134,6 +134,50 @@ class LoRALinear(nn.Module):
         return out
 
 
+class LoRAConv(nn.Module):
+    """A frozen LoRA on a Conv2d (LoCon, and speed LoRAs such as LCM / Lightning that also patch a UNet's resnets): down
+    = a conv with the base's kernel, stride and padding to `rank` channels, up = a 1x1 conv back, kohya's layout. The
+    same adapters / scales interface as LoRALinear, so loading, strengths, block switches and baking treat it alike.
+    Never trained: training targets the block map's Linears."""
+
+    def __init__(self, base: nn.Conv2d):
+        super().__init__()
+        self.base = base
+        self.adapters = nn.ModuleDict()
+        self.scales = {}
+
+    @property
+    def in_features(self):
+        return self.base.in_channels
+
+    @property
+    def out_features(self):
+        return self.base.out_channels
+
+    def add(self, name, rank, alpha, trainable, A=None, B=None, strength=1.0, trainable_dtype=torch.float32):
+        if trainable or A is None:
+            raise ValueError("a conv LoRA is frozen-only (loaded from a file)")
+        bc = self.base
+        down = nn.Conv2d(bc.in_channels, rank, tuple(A.shape[2:]) if A.dim() == 4 else 1, stride=bc.stride,
+                         padding=bc.padding if A.dim() == 4 and tuple(A.shape[2:]) == tuple(bc.kernel_size) else 0,
+                         dilation=bc.dilation, bias=False)
+        up = nn.Conv2d(rank, bc.out_channels, 1, bias=False)
+        down.weight.data.copy_(A.reshape(down.weight.shape))
+        up.weight.data.copy_(B.reshape(up.weight.shape))
+        dev = getattr(self, "home", None) or bc.weight.device
+        ad = nn.Sequential(down, up).to(dev, torch.bfloat16).requires_grad_(False)
+        self.adapters[name] = ad
+        self.scales[name] = alpha / rank * strength
+
+    def forward(self, x):
+        out = self.base(x)
+        for n, ad in self.adapters.items():
+            s = self.scales.get(n, 0.0)
+            if s:
+                out = torch.add(out, ad(x.to(ad[0].weight.dtype)).to(out.dtype), alpha=float(s))
+        return out
+
+
 class FamilyLoRA:
     """A DiT's adapter set. `wrapped` maps the module name (relative to the DiT) -> LoRALinear."""
 
@@ -145,7 +189,8 @@ class FamilyLoRA:
         self.device = torch.device(device) if device is not None else None
         self.desc = driver.description
         self.targets = set(driver.lora_target_names(dit))
-        self.linears = {n for n, m in dit.named_modules() if isinstance(m, nn.Linear)}
+        # every module a LoRA file can adapt: Linears, and Conv2d for frozen files (LoCon / UNet speed LoRAs)
+        self.linears = {n for n, m in dit.named_modules() if isinstance(m, (nn.Linear, nn.Conv2d))}
         self._flat = {n.replace(".", "_"): n for n in self.linears}
         self.wrapped = {}
         for full in sorted(self.targets):
@@ -180,9 +225,12 @@ class FamilyLoRA:
         parent_name, _, leaf = full.rpartition(".")
         parent = self.dit.get_submodule(parent_name) if parent_name else self.dit
         child = getattr(parent, leaf, None)
-        if not isinstance(child, nn.Linear):
+        if isinstance(child, nn.Conv2d):
+            w = LoRAConv(child)
+        elif isinstance(child, nn.Linear):
+            w = LoRALinear(child)
+        else:
             return None
-        w = LoRALinear(child)
         if self.device is not None:
             w.home = self.device
         setattr(parent, leaf, w)
@@ -300,7 +348,11 @@ class FamilyLoRA:
             w = self._wrap(full)
             if w is None:
                 continue
-            if kind == "loha":
+            if isinstance(w, LoRAConv):
+                if kind != "lora" or P.shape[1] != w.in_features or Q.shape[0] != w.out_features:
+                    continue                          # LoKR / LoHa on convs are not read
+                w.add(name, P.shape[0], P.shape[0], False, P, Q)
+            elif kind == "loha":
                 if P[0].shape[0] != w.base.out_features or P[1].shape[1] != w.base.in_features:
                     continue
                 w.add_loha(name, P[0], P[1], Q[0], Q[1])
