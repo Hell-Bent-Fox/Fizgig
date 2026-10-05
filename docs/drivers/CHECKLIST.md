@@ -46,7 +46,7 @@ The checks above prove the family works. These make it good, and every family sh
 - Set epoch counts from the community's step targets for a typical dataset, and save every epoch.
 - Ship only presets you've trained.
 
-**Speed.** Time a real run through the GUI, not an isolated loop. If the GPU sits idle, the step is launch-bound: set `compiles=True` and measure `compile_payback_steps`. If your blocks don't sit in one `ModuleList`, or are called with keyword arguments, override `compile_blocks` and call `families/compile.ready_to_compile()` first (SDXL, Anima). Set `int8_attention=True` and route the model's attention through `attend()`, so workbench renders are faster.
+**Speed.** Time a real run through the GUI, not an isolated loop. If the GPU sits idle, the step is launch-bound: set `compiles=True` and measure `compile_payback_steps`. If your blocks don't sit in one `ModuleList`, or are called with keyword arguments, override `compile_blocks` and call `families/compile.ready_to_compile()` first (SDXL, Anima). Try `int8_attention=True` with the model's attention routed through `attend()`, and keep it where it measures faster (Anima 1.13x); a launch-bound model gains nothing (SDXL).
 
 **Memory.** Fill `train_memory` from measured peaks at two resolutions per precision, previews included: the preview often sets the peak.
 

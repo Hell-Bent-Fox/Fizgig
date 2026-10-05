@@ -11138,10 +11138,16 @@ class LoRATrainerGUI:
             "neg": "Base samples only — Distilled ignores it",
             "cfg": "Base samples only — Distilled uses no CFG",
         }
-        # a described family's own wording over the generic (description.samples_text / samples_cfg_free)
+        # a described family's own wording over the generic (description.samples_text / samples_cfg_free); Klein's
+        # Distilled wording only for a family that previews on its preview checkpoint
         _fd = self._family_desc()
         if _fd is not None:
-            _t = dict(_KLEIN, **dict(_fd.samples_text))
+            _base = _KLEIN if _fd.train_preview_checkpoint else dict(
+                _KLEIN, banner=f"Preview prompts rendered periodically during training, on the {_fd.display_name} "
+                               f"model being trained. Samples land in <output_dir>/sample/ and the Gallery button "
+                               f"below opens the viewer.",
+                advanced=f"{_fd.display_name}'s sampling settings: the negative prompt and CFG Scale.")
+            _t = dict(_base, **dict(_fd.samples_text))
             is_minimax = bool(_fd.samples_cfg_free)
         else:
             _t = _MM if is_minimax else _KLEIN

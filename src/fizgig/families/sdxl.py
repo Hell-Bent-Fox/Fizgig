@@ -124,7 +124,8 @@ SDXL = FamilyDescription(
     # recipe does - the target is built from the UNet's own predictions (families/train.py)
     slider_training=True,
     workbench_follows_samples=True,   # previews take the Samples tab's steps, CFG and negative
-    int8_attention=True,              # workbench renders: comfy-kitchen's INT8 attention
+    # INT8 attention not used: measured 5 Oct 2026 on a 5090, 2.74 -> 2.72 s per 30-step render (SDXL's renders are
+    # launch-bound, not attention-bound), so it would only cost fidelity
     helper_files=((_SDXL, ("model_index.json", "*/config.json", "tokenizer/*", "tokenizer_2/*", "scheduler/*")),),
 
     sampling=(

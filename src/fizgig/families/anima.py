@@ -104,7 +104,8 @@ ANIMA = FamilyDescription(
     helper_files=(("circlestone-labs/Anima-Base-v1.0-Diffusers",
                    ("tokenizer/*", "t5_tokenizer/*")),),
     workbench_follows_samples=True,   # previews take the Samples tab's steps, CFG and negative
-    int8_attention=True,              # workbench renders: comfy-kitchen's INT8 attention
+    int8_attention=True,              # workbench renders: comfy-kitchen's INT8 attention (5 Oct 2026, 5090: 1.13x,
+    #                                   20 steps 5.04 -> 4.47 s; same composition, small details differ)
 
     sampling=(
         SamplingSettings("Anima Base", steps=30, cfg=4.5, sampler="euler", scheduler="simple", options=_SHIFT,

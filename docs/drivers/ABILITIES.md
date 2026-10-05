@@ -20,7 +20,7 @@ The full field list, with comments, is `FamilyDescription` in `src/fizgig/famili
 | `precisions`, `auto_precisions`, `train_memory` | The Base precision choice (bf16 / INT8 / NF4) and an Auto plan that picks precision and block swap from free VRAM at launch. See [STILLS.md](STILLS.md#4-memory-let-auto-choose). | Optional: `plan_run` and `load_planned` for a family-specific plan or loader. |
 | — | Block swap: blocks stream between CPU and GPU on small cards, in training, previews and fine-tunes. | `max_blocks_to_swap`, `enable_block_swap`, `block_swap_mode`. |
 | `compiles`, `compile_payback_steps`, `compile_boundary`, `compile_memory` | The Compile Blocks control (torch.compile); Auto compiles only when the run is long enough to repay the warm-up. | `compile_targets(dit)`: the ModuleList of blocks. Blocks spread over several lists or called with keyword arguments: override `compile_blocks` and call `families/compile.ready_to_compile()` first (SDXL, Anima). |
-| `int8_attention` | Workbench renders use INT8 attention where the kernel exists. | The model's attention calls `fizgig.modules.int8_attention.attend()` first. A diffusers model installs an attention processor that routes through it (SDXL's `_KitchenAttention`). |
+| `int8_attention` | Workbench renders use INT8 attention where the kernel exists. | The model's attention calls `fizgig.modules.int8_attention.attend()` first. A diffusers model can install an attention processor that routes through it. Measure it: a launch-bound model gains nothing (SDXL: 1.01x), so leave it off there. |
 
 ## Kinds of training
 
