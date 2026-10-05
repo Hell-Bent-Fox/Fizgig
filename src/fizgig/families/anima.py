@@ -82,6 +82,11 @@ ANIMA = FamilyDescription(
     implementation=_CARD,
     ema_default="Off",
     precisions=("bf16", "int8", "nf4"),   # 2.1B DiT, 4.2 GB in bf16; the community reports fp8 bases train badly
+    # Measured 5 Oct 2026 on a 5090 (rank 16, adamw8bit, gradient checkpointing, 1024 previews), peak GB including
+    # the preview, which sets it (training alone: bf16 5.1 / 5.7, INT8 3.4 / 4.0, NF4 2.9 / 3.5 at 0.5 / 1 MP); s/step
+    # bf16 0.53 / 0.71, INT8 0.74 / 0.81, NF4 0.69 / 0.60. No block swap.
+    train_memory={"bf16": (((0.5, 8.9), (1.0, 8.9)), 0.0), "int8": (((0.5, 7.3), (1.0, 7.3)), 0.0),
+                  "nf4": (((0.5, 6.6), (1.0, 6.6)), 0.0)},
     optimizers=("adamw8bit", "adamw"),
     network_types=("lora",),
     helper_files=(("circlestone-labs/Anima-Base-v1.0-Diffusers",

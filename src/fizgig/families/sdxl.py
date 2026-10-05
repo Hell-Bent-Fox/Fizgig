@@ -93,6 +93,11 @@ SDXL = FamilyDescription(
     implementation="https://github.com/Stability-AI/generative-models",
     ema_default="Off",
     precisions=("bf16", "int8", "nf4"),   # 2.6B UNet: 5.1 GB in bf16
+    # Measured 5 Oct 2026 on a 5090 (Juggernaut v9, rank 16, adamw8bit, gradient checkpointing, 1024 previews), peak
+    # GB including the preview, which sets it (training alone: bf16 6.0 / 6.5, INT8 4.0 / 4.4, NF4 3.2 / 3.6 at
+    # 0.5 / 1 MP); s/step bf16 0.99 / 1.03, INT8 1.41 / 1.47, NF4 1.32 / 1.17. No block swap.
+    train_memory={"bf16": (((0.5, 10.3), (1.0, 10.3)), 0.0), "int8": (((0.5, 8.2), (1.0, 8.2)), 0.0),
+                  "nf4": (((0.5, 7.4), (1.0, 7.4)), 0.0)},
     optimizers=("adamw8bit", "adamw"),
     network_types=("lora",),
     workbench_follows_samples=True,   # previews take the Samples tab's steps, CFG and negative
