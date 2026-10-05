@@ -949,7 +949,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         driver.frozen_file_added(dit, training_adapter, training_adapter_strength, "adapter")
         logger.info(f"[adapter] training adapter ON ({n} Linears, strength {training_adapter_strength:g}) - frozen, "
                     f"off in previews, not saved into the LoRA")
-    else:
+    elif desc.training_adapter:                 # the family has one and this run goes without it
         logger.warning("[adapter] no training adapter for this run")
     if context_lora_path:
         n = net.add_file(context_lora_path, CONTEXT, context_lora_strength)

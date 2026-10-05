@@ -71,6 +71,8 @@ class _TextEncoders:
         pipe = StableDiffusionXLPipeline.from_single_file(path, torch_dtype=DTYPE, config=CONFIG_REPO)
         pipe.unet = pipe.vae = None
         self.tok1, self.tok2 = pipe.tokenizer, pipe.tokenizer_2
+        for t in (self.tok1, self.tok2):
+            t.model_max_length = 1 << 20      # long prompts are split into 77-token chunks (_chunks): no length warning
         self.te1 = pipe.text_encoder.to(device).eval().requires_grad_(False)
         self.te2 = pipe.text_encoder_2.to(device).eval().requires_grad_(False)
         self.device = device
