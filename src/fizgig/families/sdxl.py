@@ -124,6 +124,7 @@ SDXL = FamilyDescription(
     # recipe does - the target is built from the UNet's own predictions (families/train.py)
     slider_training=True,
     workbench_follows_samples=True,   # previews take the Samples tab's steps, CFG and negative
+    int8_attention=True,              # workbench renders: comfy-kitchen's INT8 attention
     helper_files=((_SDXL, ("model_index.json", "*/config.json", "tokenizer/*", "tokenizer_2/*", "scheduler/*")),),
 
     sampling=(

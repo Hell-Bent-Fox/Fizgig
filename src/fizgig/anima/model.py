@@ -18,6 +18,8 @@ import torch.nn.functional as F
 
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
+from fizgig.modules import int8_attention as _i8a
+
 
 
 # Utility functions: RoPE for DiT
@@ -250,7 +252,10 @@ class Attention(nn.Module):
         q, k, v = self.compute_qkv(x, context, rope_emb=rope_emb)                       # (b, s, h, d)
         if q.dtype != v.dtype:
             q, k = q.to(v.dtype), k.to(v.dtype)
-        out = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2))
+        qt, kt, vt = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+        out = _i8a.attend(qt, kt, vt)                # workbench renders: comfy-kitchen's INT8 kernel
+        if out is None:
+            out = F.scaled_dot_product_attention(qt, kt, vt)
         out = out.transpose(1, 2).reshape(x.shape[0], -1, self.n_heads * self.head_dim)
         return self.output_dropout(self.output_proj(out))
 

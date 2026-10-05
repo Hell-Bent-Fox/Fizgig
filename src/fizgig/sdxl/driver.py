@@ -18,6 +18,7 @@ import torch
 import torch.nn.functional as F
 
 from fizgig.families.driver import Block, BlockGroup, FamilyDriver
+from fizgig.modules import int8_attention as _i8a
 
 CONFIG_REPO = "stabilityai/stable-diffusion-xl-base-1.0"
 DTYPE = torch.bfloat16
@@ -117,12 +118,40 @@ class _TextEncoders:
             torch.cuda.empty_cache()
 
 
+class _KitchenAttention:
+    """diffusers' own SDPA attention processor, with a workbench render's attention routed through Fizgig's attend()
+    (comfy-kitchen's INT8 kernel when the description opts in and nothing is under grad). Training and anything else
+    run the stock processor unchanged."""
+
+    def __init__(self):
+        from diffusers.models.attention_processor import AttnProcessor2_0
+        self.inner = AttnProcessor2_0()
+
+    def __call__(self, attn, hidden_states, *args, **kwargs):
+        if torch.is_grad_enabled() or not _i8a.wanted():
+            return self.inner(attn, hidden_states, *args, **kwargs)
+        sdpa = F.scaled_dot_product_attention
+
+        def routed(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, **kw):
+            if attn_mask is None and not is_causal and not kw:
+                out = _i8a.attend(q, k, v)
+                if out is not None:
+                    return out
+            return sdpa(q, k, v, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=is_causal, **kw)
+        F.scaled_dot_product_attention = routed
+        try:
+            return self.inner(attn, hidden_states, *args, **kwargs)
+        finally:
+            F.scaled_dot_product_attention = sdpa
+
+
 class SDXLDriver(FamilyDriver):
 
     # ---- models ---------------------------------------------------------------------------------
     def load_dit(self, path, device):
         from diffusers import UNet2DConditionModel
         unet = UNet2DConditionModel.from_single_file(path, config=CONFIG_REPO, subfolder="unet", torch_dtype=DTYPE)
+        unet.set_attn_processor(_KitchenAttention())
         return unet.to(device).eval().requires_grad_(False)
 
     def load_vae(self, path, device):
