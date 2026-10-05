@@ -1,4 +1,4 @@
-# Fizgig v7.0.0: Anima and SDXL arrive, fine-tuning for every model, and the driver system is complete
+# Fizgig v7.0.0: Anima and SDXL arrive, fine-tuning for every model, and the driver system is complete - meaning the community can now add models to Fizgig (Docs included).
 
 Anima and SDXL join with the full workbench. Full fine-tuning now works on all six models, trains the whole model at once when your card has room, and reaches cards down to 8 GB. The driver system is complete: every model now runs on it, and the guide to adding your own is ready.
 
