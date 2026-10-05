@@ -21,7 +21,8 @@ def _preset(rank, lr=1e-4, adaptive=None, epochs=20, mp="1.0", alpha=None, slide
         "OPTIMIZER_TYPE": "adamw", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
         "DATASET_MEGAPIXELS": mp, "BLOCKS_SWAP": "Auto (detect from GPU)",
         "FAMILY_PRECISION": "Auto (fits your free VRAM)", "FAMILY_EMA": "0.98 (recommended)",
-        "KREA2_LOSS_WATCH": True, "KREA2_PER_IMAGE_LR": False, "KREA2_AUTO_RECAPTION": False,
+        # the loss watch with per-image LR and auto-recaption on, except for sliders (Peter, 5 Oct 2026)
+        "KREA2_LOSS_WATCH": True, "KREA2_PER_IMAGE_LR": not slider, "KREA2_AUTO_RECAPTION": not slider,
         "KREA2_WARMUP_LOOK": False,
     }
 
@@ -160,10 +161,11 @@ SDXL = FamilyDescription(
         # adaptive "Standard" (rank 16, Adaptive 1e-4..4e-4) had the subject by epoch 2-3 on 115 photos at 1 MP.
         # alpha at half the rank (Peter, 5 Oct 2026: SDXL LoRAs gain from the halved alpha; it also halves the LoRA's
         # output scale, so the same 1e-4 moves it half as far per step)
-        ("✨ SDXL Strong (rank 32, alpha 16, 1e-4)", _preset(32, lr=1e-4, alpha=16)),      # the default (Peter)
-        ("✨ SDXL Standard (rank 16, alpha 8, 1e-4)", _preset(16, lr=1e-4, alpha=8)),
-        # Slider: the default's rank 32 / alpha 16 at 1e-4 (Peter, 5 Oct 2026). Not yet measured on SDXL.
-        ("✨ SDXL Slider (rank 32, alpha 16, 1e-4)", _preset(32, lr=1e-4, alpha=16, epochs=30, slider=True)),
+        # 5e-5 for every SDXL preset (Peter, 5 Oct 2026: clearly better results than 1e-4 in his comparisons)
+        ("✨ SDXL Strong (rank 32, alpha 16, 5e-5)", _preset(32, lr=5e-5, alpha=16)),      # the default (Peter)
+        ("✨ SDXL Standard (rank 16, alpha 8, 5e-5)", _preset(16, lr=5e-5, alpha=8)),
+        # Slider: the default's rank 32 / alpha 16 at 5e-5 (Peter, 5 Oct 2026). Not yet measured on SDXL.
+        ("✨ SDXL Slider (rank 32, alpha 16, 5e-5)", _preset(32, lr=5e-5, alpha=16, epochs=30, slider=True)),
     ),
 
     options=(
