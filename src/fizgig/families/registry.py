@@ -52,26 +52,33 @@ def workbench_families(tool: str) -> list:
 
 def family_of_lora(path: str) -> Optional[FamilyDescription]:
     """The described family a LoRA file was written for, from its header alone (key names, no tensor data), or
-    None. A file matches when most of its down weights name modules inside the family's block map in the family's
-    own key format."""
+    None: the family whose block map takes the largest share of the file's modules, when that share is at least half
+    (every naming the readers accept: own keys, kohya-flattened, another trainer's via alias_flat, fused tensors)."""
     try:
         from safetensors import safe_open
         with safe_open(path, "pt") as f:
             keys = list(f.keys())
     except Exception:
         return None
+    import re
+    from fizgig.families.lorafile import loha_modules, lokr_modules, lora_pairs
+    stem_of = re.compile(r"(.+)\.(?:lora_A|lora_down|lora\.down)\.weight$|(.+)\.(?:lokr_w1(?:_a)?|hada_w1_a)$")
+    # a LoRA's text-encoder parts (kohya lora_te1_ / lora_te2_, diffusers text_encoder.) aren't the diffusion model's
+    stems = {m.group(1) or m.group(2) for m in map(stem_of.match, keys) if m}
+    stems = {s for s in stems if not s.startswith(("lora_te", "text_encoder", "te1.", "te2.", "te."))}
+    if not stems:
+        return None
+    # the family placing the largest share of the file's modules inside its block map: several can place some
+    # (Krea 2 maps other trainers' transformer_blocks names, so a Qwen file half-fits it too)
+    best, best_share = None, 0.0
     for d in training_families():
-        from fizgig.families.lorafile import loha_modules, lokr_modules, lora_pairs
         try:
-            # every naming the readers accept (own keys, kohya-flattened, another trainer's via alias_flat)
-            mods = [m for m, *_ in lora_pairs(d, keys) if m is not None]
+            found = [(m, stem_of.match(down).group(1)) for m, down, *_ in lora_pairs(d, keys)]
         except ValueError:
             continue
-        mods += [m for m, _ in lokr_modules(d, keys) + loha_modules(d, keys) if m is not None]
-        if not mods:
-            continue
+        found += lokr_modules(d, keys) + loha_modules(d, keys)
         drv = d.load_driver()
-        inside = sum(1 for m in mods if drv.block_of(m) is not None)
-        if inside and inside >= 0.5 * len(mods):
-            return d
-    return None
+        share = len({s for m, s in found if m is not None and drv.block_of(m) is not None}) / len(stems)
+        if share > best_share:
+            best, best_share = d, share
+    return best if best_share >= 0.5 else None

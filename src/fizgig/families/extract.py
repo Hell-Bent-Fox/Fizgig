@@ -31,7 +31,8 @@ def extract_weight_only(desc, source, output, rank, dtype=torch.bfloat16, progre
     (outside `blocks`), mean kept energy, seconds, params)."""
     from safetensors import safe_open
     from safetensors.torch import save_file
-    from fizgig.families.lorafile import family_keys, loha_delta, loha_modules, lokr_factors, lokr_modules, lora_pairs
+    from fizgig.families.lorafile import (family_keys, get_up, loha_delta, loha_modules, lokr_factors, lokr_modules,
+                                          lora_pairs)
     t0 = time.time()
     sd, energies, skipped, params, dropped = {}, [], 0, 0, 0
     block_of = desc.load_driver().block_of if blocks else None
@@ -54,7 +55,7 @@ def extract_weight_only(desc, source, output, rank, dtype=torch.bfloat16, progre
             if m is None:
                 dropped += 1
                 continue
-            A, B = f.get_tensor(dk), f.get_tensor(uk)
+            A, B = f.get_tensor(dk), get_up(f, uk)
             alpha = float(f.get_tensor(ak).item()) if ak else float(A.shape[0])
             down, up, e = reduce_pair(A, B, m * alpha / A.shape[0], rank)
             kd, ku, ka = family_keys(desc, mod)

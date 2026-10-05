@@ -330,12 +330,19 @@ class FamilyLoRA:
             up = {"lora_A": "lora_B", "lora_down": "lora_up", "lora.down": "lora.up"}[down]
             if f"{stem}.{up}.weight" not in sd:
                 continue
-            full = self._module_for(stem)
-            if full is None:
-                continue
             A, B = sd[key], sd[f"{stem}.{up}.weight"]
             alpha = sd.get(f"{stem}.alpha")
-            out[full] = ("lora", A, B, (float(alpha.item()) if alpha is not None else float(A.shape[0])) / A.shape[0])
+            scale = (float(alpha.item()) if alpha is not None else float(A.shape[0])) / A.shape[0]
+            full = self._module_for(stem)
+            if full is None:
+                # a tensor the model file fuses (FTSpec.file_layout): each Linear takes its rows of the up matrix
+                from fizgig.families.lorafile import fused_parts
+                for ms, pt, n in fused_parts(self.driver, stem):
+                    fm = self._module_for(ms)
+                    if fm is not None:
+                        out[fm] = ("lora", A, B.chunk(n, dim=0)[pt], scale)
+                continue
+            out[full] = ("lora", A, B, scale)
         return out
 
     # ---- frozen adapters ------------------------------------------------------------------------

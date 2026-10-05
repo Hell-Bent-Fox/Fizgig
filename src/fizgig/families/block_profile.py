@@ -43,13 +43,14 @@ def weight_stats(desc, lora_path):
     """-> {"blocks": {block: {"norm", "retained": {k: share}}}, "retained": {k: share}, "max_rank", "modules",
     "rank_for": {0.9/0.95/0.99: k}}. Block ids follow the family's block map; modules outside it are OUTSIDE."""
     from safetensors import safe_open
-    from fizgig.families.lorafile import block_of, loha_delta, loha_modules, lokr_factors, lokr_modules, lora_pairs
+    from fizgig.families.lorafile import (block_of, get_up, loha_delta, loha_modules, lokr_factors, lokr_modules,
+                                          lora_pairs)
     blocks = block_of(desc)
     mods = []                                    # (block, singular values, rank)
     with safe_open(lora_path, "pt") as f:
         for mod, down, up, alpha in lora_pairs(desc, f.keys()):
             d = f.get_tensor(down).float()
-            u = f.get_tensor(up).float()
+            u = get_up(f, up).float()
             d, u = d.reshape(d.shape[0], -1), u.reshape(u.shape[0], -1)
             r = d.shape[0]
             a = float(f.get_tensor(alpha).float().reshape(-1)[0]) if alpha else float(r)

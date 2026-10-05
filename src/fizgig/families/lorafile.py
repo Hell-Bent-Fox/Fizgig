@@ -27,9 +27,36 @@ def _resolver(drv, known, flat):
     return resolve
 
 
+def fused_parts(drv, stem):
+    """[(model stem, part, parts)] when `stem` names a tensor the model file fuses and the model splits
+    (FTSpec.file_layout - Qwen's img_mlp.gate_up is [gate_layer; proj]): a LoRA extracted from such a file adapts
+    the fused tensor, and each model Linear takes its rows of the up matrix. [] for any other stem."""
+    try:
+        spec = drv.ft_spec(None)
+    except Exception:
+        spec = None
+    out = []
+    for msuf, fsuf, pt, n in getattr(spec, "file_layout", ()) or ():
+        f, m = fsuf[:-len(".weight")], msuf[:-len(".weight")]
+        for fs, ms in ((f, m), (f.replace(".", "_"), m.replace(".", "_"))):
+            if stem.endswith(fs):
+                out.append((stem[:-len(fs)] + ms, int(pt), int(n)))
+                break
+    return out
+
+
+def get_up(f, up):
+    """An up weight from lora_pairs: a key, or (key, part, parts) for a fused tensor's rows."""
+    if isinstance(up, tuple):
+        key, part, parts = up
+        return f.get_tensor(key).chunk(parts, dim=0)[part]
+    return f.get_tensor(up)
+
+
 def lora_pairs(desc, keys):
     """-> [(module or None, down key, up key, alpha key or None)] for every down/up pair in `keys`. module is None
-    for a kohya-flattened name outside the block map (it cannot be un-flattened without the model)."""
+    for a kohya-flattened name outside the block map (it cannot be un-flattened without the model). A pair on a fused
+    file tensor (fused_parts) gives one entry per model Linear, its up as (key, part, parts) - read it with get_up."""
     keys = set(keys)
     drv = desc.load_driver()
     known = {m for g in drv.block_map() for b in g.blocks for m in b.modules}
@@ -44,9 +71,15 @@ def lora_pairs(desc, keys):
         up = f"{stem}.{_UP[m.group(2)]}.weight"
         if up not in keys:
             continue
-        mod = resolve(stem)
         alpha = f"{stem}.alpha"
-        out.append((mod, key, up, alpha if alpha in keys else None))
+        alpha = alpha if alpha in keys else None
+        mod = resolve(stem)
+        if mod not in known:
+            split = [(resolve(ms), pt, n) for ms, pt, n in fused_parts(drv, stem)]
+            if split and all(m in known for m, _pt, _n in split):
+                out += [(m, key, (up, pt, n), alpha) for m, pt, n in split]
+                continue
+        out.append((mod, key, up, alpha))
     return out
 
 
