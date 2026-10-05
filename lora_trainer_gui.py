@@ -4405,6 +4405,20 @@ class LoRATrainerGUI:
         self.entries["FAMILY_FT_ROTATE_EVERY"].bind("<KeyRelease>", lambda *_: self._family_ft_plan_refresh(),
                                                     add="+")
         ttk.Label(_ftr2, text="epoch(s) before the next").pack(side=tk.LEFT, padx=(4, 0))
+        from fizgig.families.launch import FT_WINDOW_SIZES as _FT_SIZES
+        _ftr3 = _row()
+        ttk.Label(_ftr3, text="Window size").pack(side=tk.LEFT, padx=(0, 4))
+        _sizes = [lab for lab, _n in _FT_SIZES]
+        self.entries["FAMILY_FT_MAX_PARTS"] = ttk.Combobox(_ftr3, values=_sizes, state="readonly", width=34)
+        _saved = self.settings.get("FAMILY_FT_MAX_PARTS")
+        self.entries["FAMILY_FT_MAX_PARTS"].set(_saved if _saved in _sizes else _sizes[0])
+        self.entries["FAMILY_FT_MAX_PARTS"].pack(side=tk.LEFT)
+        self.entries["FAMILY_FT_MAX_PARTS"].bind("<<ComboboxSelected>>", lambda *_: self._family_ft_plan_refresh(),
+                                                 add="+")
+        ToolTip(self.entries["FAMILY_FT_MAX_PARTS"],
+                "How many parts train together in a window. Auto packs as many as your card holds - the whole model "
+                "at once when it fits, so nothing rotates. A smaller cap means more windows and more memory to "
+                "spare, if Auto runs too close to your card's limit.")
         _c2l = ttk.Button(_ftr2, text="Checkpoint to LoRA…", command=self._launch_diff_to_lora)
         _c2l.pack(side=tk.LEFT, padx=(14, 0))
         ToolTip(_c2l, "Open the Checkpoint to LoRA tool (its own window): diff a fine-tuned checkpoint against its "
@@ -5823,7 +5837,7 @@ class LoRATrainerGUI:
                                     "FAMILY_SLIDER_ULTRA", "FAMILY_FAST_ID", "FAMILY_FT", "FAMILY_FT_ROTATIONS",
                                     "FAMILY_FT_SAVE_EVERY",
                                     "FAMILY_FT_ROTATE_EVERY", "FAMILY_FT_FUSED", "FAMILY_FT_REG_DIR",
-                                    "FAMILY_FT_REG_MULT"})
+                                    "FAMILY_FT_REG_MULT", "FAMILY_FT_MAX_PARTS"})
     from fizgig.families.launch import PRECISION_LABELS as _FAMILY_PRECISION_LABELS
     _FAMILY_EMA_SHORT = "Short run (window = ¼ of the run)"
 
@@ -5895,13 +5909,16 @@ class LoRATrainerGUI:
                     _k, _eq, _v = _t.partition("=")
                     if _eq and not _k.startswith(("--", "aux:")):
                         _opts[_k] = _v
-            key = key + (tuple(sorted(_opts.items())),)
+            from fizgig.families.launch import ft_max_parts as _ft_max_parts
+            _cap = _ft_max_parts({"FAMILY_FT_MAX_PARTS": self.entries["FAMILY_FT_MAX_PARTS"].get()})
+            key = key + (tuple(sorted(_opts.items())), _cap)
             if getattr(self, "_ft_plan_cache", (None,))[0] != key:
                 try:
                     _mp = float(str(self.dataset_megapixels_var.get()).split()[0])
                 except Exception:
                     _mp = None
-                self._ft_plan_cache = (key, desc.load_driver().ft_card_plan(path, free, mp=_mp, options=_opts)
+                self._ft_plan_cache = (key, desc.load_driver().ft_card_plan(path, free, mp=_mp, options=_opts,
+                                                                             max_parts=_cap)
                                        if path and os.path.isfile(path) else None)
             plan = self._ft_plan_cache[1]
         except Exception:
@@ -5923,8 +5940,10 @@ class LoRATrainerGUI:
             gb = 0
         lab.configure(text=(
             (f"On this card ({free:.0f} GB free): every part trains at once, nothing rotates - a rotation is "
-             f"{per} epoch(s)" if list(windows) == [""] else
-             f"On this card ({free:.0f} GB free): a rotation is {len(windows)} parts x {per} epoch(s) = {cyc} epochs")
+             f"{per} epoch(s)" if len(windows) == 1 and isinstance(windows[0], list) else
+             f"On this card ({free:.0f} GB free): a rotation is {len(windows)} window(s) x {per} epoch(s) = {cyc} "
+             f"epochs" + (" (several parts train together in a window)" if any(isinstance(w, list) for w in windows)
+                          else ""))
             + (" - parts outside the one training stream from system memory, so steps are slower" if stream else "")
             + f". {rot} rotation(s) = {total} epochs. Checkpoint + preview at epoch {shown}"
             + (f" (~{gb:.0f} GB each)" if gb else "") + ". The log confirms the plan at Start."))
@@ -6083,7 +6102,7 @@ class LoRATrainerGUI:
                     if desc.train_areas else {}),
                  **{k: str(self.entries[k].get()).strip() for k in (
                      "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY", "FAMILY_FT_ROTATE_EVERY", "FAMILY_FT_REG_DIR",
-                     "FAMILY_FT_REG_MULT")},
+                     "FAMILY_FT_REG_MULT", "FAMILY_FT_MAX_PARTS")},
 
                  FAMILY_TRAINING_ADAPTER=bool(self.entries["FAMILY_TRAINING_ADAPTER"].get()),
                  **{k: str(self.entries[k].get()).strip() for k in (
@@ -29258,7 +29277,7 @@ class LoRATrainerGUI:
                     "FAMILY_SLIDER_SOURCE", "FAMILY_SLIDER_DIR", "FAMILY_SLIDER_CAPTION", "FAMILY_SLIDER_BASE",
                     "FAMILY_SLIDER_POS", "FAMILY_SLIDER_NEG", "FAMILY_SLIDER_GUIDANCE",
                     "FAMILY_FT_ROTATIONS", "FAMILY_FT_SAVE_EVERY", "FAMILY_FT_ROTATE_EVERY", "FAMILY_FT_REG_DIR",
-                    "FAMILY_FT_REG_MULT")}}
+                    "FAMILY_FT_REG_MULT", "FAMILY_FT_MAX_PARTS")}}
                if self._family_desc() is not None else {}),
             # RefMod's base: the canonical key ("fl2va"/"ref2va") from H3's Training Base row
             "MINIMAX_TRAIN_BASE": minimax_train_base(self._model_opt_label("MINIMAX_TRAIN_BASE")),

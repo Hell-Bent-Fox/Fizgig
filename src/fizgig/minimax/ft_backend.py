@@ -191,7 +191,7 @@ class H3FTBackend:
     always_label = "token_refiner (when ticked)"
 
     # ---- the window plan ---------------------------------------------------------------------------------------------
-    def plan(self, free_gb, allow_stream=True, mp=None):
+    def plan(self, free_gb, allow_stream=True, mp=None, max_parts=0):
         """plan_h3_ft_windows over usable = free + the NF4 trunk already resident - 1.5, less a clip dataset's
         activation reserve (the stills calibration has no idea a 56-frame clip adds ~2.3 GB a step)."""
         from fizgig.minimax.rotation_ft import ft_clip_activation_gb, plan_h3_ft_windows
@@ -205,7 +205,7 @@ class H3FTBackend:
                             "at %.2f MP) reserved before window sizing", act, margin, lt, smp)
         usable = free_gb + 0.21 * self.n_blocks - 1.5 - act - margin
         windows, stream, why = plan_h3_ft_windows(usable, subset=self.subset, n_blocks=self.n_blocks,
-                                                  allow_stream=allow_stream)
+                                                  allow_stream=allow_stream, max_parts=max_parts)
         self.stream = bool(stream)
         return windows, stream, why, usable
 

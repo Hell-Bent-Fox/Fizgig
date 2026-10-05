@@ -281,11 +281,12 @@ class FamilyDriver:
         family whose base file and trunk differ from the shared bf16 + NF4 path brings its own (H3)."""
         return None
 
-    def ft_card_plan(self, path, free_gb, mp=None, options=None):
+    def ft_card_plan(self, path, free_gb, mp=None, options=None, max_parts=0):
         """The fine-tune card's estimate before anything loads: (windows, stream) for this file on a card with
-        `free_gb` free, or None. Default: the shared planner over the file's header (families.ft.plan_from_file)."""
+        `free_gb` free, or None. Default: the shared planner over the file's header (families.ft.plan_from_file).
+        max_parts: the Training tab's cap on parts per window (0 = as many as fit)."""
         from fizgig.families.ft import plan_from_file
-        plan = plan_from_file(path, self.ft_spec(None), free_gb, mp=mp)
+        plan = plan_from_file(path, self.ft_spec(None), free_gb, mp=mp, max_parts=max_parts)
         return (plan[0], plan[1]) if plan else None
 
     def ft_cycle(self, cycle: int, offset: int, total: int) -> None:

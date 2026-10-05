@@ -909,7 +909,7 @@ class MiniMaxDriver(FamilyDriver):
         return FTSpec(blocks="blocks", components=H3_COMPONENT_PREFIXES, overhead_gb=14.5, trunk_gb_per_block=0.21,
                       slots_gb=2.0)
 
-    def ft_card_plan(self, path, free_gb, mp=None, options=None):
+    def ft_card_plan(self, path, free_gb, mp=None, options=None, max_parts=0):
         """H3's planner on the idle card: the trainer budgets after its NF4 trunk (~10.5 GB) and the non-block layers
         and VAE (~1.1 GB) are in, then adds the trunk back - so usable ~ free - 2.6; the fine-tune Blocks range
         narrows the cycle. Clips' activation reserve is left to the trainer (it sees the dataset)."""
@@ -917,7 +917,8 @@ class MiniMaxDriver(FamilyDriver):
         from fizgig.minimax.common import parse_block_spec
         spec = str((options or {}).get("ft_blocks") or "").strip()
         subset = sorted(parse_block_spec(spec, self.description.n_blocks)) if spec and spec.lower() != "all" else None
-        windows, stream, _why = plan_h3_ft_windows(free_gb - 2.6, subset=subset, n_blocks=self.description.n_blocks)
+        windows, stream, _why = plan_h3_ft_windows(free_gb - 2.6, subset=subset, n_blocks=self.description.n_blocks,
+                                                   max_parts=max_parts)
         return (windows, stream) if windows else None
 
     def ft_source_unfit(self, path):

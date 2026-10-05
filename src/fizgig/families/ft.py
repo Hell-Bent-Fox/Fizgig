@@ -41,8 +41,8 @@ class FTSpec:
         blocks have them).
     components: Linear-name prefixes within a block, in rotation order; each is one window spanning every block (the
         planner depth-splits a window that doesn't fit). Balance them by size - a window's bf16 weights, grads and
-        optimizer state are what the card holds. A card that holds every part at once trains them together in one
-        window (ALL) and nothing rotates.
+        optimizer state are what the card holds. A card that holds several parts at once trains them together (the
+        fewest windows that fit; every part in one window and nothing rotates).
     always_on: dotted module names trained for the whole run (e.g. a text-fusion stack outside the blocks). Their
         Linears must be bf16 (outside the family's quant targets).
     overhead_gb: VRAM with the NF4 trunk resident plus activations and margin - the planner's base. None = the
@@ -413,29 +413,20 @@ class Rotator:
                             self.loc, self.src)
 
 
-# the one window holding every trained part: the rotator's targets are already just the spec's components, and the
-# empty prefix claims them all
-ALL = ""
-
-
-def _plan(comp_gb, n_blocks, trunk, spec: FTSpec, usable, allow_stream=True, mp=None, spans=None):
+def _plan(comp_gb, n_blocks, trunk, spec: FTSpec, usable, allow_stream=True, mp=None, spans=None, max_parts=0):
     overhead = spec.overhead_gb if spec.overhead_gb is not None else trunk * n_blocks + 3.5
     extra = spec.act_gb_per_mp * max(0.0, float(mp or spec.calib_mp) - spec.calib_mp)
     overhead += extra                  # a bigger bucket's activations, resident and streaming alike
-    # every part at once: a trained Linear drops its NF4 copy, so the whole trunk comes off (measured 5 Oct at 1 MP:
-    # Anima 4.96 GB in this budget frame against 5.15 planned, Qwen 2.1 17.1 against 17.8)
-    whole = overhead + sum((len(spans[p]) if spans else n_blocks) * g for p, g in comp_gb.items()) - n_blocks * trunk
-    if whole <= usable:
-        return [ALL], False, [f"every part fits at once (~{whole:.1f} GB of {usable:.1f} usable) - one window, "
-                              f"nothing rotates"]
     # the shared planner's streaming base is overhead - trunk + slots; a measured stream_base_gb sets it directly
     slots = (spec.slots_gb if spec.stream_base_gb is None
              else spec.stream_base_gb + extra - (overhead - trunk * n_blocks))
     return plan_component_windows(usable, range(n_blocks), n_blocks, comp_gb, overhead_gb=overhead,
-                                  trunk_gb_per_block=trunk, slots_gb=slots, allow_stream=allow_stream, spans=spans)
+                                  trunk_gb_per_block=trunk, slots_gb=slots, allow_stream=allow_stream, spans=spans,
+                                  max_parts=max_parts)
 
 
-def plan_windows(dit, spec: FTSpec, rotator: Rotator, free_gb: float, allow_stream: bool = True, mp=None):
+def plan_windows(dit, spec: FTSpec, rotator: Rotator, free_gb: float, allow_stream: bool = True, mp=None,
+                 max_parts=0):
     """(windows, stream, reasons, usable GB) for this card, with the model loaded: component sizes measured from it,
     `free_gb` read after the NF4 trunk landed (so the trunk is added back into the budget)."""
     comp_gb = {p: 0.0 for p in spec.components}
@@ -468,11 +459,11 @@ def plan_windows(dit, spec: FTSpec, rotator: Rotator, free_gb: float, allow_stre
                      if getattr(lin, "_nf4_packed", None) is not None)
         trunk = packed / 1e9 / max(1, n)
     usable = free_gb + trunk * n - 1.5
-    windows, stream, why = _plan(comp_gb, n, trunk, spec, usable, allow_stream, mp, spans=spans)
+    windows, stream, why = _plan(comp_gb, n, trunk, spec, usable, allow_stream, mp, spans=spans, max_parts=max_parts)
     return windows, stream, why, usable
 
 
-def plan_from_file(path: str, spec: FTSpec, free_gb: float, mp=None):
+def plan_from_file(path: str, spec: FTSpec, free_gb: float, mp=None, max_parts=0):
     """The same plan before anything loads (the Training tab's "on this card" line): component sizes from the model
     file's header, `free_gb` read on the idle card. The trainer budgets after its model and preview VAE are in, so
     the non-block layers (kept bf16) and ~1.05 GB (VAE + runtime; measured on Krea 2 and Qwen 2.1) come off here. Returns (windows, stream, usable) or
@@ -483,7 +474,7 @@ def plan_from_file(path: str, spec: FTSpec, free_gb: float, mp=None):
         pre = tuple(p for p in (_PREFIX, spec.file_prefix) if p)
         hdr = {next((k[len(p):] for p in pre if k.startswith(p)), k): f.header[k] for k in f.keys()}
     if not isinstance(spec.blocks, str):
-        return _plan_from_header_lists(hdr, spec, free_gb, mp)
+        return _plan_from_header_lists(hdr, spec, free_gb, mp, max_parts)
     pat = re.compile(rf"^{re.escape(spec.blocks)}\.(\d+)\.(.+)$")
     blocks, comp_gb, block0_params, nonblock = set(), {p: 0.0 for p in spec.components}, 0, 0.0
     for k, info in hdr.items():
@@ -512,11 +503,11 @@ def plan_from_file(path: str, spec: FTSpec, free_gb: float, mp=None):
     n = len(blocks)
     trunk = float(spec.trunk_gb_per_block) if spec.trunk_gb_per_block is not None else block0_params * 0.53 / 1e9
     usable = free_gb - nonblock - 1.05 - 1.5
-    windows, stream, _why = _plan(comp_gb, n, trunk, spec, usable, mp=mp)
+    windows, stream, _why = _plan(comp_gb, n, trunk, spec, usable, mp=mp, max_parts=max_parts)
     return windows, stream, usable
 
 
-def _plan_from_header_lists(hdr, spec: FTSpec, free_gb: float, mp=None):
+def _plan_from_header_lists(hdr, spec: FTSpec, free_gb: float, mp=None, max_parts=0):
     """plan_from_file for several block lists: each part sized per block of the blocks that hold it, numbered as
     one cycle (the lists end to end)."""
     import re
@@ -560,7 +551,7 @@ def _plan_from_header_lists(hdr, spec: FTSpec, free_gb: float, mp=None):
     comp_gb = {p: v / len(spans[p]) for p, v in comp_gb.items()}
     trunk = float(spec.trunk_gb_per_block) if spec.trunk_gb_per_block is not None else params * 0.53 / 1e9 / n
     usable = free_gb - nonblock - 1.05 - 1.5
-    windows, stream, _why = _plan(comp_gb, n, trunk, spec, usable, mp=mp, spans=spans)
+    windows, stream, _why = _plan(comp_gb, n, trunk, spec, usable, mp=mp, spans=spans, max_parts=max_parts)
     return windows, stream, usable
 
 
@@ -676,8 +667,9 @@ class SharedBackend:
     def start_always(self):
         return self.rot.start_always()
 
-    def plan(self, free_gb, allow_stream=True, mp=None):
-        windows, stream, why, usable = plan_windows(self.dit, self.spec, self.rot, free_gb, allow_stream, mp)
+    def plan(self, free_gb, allow_stream=True, mp=None, max_parts=0):
+        windows, stream, why, usable = plan_windows(self.dit, self.spec, self.rot, free_gb, allow_stream, mp,
+                                                    max_parts)
         if windows is not None and stream and any(isinstance(w, tuple) for w in windows):
             from fizgig.krea2.rotation import RotationOffloader
             n = len(self.rot.blocks)
@@ -726,5 +718,5 @@ def schedule(windows, n_blocks, rotate_every=1, start_window=0) -> RotationSched
                             start_window=start_window)
 
 
-__all__ = ["ALL", "FTSpec", "Rotator", "SharedBackend", "FusedSteps", "make_optimizer", "plan_windows", "save_checkpoint", "schedule",
+__all__ = ["FTSpec", "Rotator", "SharedBackend", "FusedSteps", "make_optimizer", "plan_windows", "save_checkpoint", "schedule",
            "snap_ft_epochs", "source_unfit_reason", "component_gb_per_block"]

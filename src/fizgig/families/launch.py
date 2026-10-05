@@ -203,6 +203,15 @@ def edit_instruction(inputs):
     return ""
 
 
+# the Training tab's window-size choice -> the planner's cap on parts per window (0 = as many as fit)
+FT_WINDOW_SIZES = (("Auto - as few windows as fit", 0), ("At most 3 parts per window", 3),
+                   ("At most 2 parts per window", 2), ("One part per window (most headroom)", 1))
+
+
+def ft_max_parts(inputs):
+    return dict(FT_WINDOW_SIZES).get(_s(inputs.get("FAMILY_FT_MAX_PARTS")), 0)
+
+
 # ---------------------------------------------------------------------------------------------------- problems
 def problems(desc, inputs):
     """What the family's own checks refuse: an edit's or a slider's pairs, a prompt slider's prompts, and every
@@ -481,6 +490,8 @@ def train_command(desc, inputs, plan):
         cmd += ["--finetune", "--ft_rotations", str(_ft_int(st, "FAMILY_FT_ROTATIONS", 10)),
                 "--ft_save_every_rotations", str(_ft_int(st, "FAMILY_FT_SAVE_EVERY", 1)),
                 "--ft_rotate_every", str(_ft_int(st, "FAMILY_FT_ROTATE_EVERY", 1))]
+        if ft_max_parts(st):
+            cmd += ["--ft_max_parts", str(ft_max_parts(st))]
         if st.get("FAMILY_FT_FUSED", True):
             cmd.append("--ft_fused_backward")
         if ft_reg_dir(desc, st):

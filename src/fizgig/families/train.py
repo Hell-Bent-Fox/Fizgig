@@ -573,7 +573,7 @@ class _FineTune:
     whole-rotation length and cadence, a fresh optimizer per window, and the full-checkpoint save."""
 
     def __init__(self, driver, desc, dit, net, dit_path, device, *, max_train_epochs, rotations, save_every_rotations,
-                 rotate_every, start_window, epochs_done, fused, lr, master_dir, mp=None, group=None):
+                 rotate_every, start_window, epochs_done, fused, lr, master_dir, mp=None, group=None, max_parts=0):
         from fizgig.families import ft
         from fizgig.utils.device import plannable_free_vram
         self.ft, self.driver, self.desc, self.dit, self.src, self.lr = ft, driver, desc, dit, dit_path, lr
@@ -600,7 +600,8 @@ class _FineTune:
         logger.info(f"[finetune] planning with {torch.cuda.memory_allocated() / 1e9:.2f} GB allocated, "
                     f"{plannable_free_vram():.2f} GB free")
         windows, stream, why, usable = self.be.plan(
-            plannable_free_vram(), allow_stream=os.environ.get("FIZGIG_NO_FT_STREAM") != "1", mp=mp)
+            plannable_free_vram(), allow_stream=os.environ.get("FIZGIG_NO_FT_STREAM") != "1", mp=mp,
+            max_parts=max_parts)
         for line in why:
             logger.info(f"[finetune] {line}")
         if windows is None:
@@ -650,7 +651,7 @@ class _FineTune:
         torch.cuda.reset_peak_memory_stats()
         params = self.be.trainable_params()
         logger.info(f"[finetune] epoch {epoch + 1 + self.epochs_done}: window {self.sched.window_at(epoch) + 1}/"
-                    f"{self.sched.n_windows} {[(w or 'every part') if isinstance(w, str) else w for w in want]} - "
+                    f"{self.sched.n_windows} {want} - "
                     f"{n} Linears trainable, "
                     f"{sum(p.numel() for p in params) / 1e9:.2f}B parameters")
         if self.fused is not None:
@@ -700,7 +701,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  log_per_image_loss=False, per_image_lr=False, auto_recaption=False, warmup_look_outliers=False,
                  trigger_word=None, trigger_position="start", recaption_instruction=None,
                  recaption_instruction_detailed=None, captioner=None,
-                 finetune=False, ft_rotations=10, ft_save_every_rotations=1, ft_rotate_every=1, ft_start_window=0,
+                 finetune=False, ft_rotations=10, ft_save_every_rotations=1, ft_rotate_every=1, ft_max_parts=0,
+                 ft_start_window=0,
                  ft_epochs_done=0, ft_fused_backward=False, reg_lr_multiplier=0.2, preview_checkpoint=None,
                  preview_checkpoint_cache="auto", preview_int8=False, family_options=None):
     desc = get_family(family)
@@ -984,7 +986,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         ftr = _FineTune(driver, desc, dit, net, dit_path, device, max_train_epochs=None, rotations=ft_rotations,
                         save_every_rotations=ft_save_every_rotations, rotate_every=ft_rotate_every,
                         start_window=ft_start_window, epochs_done=ft_epochs_done, fused=ft_fused_backward,
-                        lr=learning_rate, master_dir=output_dir, mp=_largest_bucket_mp(group), group=group)
+                        lr=learning_rate, master_dir=output_dir, mp=_largest_bucket_mp(group), group=group,
+                        max_parts=ft_max_parts)
         max_train_epochs, save_every_n_epochs = ftr.epochs, ftr.save_every
         if ftr.streamer is not None:
             swapped = 1          # blocks stream: previews and caption re-encodes must not park + restore the whole DiT
@@ -1593,6 +1596,8 @@ def setup_parser():
     p.add_argument("--ft_save_every_rotations", type=int, default=1,
                    help="checkpoint (and preview) every N rotations; never mid-rotation")
     p.add_argument("--ft_rotate_every", type=int, default=1, help="epochs each window trains before the next")
+    p.add_argument("--ft_max_parts", type=int, default=0,
+                   help="most parts per fine-tune window (0 = as many as fit; 1 = one part per window, most headroom)")
     p.add_argument("--ft_start_window", type=int, default=0, help="continuing: the window to start at")
     p.add_argument("--ft_epochs_done", type=int, default=0, help="continuing: epochs already trained (numbering)")
     p.add_argument("--ft_fused_backward", action="store_true",
@@ -1659,7 +1664,7 @@ def main():
         lr_scheduler_num_cycles=a.lr_scheduler_num_cycles, lr_scheduler_power=a.lr_scheduler_power,
         gradient_accumulation_steps=a.gradient_accumulation_steps, compile_blocks=a.compile_blocks,
         finetune=a.finetune, ft_rotations=a.ft_rotations, ft_save_every_rotations=a.ft_save_every_rotations,
-        ft_rotate_every=a.ft_rotate_every, ft_start_window=a.ft_start_window, ft_epochs_done=a.ft_epochs_done,
+        ft_rotate_every=a.ft_rotate_every, ft_max_parts=a.ft_max_parts, ft_start_window=a.ft_start_window, ft_epochs_done=a.ft_epochs_done,
         ft_fused_backward=a.ft_fused_backward, reg_lr_multiplier=a.reg_lr_multiplier,
         preview_checkpoint=a.preview_checkpoint, preview_checkpoint_cache=a.preview_checkpoint_cache,
         preview_int8=a.preview_int8,

@@ -86,13 +86,14 @@ class RotationSchedule:
         entry is a bare prefix string (full depth) or a (prefix, lo, hi) depth-split."""
         w = self.window_at(epoch)
         if self.mode == "component":
-            return [self.components[w]]
+            c = self.components[w]
+            return list(c) if isinstance(c, list) else [c]     # a list: several parts trained together
         start = w * self.active
         return sorted(self.order[start:start + self.active])
 
     def describe(self) -> str:
         if self.mode == "component":
-            _names = [(c or "every part") if isinstance(c, str) else f"{c[0]}@{c[1]}-{c[2]}"
+            _names = ["+".join(c) if isinstance(c, list) else c if isinstance(c, str) else f"{c[0]}@{c[1]}-{c[2]}"
                       for c in self.components]
             return (f"component windows {_names} across all {self.n_blocks} blocks, "
                     f"rotating every {self.rotate_every} epoch(s) — {self.n_windows} windows, "
@@ -144,12 +145,14 @@ def snap_ft_epochs(max_epochs, cycle_epochs, start_window=0, rotate_every=1):
 
 def plan_component_windows(usable_gb, span, n_blocks, comp_gb, overhead_gb,
                            trunk_gb_per_block, slots_gb, allow_stream=True,
-                           max_sane_windows=12, spans=None):
+                           max_sane_windows=12, spans=None, trunk_credit=True, pack_margin_gb=0.0,
+                           max_parts=0):
     """The family-agnostic component-window plan: (windows, stream, reasons).
 
     comp_gb: ordered (prefix -> bf16 GB per block). windows: RotationSchedule component
     entries — bare prefixes where the full span fits, (prefix, lo, hi) depth-splits where
-    it doesn't. stream: True when the frozen out-of-window blocks must stream from CPU to
+    it doesn't, and lists of prefixes where several whole parts fit one window (the fewest
+    windows the card holds; one list of every part = the whole model at once). stream: True when the frozen out-of-window blocks must stream from CPU to
     fit. Returns (None, stream, reasons) when the budget can't run FT at all.
 
     Depth-splitting trades the full-depth-per-window geometry (what makes component mode
@@ -159,7 +162,9 @@ def plan_component_windows(usable_gb, span, n_blocks, comp_gb, overhead_gb,
 
     spans: prefix -> the blocks that hold it, where a component lives in some blocks only (Klein: img_attn in the
     double blocks, linear1 in the single ones); comp_gb is then per block OF ITS SPAN, and a depth-split divides
-    that span, never into blocks without it."""
+    that span, never into blocks without it. trunk_credit / pack_margin_gb: how a window of several parts is sized
+    (H3's backend measured over the credited plan, so it packs without the credit and with a margin). max_parts:
+    the user's cap on parts per window (0 = as many as fit; 1 = one part per window, the most headroom)."""
     span = sorted(int(b) for b in span)
     spans = {p: sorted(int(b) for b in s) for p, s in (spans or {}).items()}
 
@@ -189,6 +194,35 @@ def plan_component_windows(usable_gb, span, n_blocks, comp_gb, overhead_gb,
         if k == 1:
             return [prefix]                       # full span — bare prefix, full depth
         return [(prefix, c[0], c[-1]) for c in chunks]
+
+    # Packed plan: as many whole parts per window as fit, the fewest windows first. A trained Linear drops its
+    # quantised copy, so a window of several parts is credited their share of the trunk (measured 5 Oct at 1 MP:
+    # Anima and Qwen 2.1 trained whole within 0.2 / 0.7 GB under this); a one-part window keeps the calibrated
+    # overhead + its weights.
+    full = {p: len(span_of(p)) * comp_gb[p] for p in prefixes}
+    n_span = len(set().union(*spans.values())) if spans else len(span)
+    per_gb = trunk_gb_per_block * n_span / max(1e-9, sum(full.values()))    # trunk GB per bf16 GB trained
+
+    def need(group):
+        w = sum(full[p] for p in group)
+        if len(group) == 1:
+            return overhead_gb + w
+        return overhead_gb + w - (per_gb * w if trunk_credit else 0.0) + pack_margin_gb
+
+    groups = []
+    for p in sorted(prefixes, key=lambda q: -full[q]):        # first-fit decreasing
+        for g in groups:
+            if (not max_parts or len(g) < max_parts) and need(g + [p]) <= usable:
+                g.append(p)
+                break
+        else:
+            groups.append([p])
+    if len(groups) < len(prefixes) and all(need(g) <= usable for g in groups):
+        order = {p: i for i, p in enumerate(prefixes)}
+        groups = sorted((sorted(g, key=order.get) for g in groups), key=lambda g: order[g[0]])
+        reasons.append(f"{len(prefixes)} parts packed into {len(groups)} window(s), each at full depth (largest "
+                       f"~{max(need(g) for g in groups):.1f} GB of {usable:.1f} usable)")
+        return [g if len(g) > 1 else g[0] for g in groups], False, reasons
 
     # Full-speed plan: everything resident, split only what the budget forces. Viable
     # only when at least a 1-block window of the fattest component fits the cap.
