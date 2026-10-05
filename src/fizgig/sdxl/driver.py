@@ -8,7 +8,8 @@ Pony, RealVis, base SDXL ...), loaded from its single .safetensors file.
 * latents: 4 channels at 1/8, scaled by the VAE's 0.13025
 * training: the DDPM schedule SDXL was trained on (scaled-linear betas 0.00085-0.012, 1000 steps), uniform timesteps,
   epsilon prediction (or v-prediction for v-pred checkpoints, the "prediction" family option)
-* sampling: Euler on the same schedule (diffusers' EulerDiscreteScheduler, leading spacing)
+* sampling: DPM++ 2M SDE with Karras sigmas by default (the community's Juggernaut choice; its noise comes from the
+  seed), or Euler with trailing spacing (option sampler=euler), both on SDXL's training schedule
 * LoRA: the Linears of the 11 attention modules, named IN04 ... OUT05 as SDXL block-weight tools name them; kohya keys
   on diffusers module names (lora_unet_down_blocks_1_attentions_0_...), which ComfyUI maps
 """
@@ -79,6 +80,11 @@ class _TextEncoders:
     def encode(self, captions):
         out = []
         for cap in captions:
+            if not cap.strip():
+                # an empty prompt is all zeros (SDXL base's force_zeros_for_empty_prompt): an empty negative = none
+                out.append({"hidden_states": torch.zeros(77, 2048, dtype=DTYPE),
+                            "pooled": torch.zeros(1280, dtype=DTYPE)})
+                continue
             ids1 = self.tok1([cap], padding="max_length", max_length=77, truncation=True,
                              return_tensors="pt").input_ids.to(self.device)
             ids2 = self.tok2([cap], padding="max_length", max_length=77, truncation=True,
@@ -182,18 +188,22 @@ class SDXLDriver(FamilyDriver):
         g = torch.Generator("cpu").manual_seed(int(seed))
         return torch.randn((1, 4, height // 8, width // 8), generator=g, dtype=torch.float32)
 
-    def _scheduler(self):
-        from diffusers import EulerDiscreteScheduler
-        return EulerDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear",
-                                      num_train_timesteps=1000, steps_offset=1, timestep_spacing="leading",
-                                      prediction_type="v_prediction" if self._v_pred() else "epsilon")
+    def _scheduler(self, sampler="dpmpp_2m_sde_karras"):
+        from diffusers import DPMSolverMultistepScheduler, EulerDiscreteScheduler
+        common = dict(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000,
+                      prediction_type="v_prediction" if self._v_pred() else "epsilon")
+        if sampler == "euler":
+            return EulerDiscreteScheduler(timestep_spacing="trailing", **common)
+        return DPMSolverMultistepScheduler(algorithm_type="sde-dpmsolver++", solver_order=2, use_karras_sigmas=True,
+                                           **common)
 
     @torch.no_grad()
     def generate(self, dit, cond, width, height, *, steps, seed, cfg=1.0, neg_cond=None, sigmas=None, options=(),
                  noise=None, on_step=None, refs=None, **_ignored):
         device = next(dit.parameters()).device
-        sch = self._scheduler()
+        sch = self._scheduler(str(dict(options or ()).get("sampler", "dpmpp_2m_sde_karras")))
         sch.set_timesteps(int(steps), device=device)
+        g = torch.Generator("cpu").manual_seed(int(seed) + 1)      # the SDE sampler's noise, from the seed
         x = (self.initial_noise(seed, width, height) if noise is None else noise).to(device) * sch.init_noise_sigma
         use_cfg = cfg > 1.0
         if use_cfg:
@@ -209,8 +219,14 @@ class SDXLDriver(FamilyDriver):
             if use_cfg:
                 pu, pc = pred.chunk(2)
                 pred = pu + cfg * (pc - pu)
-            x = sch.step(pred, t, x, return_dict=False)[0]
+            x = sch.step(pred, t, x, return_dict=False, **({"generator": g} if "generator" in self._step_args(sch)
+                                                              else {}))[0]
         return x
+
+    @staticmethod
+    def _step_args(sch):
+        import inspect
+        return inspect.signature(sch.step).parameters
 
     def pad_conditioning(self, conds):
         """Both CLIPs always give 77 tokens, so prompts blend as they are (prompt travel)."""

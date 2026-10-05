@@ -10977,6 +10977,23 @@ class LoRATrainerGUI:
                     if config.get("sample_height_default") is not None:
                         self.sample_height_var.set(str(config["sample_height_default"]))
                 self._sample_defaults_arch = arch
+                # the negative prompt is kept per family across restarts (last_used["sample_negatives"]): the user's
+                # own text for this family, else its description's default (preview_negative)
+                _negs = self.last_used.setdefault("sample_negatives", {})
+                _neg = _negs.get(arch, config.get("sample_negative_default"))
+                if _neg is not None:
+                    self._sample_negative_loading = True       # a load, not an edit: nothing to remember
+                    try:
+                        self.sample_negative_var.set(_neg)
+                    finally:
+                        self._sample_negative_loading = False
+                if not getattr(self, "_sample_negative_traced", False):
+                    def _keep_negative(*_):
+                        _a = getattr(self, "_sample_defaults_arch", None)
+                        if _a and not getattr(self, "_sample_negative_loading", False):
+                            self.last_used.setdefault("sample_negatives", {})[_a] = self.sample_negative_var.get()
+                    self.sample_negative_var.trace_add("write", _keep_negative)
+                    self._sample_negative_traced = True
 
             # Enable/disable flow shift based on architecture
             if config.get("sample_flow_shift_default") is None:

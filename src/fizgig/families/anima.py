@@ -117,6 +117,8 @@ ANIMA = FamilyDescription(
     preview_speed_strength=0.0,       # previews on the base by default; raise Turbo strength for speed
     preview_steps=20,
     preview_cfg=4.5,
+    preview_negative=("worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg artifacts, "
+                      "chromatic aberration"),   # the model card's
     preview_cfg_note="About 4.5 (below 2 washes out, above about 7 oversaturates). Anima reads danbooru tags or "
                      "prose; the card's quality prefix is \"masterpiece, best quality, score_7, safe,\".",
     preview_width=1024,

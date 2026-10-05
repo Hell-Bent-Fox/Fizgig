@@ -99,14 +99,23 @@ SDXL = FamilyDescription(
     helper_files=((_SDXL, ("model_index.json", "*/config.json", "tokenizer/*", "tokenizer_2/*", "scheduler/*")),),
 
     sampling=(
-        SamplingSettings("Juggernaut XL", steps=30, cfg=5.0, sampler="euler", scheduler="normal", negative_prompt=True,
-                         note="RunDiffusion's card: 30-40 steps, CFG 3-7, DPM++ 2M Karras; Euler is the base "
-                              "pipeline's sampler.",
-                         source=f"https://huggingface.co/{_JUGG}"),
+        SamplingSettings("Juggernaut (community)", steps=30, cfg=4.5, sampler="dpmpp_2m_sde", scheduler="karras",
+                         options=(("sampler", "dpmpp_2m_sde_karras"),), negative_prompt=True,
+                         note="DPM++ 2M SDE Karras, 30 steps, CFG 4-5, little or no negative: Fooocus's Juggernaut "
+                              "default and the Civitai card. CFG above 6-7 turns skin waxy.",
+                         source="lllyasviel/Fooocus presets/default.json; civarchive.com/models/133005; "
+                                "rundiffusion.com/juggernaut-xl-rundiffusion-guide"),
+        SamplingSettings("Euler (softer)", steps=30, cfg=4.5, sampler="euler", scheduler="normal",
+                         options=(("sampler", "euler"),), negative_prompt=True,
+                         note="Plain Euler, trailing spacing (starts at full noise): a softer look, less pore detail.",
+                         source="rundiffusion.com/prompt-guide-for-juggernaut-xi-and-xii; "
+                                "huggingface.co/RunDiffusion/Juggernaut-XL-v9/discussions/4"),
     ),
     preview_steps=30,
-    preview_cfg=5.0,
-    preview_cfg_note="SDXL needs CFG: about 4 to 7. Above 1 the negative prompt applies.",
+    preview_cfg=4.5,
+    preview_negative="",               # Juggernaut's card and Fooocus: start with no negative
+    preview_cfg_note="SDXL needs CFG: about 4 to 5 (Juggernaut's skin turns waxy above 6-7). Above 1 the negative "
+                     "prompt applies.",
     preview_width=1024,
     preview_height=1024,
 

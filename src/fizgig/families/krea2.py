@@ -4,6 +4,7 @@ its own cache files (arch_id krea2drv - the cache layout differs from the origin
 Facts are the original trainer's (src/fizgig/krea2/trainer.py - removed with the original family on 30 Sep 2026, in git history - utils.py, sampling.py), cited per value.
 """
 from fizgig.families.description import (
+    GENERAL_NEGATIVE,
     FamilyDescription, LoRAFormat, ModelFile, SamplingSettings, SpeedLoRA,
 )
 
@@ -160,6 +161,7 @@ KREA2 = FamilyDescription(
     preview_speed_lora="Krea 2 Turbo LoRA (8-step)",
     preview_steps=8,
     preview_cfg=1.0,
+    preview_negative=GENERAL_NEGATIVE,
     preview_width=1024,
     preview_height=1024,
 

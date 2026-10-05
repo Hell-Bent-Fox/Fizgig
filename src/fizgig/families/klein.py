@@ -4,7 +4,7 @@ and Preferences keys, ComfyUI-compatible kohya keys like the original's, and its
 a fresh cache, never mixed with the original's). Facts are the original trainer's (training/trainer.py,
 klein/model_utils.py, networks/lora_klein.py), cited per value.
 """
-from fizgig.families.description import FamilyDescription, LoRAFormat, ModelFile, SamplingSettings
+from fizgig.families.description import GENERAL_NEGATIVE, FamilyDescription, LoRAFormat, ModelFile, SamplingSettings
 
 _BFL = "black-forest-labs"
 _DOUBLE = ("img_attn.qkv", "img_attn.proj", "img_mlp.0", "img_mlp.2",
@@ -184,6 +184,7 @@ KLEIN = FamilyDescription(
     ),
     preview_steps=40,                 # the old Klein entry's Base sample defaults: 40 steps, CFG 4.5, 768x768
     preview_cfg=4.5,
+    preview_negative=GENERAL_NEGATIVE,
     preview_cfg_note="Base has no guidance embed, so CFG is the only guidance: 1 = none (the negative prompt is "
                      "ignored); about 3.5 to 4.5 gives guided previews.",
     preview_width=768,

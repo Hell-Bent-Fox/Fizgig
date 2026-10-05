@@ -14,6 +14,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+# the Samples tab's long-standing negative prompt, the default for the families that shipped with it
+GENERAL_NEGATIVE = ("blurry, low detail, noisy, washed out, oversaturated, distorted anatomy, extra limbs, duplicate "
+                    "objects, text, watermark, logo, frame, cropped subject, flat lighting, muddy colors")
+
+
 @dataclass(frozen=True)
 class ModelFile:
     """One file the user points Fizgig at in Preferences."""
@@ -382,6 +387,9 @@ class FamilyDescription:
     speed_loras: tuple = ()           # SpeedLoRA entries
     preview_steps: int = 20
     preview_cfg_note: str = ""         # the Samples tab's line under CFG Scale ("" = a plain default line)
+    # the Samples tab's default negative prompt for the family (each family keeps the user's own edit); None = its
+    # previews take no negative, so the box greys out
+    preview_negative: Optional[str] = None
     # Repair Studio / Explorer / Royale renders take comfy-kitchen's INT8 attention (fizgig/modules/int8_attention.py:
     # the family's attention calls attend() first). Inference only; the Profiler keeps exact attention
     int8_attention: bool = False
@@ -565,8 +573,10 @@ class FamilyDescription:
             "text_encoder_label": self.text_encoder_label,
             "is_distilled": False,
             "supports_samples": True,
-            # a CFG-free family (samples_cfg_free): Negative Prompt and CFG Scale are greyed, as the distilled flags do
-            "sample_is_distilled": bool(self.samples_cfg_free),
+            # a CFG-free family (samples_cfg_free) greys Negative Prompt and CFG Scale, as the distilled flags do; a
+            # family with no preview_negative greys the negative
+            "sample_is_distilled": bool(self.samples_cfg_free or self.preview_negative is None),
+            "sample_negative_default": self.preview_negative,
             "sample_cfg_fixed": bool(self.samples_cfg_free),
             "sample_cfg_default": self.preview_cfg,
             "sample_flow_shift_default": None,
