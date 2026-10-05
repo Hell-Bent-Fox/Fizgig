@@ -348,11 +348,7 @@ class Rotator:
 
     def resident_blocks(self, spec) -> set:
         """Blocks holding trainable Linears under a window (the streamer's resident set)."""
-        n = len(self.blocks)
-        out = set()
-        for e in spec:
-            out |= set(range(n)) if isinstance(e, str) else set(range(max(0, e[1]), min(n, e[2] + 1)))
-        return out
+        return {bi for _k, _m, bi, ln in self.targets if any(component_entry_matches(e, ln, bi) for e in spec)}
 
     def _activate(self, pairs):
         for key, lin in pairs:
@@ -422,19 +418,21 @@ class Rotator:
 ALL = ""
 
 
-def _plan(comp_gb, n_blocks, trunk, spec: FTSpec, usable, allow_stream=True, mp=None):
+def _plan(comp_gb, n_blocks, trunk, spec: FTSpec, usable, allow_stream=True, mp=None, spans=None):
     overhead = spec.overhead_gb if spec.overhead_gb is not None else trunk * n_blocks + 3.5
     extra = spec.act_gb_per_mp * max(0.0, float(mp or spec.calib_mp) - spec.calib_mp)
     overhead += extra                  # a bigger bucket's activations, resident and streaming alike
-    whole = overhead + n_blocks * sum(comp_gb.values())
-    if whole <= usable:                # every part at once (Anima at 1 MP measured 6.0 GB against 6.03 planned)
+    # every part at once: a trained Linear drops its NF4 copy, so the whole trunk comes off (measured 5 Oct at 1 MP:
+    # Anima 4.96 GB in this budget frame against 5.15 planned, Qwen 2.1 17.1 against 17.8)
+    whole = overhead + sum((len(spans[p]) if spans else n_blocks) * g for p, g in comp_gb.items()) - n_blocks * trunk
+    if whole <= usable:
         return [ALL], False, [f"every part fits at once (~{whole:.1f} GB of {usable:.1f} usable) - one window, "
                               f"nothing rotates"]
     # the shared planner's streaming base is overhead - trunk + slots; a measured stream_base_gb sets it directly
     slots = (spec.slots_gb if spec.stream_base_gb is None
              else spec.stream_base_gb + extra - (overhead - trunk * n_blocks))
     return plan_component_windows(usable, range(n_blocks), n_blocks, comp_gb, overhead_gb=overhead,
-                                  trunk_gb_per_block=trunk, slots_gb=slots, allow_stream=allow_stream)
+                                  trunk_gb_per_block=trunk, slots_gb=slots, allow_stream=allow_stream, spans=spans)
 
 
 def plan_windows(dit, spec: FTSpec, rotator: Rotator, free_gb: float, allow_stream: bool = True, mp=None):
@@ -449,16 +447,20 @@ def plan_windows(dit, spec: FTSpec, rotator: Rotator, free_gb: float, allow_stre
                     comp_gb[p] += m.out_features * m.in_features * 2 / 1e9     # logical size: NF4 empties .weight
                     break
         n = len(dit.get_submodule(spec.blocks))
+        spans = None
     else:
-        # blocks that differ (Klein's double and single): the mean block, so a window across all of them is exact
+        # blocks that differ (Klein's double and single): each part sized per block of the blocks that hold it, and
+        # split only across those
         n = len(rotator.blocks)
-        for blk in rotator.blocks:
+        spans = {p: set() for p in spec.components}
+        for bi, blk in enumerate(rotator.blocks):
             for ln, m in model_linears(blk):
                 for p in spec.components:
                     if ln.startswith(p):
                         comp_gb[p] += m.out_features * m.in_features * 2 / 1e9
+                        spans[p].add(bi)
                         break
-        comp_gb = {p: v / n for p, v in comp_gb.items()}
+        comp_gb = {p: v / max(1, len(spans[p])) for p, v in comp_gb.items()}
     if spec.trunk_gb_per_block is not None:
         trunk = float(spec.trunk_gb_per_block)
     else:
@@ -466,7 +468,7 @@ def plan_windows(dit, spec: FTSpec, rotator: Rotator, free_gb: float, allow_stre
                      if getattr(lin, "_nf4_packed", None) is not None)
         trunk = packed / 1e9 / max(1, n)
     usable = free_gb + trunk * n - 1.5
-    windows, stream, why = _plan(comp_gb, n, trunk, spec, usable, allow_stream, mp)
+    windows, stream, why = _plan(comp_gb, n, trunk, spec, usable, allow_stream, mp, spans=spans)
     return windows, stream, why, usable
 
 
@@ -515,10 +517,12 @@ def plan_from_file(path: str, spec: FTSpec, free_gb: float, mp=None):
 
 
 def _plan_from_header_lists(hdr, spec: FTSpec, free_gb: float, mp=None):
-    """plan_from_file for several block lists: component sizes as the mean block over all of them."""
+    """plan_from_file for several block lists: each part sized per block of the blocks that hold it, numbered as
+    one cycle (the lists end to end)."""
     import re
     pats = [re.compile(rf"^{re.escape(name)}\.(\d+)\.(.+)$") for name in _lists(spec)]
     seen, comp_gb, params, nonblock = set(), {p: 0.0 for p in spec.components}, 0, 0.0
+    held = {p: set() for p in spec.components}          # (list, block) pairs holding the part
     for k, info in hdr.items():
         shape = info.get("shape") or []
         numel = 1
@@ -545,14 +549,18 @@ def _plan_from_header_lists(hdr, spec: FTSpec, free_gb: float, mp=None):
             for p in spec.components:
                 if name.startswith(p):
                     comp_gb[p] += n_el * 2 / 1e9
+                    held[p].add((li, int(m.group(1))))
                     break
     n = len(seen)
     if not n or not all(comp_gb.values()):
         return None
-    comp_gb = {p: v / n for p, v in comp_gb.items()}
+    sizes = [1 + max((b for l, b in seen if l == li), default=-1) for li in range(len(pats))]
+    start = [sum(sizes[:li]) for li in range(len(pats))]
+    spans = {p: {start[li] + b for li, b in held[p]} for p in spec.components}
+    comp_gb = {p: v / len(spans[p]) for p, v in comp_gb.items()}
     trunk = float(spec.trunk_gb_per_block) if spec.trunk_gb_per_block is not None else params * 0.53 / 1e9 / n
     usable = free_gb - nonblock - 1.05 - 1.5
-    windows, stream, _why = _plan(comp_gb, n, trunk, spec, usable, mp=mp)
+    windows, stream, _why = _plan(comp_gb, n, trunk, spec, usable, mp=mp, spans=spans)
     return windows, stream, usable
 
 

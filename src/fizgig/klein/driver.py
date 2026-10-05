@@ -388,9 +388,13 @@ class KleinDriver(FamilyDriver):
                       components=("img_attn", "img_mlp", "txt_attn", "txt_mlp", "linear1", "linear2"))
 
     def install_ft_streamer(self, dit, streamer):
-        # Klein's forward swaps double and single blocks through its own two offloaders, not the one-list streamer
-        raise RuntimeError("Klein fine-tunes with every window resident - this card has too little free VRAM for "
-                           "the smallest window plan")
+        # Klein's forward swaps the double and the single blocks through two offloaders, each counting from 0; the
+        # streamer holds the double blocks then the single blocks (ft_spec's cycle), so each list gets its view
+        dit.disable_block_swap()
+        nd = len(dit.double_blocks)
+        dit.offloader_double = streamer.view(0, nd)
+        dit.offloader_single = streamer.view(nd, len(dit.single_blocks))
+        dit.blocks_to_swap = 1
 
     # ---- LoRA and the block map -------------------------------------------------------------------
     def convert_lora_state_dict(self, sd):

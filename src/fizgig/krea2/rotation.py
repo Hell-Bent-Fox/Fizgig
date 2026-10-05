@@ -144,7 +144,7 @@ def snap_ft_epochs(max_epochs, cycle_epochs, start_window=0, rotate_every=1):
 
 def plan_component_windows(usable_gb, span, n_blocks, comp_gb, overhead_gb,
                            trunk_gb_per_block, slots_gb, allow_stream=True,
-                           max_sane_windows=12):
+                           max_sane_windows=12, spans=None):
     """The family-agnostic component-window plan: (windows, stream, reasons).
 
     comp_gb: ordered (prefix -> bf16 GB per block). windows: RotationSchedule component
@@ -155,8 +155,16 @@ def plan_component_windows(usable_gb, span, n_blocks, comp_gb, overhead_gb,
     Depth-splitting trades the full-depth-per-window geometry (what makes component mode
     learn fast) for fit; streaming further trades step speed (PCIe) for residency. Both
     families feed their own calibrated constants; the trainer's per-window peak logs are
-    what refine them. Pure so the tier tables are pinnable without a card."""
+    what refine them. Pure so the tier tables are pinnable without a card.
+
+    spans: prefix -> the blocks that hold it, where a component lives in some blocks only (Klein: img_attn in the
+    double blocks, linear1 in the single ones); comp_gb is then per block OF ITS SPAN, and a depth-split divides
+    that span, never into blocks without it."""
     span = sorted(int(b) for b in span)
+    spans = {p: sorted(int(b) for b in s) for p, s in (spans or {}).items()}
+
+    def span_of(prefix):
+        return spans.get(prefix, span)
     usable = float(usable_gb)
     prefixes = list(comp_gb)
     fattest = max(comp_gb.values())
@@ -174,9 +182,10 @@ def plan_component_windows(usable_gb, span, n_blocks, comp_gb, overhead_gb,
         max_len = int(max_gb / g)
         if max_len < 1:
             return None
-        k = (len(span) + max_len - 1) // max_len
-        per = (len(span) + k - 1) // k
-        chunks = [span[i:i + per] for i in range(0, len(span), per)]
+        sp = span_of(prefix)
+        k = (len(sp) + max_len - 1) // max_len
+        per = (len(sp) + k - 1) // k
+        chunks = [sp[i:i + per] for i in range(0, len(sp), per)]
         if k == 1:
             return [prefix]                       # full span — bare prefix, full depth
         return [(prefix, c[0], c[-1]) for c in chunks]
@@ -194,9 +203,9 @@ def plan_component_windows(usable_gb, span, n_blocks, comp_gb, overhead_gb,
             plain.extend(_c)
     if plain and len(plain) <= max_sane_windows:
         for prefix in prefixes:
-            need = overhead_gb + len(span) * comp_gb[prefix]
+            need = overhead_gb + len(span_of(prefix)) * comp_gb[prefix]
             if need > usable:
-                reasons.append(f"{prefix} across {len(span)} block(s) would peak "
+                reasons.append(f"{prefix} across {len(span_of(prefix))} block(s) would peak "
                                f"~{need:.1f} GB vs {usable:.1f} usable — depth-split")
         return plain, False, reasons
 
@@ -691,17 +700,26 @@ class RotationOffloader:
         self.resident = new
         logger.info("[rotation-swap] resident blocks now %s (others stream from CPU)", sorted(new))
 
-    # -- interface the DiT forward calls -----------------------------------
-    def prepare_block_devices_before_forward(self, blocks):
+    def view(self, start: int, count: int) -> "OffloaderView":
+        """The offloader for one of the model's block lists when `blocks` is several of them end to end (Klein:
+        8 double then 24 single blocks, each list swapped by its own offloader counting from 0)."""
+        return OffloaderView(self, int(start), int(count))
+
+    def _place(self, idxs):
         for idx in list(self._futures):
             self._await(idx)
-        for i in range(len(blocks)):
+        for i in idxs:
             self._to(i, self.device if i in self.resident else self.cpu)
         if self.cuda:
             torch.cuda.synchronize(self.device)
             torch.cuda.empty_cache()
         # Warm the first streamed block so step 0 isn't a stall.
-        self._prefetch_next(0 if 0 not in self.resident else 1)
+        if idxs:
+            self._prefetch_next(idxs[0] if idxs[0] not in self.resident else idxs[0] + 1)
+
+    # -- interface the DiT forward calls -----------------------------------
+    def prepare_block_devices_before_forward(self, blocks):
+        self._place(range(len(blocks)))
 
     def wait_for_block(self, index: int):
         self._ensure_gpu(index)
@@ -736,3 +754,24 @@ class RotationOffloader:
         self._handles.clear()
         if self._pool is not None:
             self._pool.shutdown(wait=True)
+
+
+class OffloaderView:
+    """One block list inside a RotationOffloader that streams several lists end to end: the same interface the
+    forward calls, with the list's own block index shifted to its place in the streamer. Prefetch runs on across the
+    boundary (the last double block warms the first single block)."""
+
+    def __init__(self, owner: RotationOffloader, start: int, count: int):
+        self.owner, self.start, self.count = owner, start, count
+
+    def prepare_block_devices_before_forward(self, blocks):
+        self.owner._place(range(self.start, self.start + len(blocks)))
+
+    def wait_for_block(self, index: int):
+        self.owner.wait_for_block(self.start + index)
+
+    def submit_move_blocks_forward(self, blocks, index: int):
+        self.owner.submit_move_blocks_forward(None, self.start + index)
+
+    def set_forward_only(self, forward_only: bool):
+        self.owner.set_forward_only(forward_only)
