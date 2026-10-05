@@ -82,6 +82,9 @@ ANIMA = FamilyDescription(
     implementation=_CARD,
     ema_default="0.98",               # as Krea 2, MiniMax H3 and Qwen 2.1 (Peter, 5 Oct 2026)
     precisions=("bf16", "int8", "nf4"),   # 2.1B DiT, 4.2 GB in bf16; the community reports fp8 bases train badly
+    # full fine-tune (families/ft.py, the driver's ft_spec): attention and MLP of every block, rotating on an NF4 trunk;
+    # the shared default rate 1e-5 (OneTrainer's Anima fine-tune preset uses 1e-6). Not yet measured on Anima.
+    finetune=True,
     # Measured 5 Oct 2026 on a 5090 (rank 16, adamw8bit, gradient checkpointing, 1024 previews), peak GB including
     # the preview, which sets it (training alone: bf16 5.1 / 5.7, INT8 3.4 / 4.0, NF4 2.9 / 3.5 at 0.5 / 1 MP); s/step
     # bf16 0.53 / 0.71, INT8 0.74 / 0.81, NF4 0.69 / 0.60. No block swap.

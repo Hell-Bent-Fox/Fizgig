@@ -52,6 +52,8 @@ class FTSpec:
         0, 2): the Linear's weight is the first of 2 equal row-chunks of the file's gate_up tensor. The master reads
         that slice and the checkpoint writes the parts back as the file had them. A "diffusion_model." prefix in the
         file is found on its own.
+    file_prefix: a prefix every DiT key in the model file carries besides that one (Anima's "net."), so weights are
+        read from and written back under the file's own names.
     """
     blocks: str = "blocks"
     components: tuple = ()
@@ -60,6 +62,7 @@ class FTSpec:
     trunk_gb_per_block: Optional[float] = None
     slots_gb: float = 1.5
     file_layout: tuple = ()
+    file_prefix: str = ""
     # streaming: what a step needs beyond its own resident blocks and window (activations, streamed blocks in flight,
     # fragmentation), in the planner's budget frame. None = derived from overhead_gb (conservative)
     stream_base_gb: Optional[float] = None
@@ -85,7 +88,7 @@ def _file_loc(spec: FTSpec, mkey: str, have) -> Optional[tuple]:
         if mkey.endswith(msuf):
             fkey, part, parts = mkey[:-len(msuf)] + fsuf, int(pt), int(n)
             break
-    for k in (fkey, _PREFIX + fkey):
+    for k in (fkey, _PREFIX + fkey) + ((spec.file_prefix + fkey,) if spec.file_prefix else ()):
         if k in have:
             return k, part, parts
     return None
@@ -465,7 +468,8 @@ def plan_from_file(path: str, spec: FTSpec, free_gb: float, mp=None):
     from fizgig.krea2.safetensors_utils import MemoryEfficientSafeOpen
     import re
     with MemoryEfficientSafeOpen(path) as f:
-        hdr = {(k[len(_PREFIX):] if k.startswith(_PREFIX) else k): f.header[k] for k in f.keys()}
+        pre = tuple(p for p in (_PREFIX, spec.file_prefix) if p)
+        hdr = {next((k[len(p):] for p in pre if k.startswith(p)), k): f.header[k] for k in f.keys()}
     if not isinstance(spec.blocks, str):
         return _plan_from_header_lists(hdr, spec, free_gb, mp)
     pat = re.compile(rf"^{re.escape(spec.blocks)}\.(\d+)\.(.+)$")

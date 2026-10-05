@@ -222,6 +222,15 @@ class AnimaDriver(FamilyDriver):
         arr = (pixels[0].float().permute(1, 2, 0).clamp(0, 1) * 255.0).round().byte().cpu().numpy()
         return Image.fromarray(arr)
 
+    def ft_spec(self, dit):
+        """Fine-tuning: the 28 blocks' attention and MLP Linears (the NF4 trunk's), in four windows of similar size per
+        block (self-attention ~17M parameters, cross-attention ~13M, each MLP matrix ~17M). The LLM adapter is never
+        trained (the model card: it degrades easily), nor are the modulation layers. The file names every DiT weight
+        under "net."; checkpoints keep that layout, so ComfyUI loads them as it loads the base."""
+        from fizgig.families.ft import FTSpec
+        return FTSpec(blocks="blocks", components=("self_attn", "cross_attn", "mlp.layer1", "mlp.layer2"),
+                      file_prefix="net.")
+
     def compile_blocks(self, dit, boundary="inside", blocks_to_swap=0):
         """torch.compile the 28 blocks in place, after the LoRA has wrapped its Linears. Each block does its own
         gradient checkpoint, so the checkpoint compiles inside the graph. A real 1 MP run on a 5090 went 0.71 ->
