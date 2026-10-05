@@ -30,6 +30,7 @@ Fine-tuning by card size, for photos at 1 MP:
 - **LoRA presets:** Character (rank 16, 1e-4, 50 epochs), Style (rank 16, 5e-5) and Official (rank 32, 2e-5, the model card's recipe).
 - **Fine-tuning** trains every block's attention and feed-forward layers, the text adapter left untouched. Two presets: Fine-tune (1e-5) and Fine-tune Official (1e-6). The checkpoint loads in ComfyUI in place of the base.
 - **Previews:** the official negative prompt by default. The official Turbo LoRA is available for fast previews.
+- **Slider LoRAs,** from prompt pairs or photo pairs, with a Slider preset (rank 4, 2e-4).
 
 ## New: SDXL (experimental)
 

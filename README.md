@@ -60,7 +60,7 @@ Memory plans itself: precision, block swap and previews size to your free VRAM, 
 | **MiniMax H3** (33B) | photos, video clips, sound, voice | ✅ | ✅ | ✅ slider | ✅ experimental | 16 GB | [MiniMax H3](docs/MINIMAX_H3.md) |
 | **Qwen Image 2.1** | photos | ✅ | ✅ | ✅ slider + edit | ✅ experimental | 10 GB | [Qwen Image 2.1](docs/QWEN_IMAGE.md) |
 | **SDXL** (any checkpoint), experimental | photos | ✅ | — | ✅ slider | ✅ experimental | 8 GB | [7.0 notes](docs/RELEASE_NOTES_v7.0.0.md) |
-| **Anima** (2B), experimental | photos | ✅ | — | — | ✅ experimental | 8 GB | [7.0 notes](docs/RELEASE_NOTES_v7.0.0.md) |
+| **Anima** (2B), experimental | photos | ✅ | — | ✅ slider | ✅ experimental | 8 GB | [7.0 notes](docs/RELEASE_NOTES_v7.0.0.md) |
 
 Every model gets all five workbench tools. MiniMax H3 also makes **RefMods**, tuned against H3 itself rather than a plain encode ([how do I…?](docs/REFMOD_HOWDOI.md)). Fizgig's Qwen training adapter is [free on Hugging Face](https://huggingface.co/ShootTheSound/Fizgig-Qwen-Image-2.1-Training-Adapter) for any trainer. Full fine-tuning has [its own guide](docs/FINETUNE.md).
 
@@ -77,7 +77,7 @@ Each tool works on your own runs **or any LoRA you've downloaded**, and they han
 ## Training features
 
 - **Presets per model**: pick a ✨ preset on the Training tab and go.
-- **Slider LoRAs** (Klein 9B, Krea 2, MiniMax H3, Qwen Image 2.1, SDXL): a LoRA whose strength is a dial between two looks, from photo pairs or three prompts. Krea 2's **Ultra mode** trains the composition blocks only, so the dial holds up at much higher strengths. It works best for sliders trained from prompts, and with photo pairs when the change is compositional.
+- **Slider LoRAs** (Klein 9B, Krea 2, MiniMax H3, Qwen Image 2.1, SDXL, Anima): a LoRA whose strength is a dial between two looks, from photo pairs or three prompts. Krea 2's **Ultra mode** trains the composition blocks only, so the dial holds up at much higher strengths. It works best for sliders trained from prompts, and with photo pairs when the change is compositional.
 - **Edit LoRAs** (Klein 9B, Qwen Image 2.1): teach an edit from pairs of original and edited photos, then apply it to any photo.
 - **Adaptive LR**: a plateau tracker that raises or lowers the rate within your Min/Max, with rollback on instability.
 - **Weight averaging (EMA)**, on by default where it's measured to help.

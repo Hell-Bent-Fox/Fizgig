@@ -2,6 +2,8 @@
 
 Everything beyond the basics is switched on per family in the description. Each ability's default means "not offered", so a family that leaves a field alone simply doesn't show that control. When an ability needs model code, the driver method is listed; the rest is handled by the layer.
 
+**Offer every ability your model can support.** Users expect the same tools on every model. Switch each one on unless the model can't do it or a measurement shows it hurts, and say why in the description when you leave one out.
+
 The full field list, with comments, is `FamilyDescription` in `src/fizgig/families/description.py`.
 
 ## Fast previews
