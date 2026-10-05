@@ -75,7 +75,8 @@ class _TextEncoder:
         missing, unexpected = model.load_state_dict(sd, strict=False)
         if missing or [k for k in unexpected if not k.startswith("lm_head")]:
             raise RuntimeError(f"Qwen3 0.6B file does not match: missing {missing[:5]}, unexpected {unexpected[:5]}")
-        self.model = model.to(device, DTYPE).eval().requires_grad_(False)
+        # fp32, as ComfyUI runs it: in bf16 the first token (Qwen's very large activation) is 16% off and the rest ~1%
+        self.model = model.to(device, torch.float32).eval().requires_grad_(False)
         self.device = device
 
     @torch.no_grad()
