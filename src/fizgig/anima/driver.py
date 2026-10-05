@@ -55,9 +55,13 @@ class _TextEncoder:
 
     def __init__(self, path, device):
         from safetensors.torch import load_file
-        from transformers import AutoTokenizer, Qwen3Config, Qwen3Model, T5TokenizerFast
+        from huggingface_hub import hf_hub_download
+        from transformers import AutoTokenizer, PreTrainedTokenizerFast, Qwen3Config, Qwen3Model
         self.tok = AutoTokenizer.from_pretrained(HELPER, subfolder="tokenizer")
-        self.t5 = T5TokenizerFast.from_pretrained(HELPER, subfolder="t5_tokenizer")
+        # the T5 vocabulary straight from its tokenizer.json (its post-processor appends </s>): the repo's
+        # tokenizer_config.json is written by a newer transformers than Fizgig pins and does not load in it
+        self.t5 = PreTrainedTokenizerFast(tokenizer_file=hf_hub_download(HELPER, "t5_tokenizer/tokenizer.json"),
+                                          eos_token="</s>", pad_token="<pad>", unk_token="<unk>")
         model = Qwen3Model(Qwen3Config.from_pretrained(HELPER, subfolder="text_encoder"))
         sd = {k[len("model."):] if k.startswith("model.") else k: v for k, v in load_file(path).items()}
         missing, unexpected = model.load_state_dict(sd, strict=False)
