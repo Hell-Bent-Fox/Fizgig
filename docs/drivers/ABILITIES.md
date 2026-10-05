@@ -28,7 +28,7 @@ The full field list, with comments, is `FamilyDescription` in `src/fizgig/famili
 
 | Field | What users get | Driver |
 |---|---|---|
-| `network_types=("lora", "lokr")` | LoKR as well as LoRA. | — |
+| `network_types=("lora", "lokr")` | LoKR as well as LoRA. | — . A kohya family saves LoKR under `diffusion_model.<module path>`; if your loaded model's names aren't ComfyUI's (SDXL loads in diffusers names), set `lokr_kohya_stems=True` in its `LoRAFormat` so LoKR uses the LoRA's `lora_unet_` names. Check the file loads in ComfyUI with no unmapped keys. |
 | `edit_training` | Edit LoRAs from before/after photo pairs, with edit previews. | `supports_references = True`, `load_reference_text_encoder`, `encode_text_with_references`, and `refs=` in `training_loss` / `generate`. |
 | `slider_training`, `slider_guidance`, `slider_ultra_blocks` | Slider LoRAs (a strength dial between two looks), from image pairs or prompts. | `training_loss(diff_ref=, diff_weight=)` for pairs; `noise_latents` and `predict` for prompt sliders. |
 | `finetune`, `ft_learning_rate` | Full fine-tuning of the base model on an NF4 trunk: the whole model at once when the card holds it, otherwise the fewest windows that fit. Optional, and can be added after the family ships. | `ft_spec(dit)` returning an `FTSpec`, plus measured memory figures. [FINETUNE.md](FINETUNE.md) covers it step by step. |
