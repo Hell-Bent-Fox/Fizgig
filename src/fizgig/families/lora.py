@@ -214,7 +214,7 @@ class FamilyLoRA:
         as Fizgig's Krea 2 always saved it)."""
         f = self.desc.lora
         if f.kohya:
-            return f"diffusion_model.{full}" if lokr else f"lora_unet_{full.replace('.', '_')}"
+            return f"diffusion_model.{full}" if lokr and not f.lokr_kohya_stems else f"lora_unet_{full.replace('.', '_')}"
         return f"{f.file_prefix}{full}"
 
     def _wrap(self, full):

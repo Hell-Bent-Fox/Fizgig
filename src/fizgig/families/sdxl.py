@@ -84,6 +84,7 @@ SDXL = FamilyDescription(
         alpha_key="{prefix}.alpha",
         kohya=True,
         file_prefix="lora_unet_",
+        lokr_kohya_stems=True,
         note="kohya keys on diffusers module names (lora_unet_down_blocks_1_attentions_0_...), which ComfyUI maps for "
              "SDXL. Community files in the LDM layout (lora_unet_input_blocks_4_1_...) load too (driver alias_flat); "
              "their text-encoder parts (lora_te1_ / lora_te2_) are not used.",
@@ -116,7 +117,7 @@ SDXL = FamilyDescription(
     train_memory={"bf16": (((0.5, 10.3), (1.0, 10.3)), 0.0), "int8": (((0.5, 8.2), (1.0, 8.2)), 0.0),
                   "nf4": (((0.5, 7.4), (1.0, 7.4)), 0.0)},
     optimizers=("adamw", "adamw8bit"),
-    network_types=("lora",),
+    network_types=("lora", "lokr"),
     # SDXL's per-epoch loss swings with its uniform timesteps, so Adaptive LR's plateau detector reacts to noise:
     # hidden and never sent (Peter, 5 Oct 2026)
     adaptive_lr=False,

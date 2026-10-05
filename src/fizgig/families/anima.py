@@ -104,7 +104,7 @@ ANIMA = FamilyDescription(
     train_memory={"bf16": (((0.5, 8.9), (1.0, 8.9)), 0.0), "int8": (((0.5, 7.3), (1.0, 7.3)), 0.0),
                   "nf4": (((0.5, 6.6), (1.0, 6.6)), 0.0)},
     optimizers=("adamw", "adamw8bit"),
-    network_types=("lora",),
+    network_types=("lora", "lokr"),
     helper_files=(("circlestone-labs/Anima-Base-v1.0-Diffusers",
                    ("tokenizer/*", "t5_tokenizer/*")),),
     workbench_follows_samples=True,   # previews take the Samples tab's steps, CFG and negative

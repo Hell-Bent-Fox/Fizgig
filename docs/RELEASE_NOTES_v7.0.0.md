@@ -4,7 +4,7 @@ Anima and SDXL join with the full workbench. Full fine-tuning now works on all s
 
 ## Headlines
 
-- **Two new models, Anima and SDXL,** with LoRA training, fine-tuning and every workbench tab.
+- **Two new models, Anima and SDXL,** with LoRA and LoKR training, sliders, fine-tuning and every workbench tab.
 - **Fine-tune every model.** Klein 9B, Krea 2, Qwen Image 2.1, MiniMax H3, SDXL and Anima all fine-tune from the Training tab: pick Fine-tune as the Kind of training. It's new for Klein, SDXL and Anima. Each checkpoint is a complete model file you load in place of the base.
 - **Fine-tune on the card you have.** Every model fine-tunes on a 16 GB card, and Anima and SDXL from 8 GB. On a smaller card the model trains a part at a time, streaming the blocks it isn't training from system memory where it needs to.
 - **Bigger cards train more at once, up to the whole model.** Fine-tuning packs as much of the model into each pass as your card holds, which is faster. The whole model trains in one go on SDXL and Anima from 10 GB, Qwen Image 2.1 from 24 GB, Klein on 32 GB and Krea 2 on 48 GB, and on a 32 GB card Krea 2 needs two passes instead of four and MiniMax H3 three. Training everything together got through the whole model about 2.6× faster than four separate passes (measured on Anima).

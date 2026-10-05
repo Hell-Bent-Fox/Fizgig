@@ -59,8 +59,8 @@ Memory plans itself: precision, block swap and previews size to your free VRAM, 
 | **Krea 2** (12.9B) | photos | ✅ | ✅ | ✅ slider | ✅ experimental | 8 GB | [Krea 2](docs/KREA2.md) |
 | **MiniMax H3** (33B) | photos, video clips, sound, voice | ✅ | ✅ | ✅ slider | ✅ experimental | 16 GB | [MiniMax H3](docs/MINIMAX_H3.md) |
 | **Qwen Image 2.1** | photos | ✅ | ✅ | ✅ slider + edit | ✅ experimental | 10 GB | [Qwen Image 2.1](docs/QWEN_IMAGE.md) |
-| **SDXL** (any checkpoint), experimental | photos | ✅ | — | ✅ slider | ✅ experimental | 8 GB | [7.0 notes](docs/RELEASE_NOTES_v7.0.0.md) |
-| **Anima** (2B), experimental | photos | ✅ | — | ✅ slider | ✅ experimental | 8 GB | [7.0 notes](docs/RELEASE_NOTES_v7.0.0.md) |
+| **SDXL** (any checkpoint), experimental | photos | ✅ | ✅ | ✅ slider | ✅ experimental | 8 GB | [7.0 notes](docs/RELEASE_NOTES_v7.0.0.md) |
+| **Anima** (2B), experimental | photos | ✅ | ✅ | ✅ slider | ✅ experimental | 8 GB | [7.0 notes](docs/RELEASE_NOTES_v7.0.0.md) |
 
 Every model gets all five workbench tools. MiniMax H3 also makes **RefMods**, tuned against H3 itself rather than a plain encode ([how do I…?](docs/REFMOD_HOWDOI.md)). Fizgig's Qwen training adapter is [free on Hugging Face](https://huggingface.co/ShootTheSound/Fizgig-Qwen-Image-2.1-Training-Adapter) for any trainer. Full fine-tuning has [its own guide](docs/FINETUNE.md).
 
