@@ -22,7 +22,7 @@ Fine-tuning by card size, for photos at 1 MP:
 | Krea 2 | 16 GB | 48 GB | five passes | two passes |
 | MiniMax H3 | 16 GB | 48 GB | five passes | three passes |
 
-**The community can now add models to Fizgig.** The guide to the driver system is in [`docs/drivers`](https://github.com/shootthesound/Fizgig/tree/master/docs/drivers): where your code is called from, walkthroughs for a stills model and a video model, every optional ability, fine-tuning (optional, and can be added after a model first ships), and a checklist of what a finished model includes. SDXL and Anima were built by following it.
+**The community can now add models to Fizgig.** The guide to the driver system is in [`docs/drivers`](https://github.com/shootthesound/Fizgig/tree/master/docs/drivers): where your code is called from, walkthroughs for a stills model and a video model, every optional ability, fine-tuning (optional, and can be added after a model first ships), and a checklist of what a finished model includes. SDXL, Anima & Qwen were built by following it.
 
 ## New: Anima (experimental)
 
