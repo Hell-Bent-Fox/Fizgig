@@ -17,6 +17,10 @@ Register the description in `src/fizgig/families/registry.py`. That is the only 
 
 You don't edit the GUI, the trainer or the tools. If your model needs something the layer doesn't have yet, see [When the layer is missing something](#when-the-layer-is-missing-something).
 
+## Before you start: open a Discussion
+
+Adding a model starts with a post in the repo's [Discussions](https://github.com/shootthesound/Fizgig/discussions/new?category=ideas), before any code: which model, where its weights and reference implementation live, and what you plan to support. It's a prerequisite for a model pull request. It lets us agree the scope, avoids two people building the same model, and gets you answers about the driver system early.
+
 ## The guides
 
 1. **[Entry points](#entry-points-what-calls-your-driver)** (below): what calls your driver, and when.

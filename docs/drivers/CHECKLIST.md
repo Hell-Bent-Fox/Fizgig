@@ -2,6 +2,8 @@
 
 A family is ready when it trains, previews and saves correctly, and every ability it declares does what the GUI says. "It runs" isn't the bar: most driver bugs produce a run that finishes and a LoRA that quietly does less than it should. These checks catch those.
 
+- [ ] A Discussion for the model is open in the repo (see [README.md](README.md#before-you-start-open-a-discussion)), and the scope agreed there.
+
 ## The description
 
 - [ ] `description.validate()` returns `[]` (the registry refuses to import a family that fails it).
