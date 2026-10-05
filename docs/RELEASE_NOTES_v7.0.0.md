@@ -13,14 +13,14 @@ Anima and SDXL join with the full workbench. Full fine-tuning now works on all s
 
 Fine-tuning by card size, for photos at 1 MP:
 
-| Model | Fine-tunes from | Whole model at once from | On a 32 GB card |
-|---|---|---|---|
-| Anima | 8 GB | 10 GB | whole model at once |
-| SDXL | 8 GB | 10 GB | whole model at once |
-| Qwen Image 2.1 | 12 GB | 24 GB | whole model at once |
-| Klein 9B | 16 GB | 32 GB | whole model at once |
-| Krea 2 | 16 GB | 48 GB | two passes |
-| MiniMax H3 | 16 GB | 48 GB | two passes |
+| Model | Fine-tunes from | Whole model at once from | On a 24 GB card | On a 32 GB card |
+|---|---|---|---|---|
+| Anima | 8 GB | 10 GB | whole model at once | whole model at once |
+| SDXL | 8 GB | 10 GB | whole model at once | whole model at once |
+| Qwen Image 2.1 | 12 GB | 24 GB | whole model at once | whole model at once |
+| Klein 9B | 16 GB | 32 GB | two passes | whole model at once |
+| Krea 2 | 16 GB | 48 GB | five passes | two passes |
+| MiniMax H3 | 16 GB | 48 GB | five passes | two passes |
 
 **The community can now add models to Fizgig.** The guide to the driver system is in [`docs/drivers`](https://github.com/shootthesound/Fizgig/tree/master/docs/drivers): where your code is called from, walkthroughs for a stills model and a video model, every optional ability, fine-tuning (optional, and can be added after a model first ships), and a checklist of what a finished model includes. SDXL and Anima were built by following it.
 
