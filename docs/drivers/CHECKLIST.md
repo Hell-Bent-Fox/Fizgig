@@ -26,7 +26,7 @@ A family is ready when it trains, previews and saves correctly, and every abilit
 
 ## Abilities, if declared
 
-- [ ] Fine-tune: a run at learning rate 0 saves a file equal to the source, tensor for tensor. Then one real run, loaded in ComfyUI in place of the base.
+- [ ] Fine-tune: a run at learning rate 1e-30 saves a file equal to the source, tensor for tensor (only weights that were exactly zero may move). Then one real run, loaded in ComfyUI in place of the base.
 - [ ] Edit training: an edit LoRA trained on a few pairs applies the edit to a new photo.
 - [ ] Sliders: at strength −1, 0 and +1 the previews move between the two looks, and 0 matches the base model.
 - [ ] Video: an off-spec clip (wrong frame rate or frame count) is refused at Start with the reason; a clip preview plays with sound (if the model has sound); Repair Studio plays the tweaked, baseline and no-LoRA clips.
