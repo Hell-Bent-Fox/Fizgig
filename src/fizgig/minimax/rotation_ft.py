@@ -293,9 +293,11 @@ def plan_h3_ft_windows(usable_gb, subset=None, n_blocks=50, allow_stream=True, m
         overhead_gb=_FT_OVERHEAD_GB, trunk_gb_per_block=_FT_NF4_GB_PER_BLOCK,
         slots_gb=_FT_STREAM_SLOTS_GB, allow_stream=allow_stream,
         max_sane_windows=_FT_MAX_SANE_WINDOWS,
-        # packed windows: every part at once planned 29.0 of 29.4 GB on a 5090 (5 Oct) and spilled past 32 GB, so
-        # H3 packs on the plain sum of its parts plus 2 GB
-        trunk_credit=False, pack_margin_gb=2.0, max_parts=max_parts)
+        # packed windows: every part at once planned 29.0 of 29.4 GB on a 5090 (5 Oct) and spilled past 32 GB; with
+        # +2 GB the [out_proj + fc1] window (27.5 planned, 28.1-28.4 GB peaks) ran at 1.2 s/step once and spilled
+        # (17.9 s/step) on a busier desktop. So the plain sum of the parts plus 4 GB. Photo peaks don't grow with
+        # resolution (0.25 MP and 1 MP measured the same), so stills need no megapixel term
+        trunk_credit=False, pack_margin_gb=4.0, max_parts=max_parts)
 
 
 class H3NF4Rotator(BlockRotator):

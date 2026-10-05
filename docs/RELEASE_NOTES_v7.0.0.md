@@ -7,7 +7,7 @@ Anima and SDXL join with the full workbench. Full fine-tuning now works on all s
 - **Two new models, Anima and SDXL,** with LoRA training, fine-tuning and every workbench tab.
 - **Fine-tune every model.** Klein 9B, Krea 2, Qwen Image 2.1, MiniMax H3, SDXL and Anima all fine-tune from the Training tab: pick Fine-tune as the Kind of training. It's new for Klein, SDXL and Anima. Each checkpoint is a complete model file you load in place of the base.
 - **Fine-tune on the card you have.** Every model fine-tunes on a 16 GB card, and Anima and SDXL from 8 GB. On a smaller card the model trains a part at a time, streaming the blocks it isn't training from system memory where it needs to.
-- **Bigger cards train more at once, up to the whole model.** Fine-tuning packs as much of the model into each pass as your card holds, which is faster. The whole model trains in one go on SDXL and Anima from 10 GB, Qwen Image 2.1 from 24 GB, Klein on 32 GB and Krea 2 on 48 GB, and on a 32 GB card Krea 2 and MiniMax H3 need two passes instead of four. Training everything together got through the whole model about 2.6× faster than four separate passes (measured on Anima).
+- **Bigger cards train more at once, up to the whole model.** Fine-tuning packs as much of the model into each pass as your card holds, which is faster. The whole model trains in one go on SDXL and Anima from 10 GB, Qwen Image 2.1 from 24 GB, Klein on 32 GB and Krea 2 on 48 GB, and on a 32 GB card Krea 2 needs two passes instead of four and MiniMax H3 three. Training everything together got through the whole model about 2.6× faster than four separate passes (measured on Anima).
 - **Window size:** a new Training-tab setting caps how many parts train together, for more headroom on a card that's close to its limit. The Training tab shows the plan your card gets before you start.
 - **The driver system is complete, guide included.** Klein and MiniMax H3 now run on the driver system that Krea 2 and Qwen Image 2.1 already use, so every model shares training, previews, Repair Studio, LoRA the Explorer, Profiler, Extract and LoRA Royale, and a feature built for one model is available to the others. The guide to adding your own model is below.
 
@@ -20,7 +20,7 @@ Fine-tuning by card size, for photos at 1 MP:
 | Qwen Image 2.1 | 12 GB | 24 GB | whole model at once | whole model at once |
 | Klein 9B | 16 GB | 32 GB | two passes | whole model at once |
 | Krea 2 | 16 GB | 48 GB | five passes | two passes |
-| MiniMax H3 | 16 GB | 48 GB | five passes | two passes |
+| MiniMax H3 | 16 GB | 48 GB | five passes | three passes |
 
 **The community can now add models to Fizgig.** The guide to the driver system is in [`docs/drivers`](https://github.com/shootthesound/Fizgig/tree/master/docs/drivers): where your code is called from, walkthroughs for a stills model and a video model, every optional ability, fine-tuning (optional, and can be added after a model first ships), and a checklist of what a finished model includes. SDXL and Anima were built by following it.
 
