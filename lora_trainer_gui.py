@@ -18590,8 +18590,9 @@ class LoRATrainerGUI:
         self.repair_state = self._repair_default_state(fam)
         # 512 default for Klein/Krea 2 (keeps the Turbo Preview activation cache VRAM-feasible);
         # H3 previews at 768 — its native canvas, rendered as a 22-frame clip's middle frame.
-        # Standard-layer families also start at 768 (Qwen 2.1 is a 1 MP+ model).
-        self.repair_res_var.set("768" if self._repair_desc(fam) is not None else "512")
+        # Standard-layer families start at their description's repair_size (768; SDXL and Anima 1024).
+        _rd = self._repair_desc(fam)
+        self.repair_res_var.set(str(_rd.repair_size) if _rd is not None else "512")
         self._build_repair_slider_panel(self._repair_sliders_parent)
         self._apply_repair_family_ui()
         try:

@@ -140,6 +140,7 @@ ANIMA = FamilyDescription(
                      "prose; the card's quality prefix is \"masterpiece, best quality, score_7, safe,\".",
     preview_width=1024,
     preview_height=1024,
+    repair_size=1024,                 # a 1 MP model (the card: 512-1536, about 1 MP best)
 
     presets=(
         # community values (Oct 2026), higher than the card's light-touch 2e-5: characters at rank 8-16 and 1e-4

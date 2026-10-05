@@ -144,6 +144,7 @@ SDXL = FamilyDescription(
                      "prompt applies.",
     preview_width=1024,
     preview_height=1024,
+    repair_size=1024,                 # a 1 MP model; a 1024 render at 30 steps took 3.3 s on a 5090
 
     presets=(
         # measured 5 Oct 2026 (Juggernaut v9, 115 photos, 1 MP, 5090): the subject by epoch 2-3, steady from 3 on
