@@ -5922,7 +5922,9 @@ class LoRATrainerGUI:
         except OSError:
             gb = 0
         lab.configure(text=(
-            f"On this card ({free:.0f} GB free): a rotation is {len(windows)} parts x {per} epoch(s) = {cyc} epochs"
+            (f"On this card ({free:.0f} GB free): every part trains at once, nothing rotates - a rotation is "
+             f"{per} epoch(s)" if list(windows) == [""] else
+             f"On this card ({free:.0f} GB free): a rotation is {len(windows)} parts x {per} epoch(s) = {cyc} epochs")
             + (" - parts outside the one training stream from system memory, so steps are slower" if stream else "")
             + f". {rot} rotation(s) = {total} epochs. Checkpoint + preview at epoch {shown}"
             + (f" (~{gb:.0f} GB each)" if gb else "") + ". The log confirms the plan at Start."))

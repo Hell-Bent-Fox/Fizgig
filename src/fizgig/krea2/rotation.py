@@ -92,7 +92,7 @@ class RotationSchedule:
 
     def describe(self) -> str:
         if self.mode == "component":
-            _names = [c if isinstance(c, str) else f"{c[0]}@{c[1]}-{c[2]}"
+            _names = [(c or "every part") if isinstance(c, str) else f"{c[0]}@{c[1]}-{c[2]}"
                       for c in self.components]
             return (f"component windows {_names} across all {self.n_blocks} blocks, "
                     f"rotating every {self.rotate_every} epoch(s) — {self.n_windows} windows, "

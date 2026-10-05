@@ -650,7 +650,8 @@ class _FineTune:
         torch.cuda.reset_peak_memory_stats()
         params = self.be.trainable_params()
         logger.info(f"[finetune] epoch {epoch + 1 + self.epochs_done}: window {self.sched.window_at(epoch) + 1}/"
-                    f"{self.sched.n_windows} {want} - {n} Linears trainable, "
+                    f"{self.sched.n_windows} {[(w or 'every part') if isinstance(w, str) else w for w in want]} - "
+                    f"{n} Linears trainable, "
                     f"{sum(p.numel() for p in params) / 1e9:.2f}B parameters")
         if self.fused is not None:
             self.fused.attach(params)

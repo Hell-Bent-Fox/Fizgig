@@ -41,7 +41,8 @@ class FTSpec:
         blocks have them).
     components: Linear-name prefixes within a block, in rotation order; each is one window spanning every block (the
         planner depth-splits a window that doesn't fit). Balance them by size - a window's bf16 weights, grads and
-        optimizer state are what the card holds.
+        optimizer state are what the card holds. A card that holds every part at once trains them together in one
+        window (ALL) and nothing rotates.
     always_on: dotted module names trained for the whole run (e.g. a text-fusion stack outside the blocks). Their
         Linears must be bf16 (outside the family's quant targets).
     overhead_gb: VRAM with the NF4 trunk resident plus activations and margin - the planner's base. None = the
@@ -416,10 +417,19 @@ class Rotator:
                             self.loc, self.src)
 
 
+# the one window holding every trained part: the rotator's targets are already just the spec's components, and the
+# empty prefix claims them all
+ALL = ""
+
+
 def _plan(comp_gb, n_blocks, trunk, spec: FTSpec, usable, allow_stream=True, mp=None):
     overhead = spec.overhead_gb if spec.overhead_gb is not None else trunk * n_blocks + 3.5
     extra = spec.act_gb_per_mp * max(0.0, float(mp or spec.calib_mp) - spec.calib_mp)
     overhead += extra                  # a bigger bucket's activations, resident and streaming alike
+    whole = overhead + n_blocks * sum(comp_gb.values())
+    if whole <= usable:                # every part at once (Anima at 1 MP measured 6.0 GB against 6.03 planned)
+        return [ALL], False, [f"every part fits at once (~{whole:.1f} GB of {usable:.1f} usable) - one window, "
+                              f"nothing rotates"]
     # the shared planner's streaming base is overhead - trunk + slots; a measured stream_base_gb sets it directly
     slots = (spec.slots_gb if spec.stream_base_gb is None
              else spec.stream_base_gb + extra - (overhead - trunk * n_blocks))
@@ -708,5 +718,5 @@ def schedule(windows, n_blocks, rotate_every=1, start_window=0) -> RotationSched
                             start_window=start_window)
 
 
-__all__ = ["FTSpec", "Rotator", "SharedBackend", "FusedSteps", "make_optimizer", "plan_windows", "save_checkpoint", "schedule",
+__all__ = ["ALL", "FTSpec", "Rotator", "SharedBackend", "FusedSteps", "make_optimizer", "plan_windows", "save_checkpoint", "schedule",
            "snap_ft_epochs", "source_unfit_reason", "component_gb_per_block"]
