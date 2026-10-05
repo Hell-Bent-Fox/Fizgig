@@ -175,7 +175,7 @@ SDXL = FamilyDescription(
                                       "KREA2_PER_IMAGE_LR": False, "KREA2_AUTO_RECAPTION": False}),
         # OneTrainer's SDXL fine-tune rate: its "#sdxl 1.0" preset takes the TrainConfig default
         # 3e-6 (modules/util/config/TrainConfig.py), text encoders frozen as here
-        ("✨ SDXL Fine-tune (recommended 3e-6)", {**_preset(32, lr=3e-6, alpha=16), "FAMILY_FT": True,
+        ("✨ SDXL Fine-tune Official (3e-6)", {**_preset(32, lr=3e-6, alpha=16), "FAMILY_FT": True,
                                                   "FAMILY_FT_ROTATIONS": "10", "KREA2_PER_IMAGE_LR": False,
                                                   "KREA2_AUTO_RECAPTION": False}),
     ),

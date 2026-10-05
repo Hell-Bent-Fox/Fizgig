@@ -160,7 +160,7 @@ ANIMA = FamilyDescription(
         ("✨ Anima Fine-tune (1e-5)", {**_preset(16, 1e-5), "FAMILY_FT": True, "FAMILY_FT_ROTATIONS": "10"}),
         # OneTrainer's Anima fine-tune rate ("#anima Finetune.json": 1e-6, Adafactor, the
         # transformer blocks, text encoder frozen - the same scope as here)
-        ("✨ Anima Fine-tune (recommended 1e-6)", {**_preset(16, 1e-6), "FAMILY_FT": True,
+        ("✨ Anima Fine-tune Official (1e-6)", {**_preset(16, 1e-6), "FAMILY_FT": True,
                                                    "FAMILY_FT_ROTATIONS": "10"}),
     ),
 
