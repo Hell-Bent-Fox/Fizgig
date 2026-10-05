@@ -6,8 +6,9 @@ resolve for any module; kohya's flattened names can only be un-flattened for mod
 """
 import re
 
-_DOWN = re.compile(r"(.+)\.(lora_A|lora_down)\.weight$")
-_PREFIXES = ("transformer.", "diffusion_model.", "model.diffusion_model.", "base_model.model.")
+_DOWN = re.compile(r"(.+)\.(lora_A|lora_down|lora\.down)\.weight$")
+_PREFIXES = ("transformer.", "unet.", "diffusion_model.", "model.diffusion_model.", "base_model.model.")
+_UP = {"lora_A": "lora_B", "lora_down": "lora_up", "lora.down": "lora.up"}
 _LOHA = re.compile(r"\.hada_w1_a(\.|$)")
 _LOKR = re.compile(r"(.+)\.lokr_w1(_a)?$")
 
@@ -42,7 +43,7 @@ def lora_pairs(desc, keys):
         if not m:
             continue
         stem = m.group(1)
-        up = f"{stem}.{'lora_B' if m.group(2) == 'lora_A' else 'lora_up'}.weight"
+        up = f"{stem}.{_UP[m.group(2)]}.weight"
         if up not in keys:
             continue
         mod = resolve(stem)

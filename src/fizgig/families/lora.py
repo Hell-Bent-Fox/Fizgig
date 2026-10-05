@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 
 TRAINABLE = "lora"
-_PREFIXES = ("transformer.", "diffusion_model.", "model.diffusion_model.", "base_model.model.", "")
+_PREFIXES = ("transformer.", "unet.", "diffusion_model.", "model.diffusion_model.", "base_model.model.", "")
 
 
 class LoRAFactor(nn.Linear):
@@ -323,11 +323,11 @@ class FamilyLoRA:
                 from fizgig.networks.lora import lycoris_scale_from_keys
                 out[full] = ("lokr", w1, w2, lycoris_scale_from_keys(keys))
                 continue
-            m = re.match(r"(.+)\.(lora_A|lora_down)\.weight$", key)
+            m = re.match(r"(.+)\.(lora_A|lora_down|lora\.down)\.weight$", key)
             if not m:
                 continue
             stem, down = m.group(1), m.group(2)
-            up = "lora_B" if down == "lora_A" else "lora_up"
+            up = {"lora_A": "lora_B", "lora_down": "lora_up", "lora.down": "lora.up"}[down]
             if f"{stem}.{up}.weight" not in sd:
                 continue
             full = self._module_for(stem)
