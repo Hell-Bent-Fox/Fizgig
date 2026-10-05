@@ -1,34 +1,42 @@
-# Fizgig v7.0.0: the driver system. Klein and MiniMax H3 move over, SDXL and Anima arrive
+# Fizgig v7.0.0: Anima and SDXL arrive, fine-tuning for every model, and the driver system is complete
 
-Klein 9B and MiniMax H3 now run on Fizgig's new driver system, the same engine as Krea 2 and Qwen Image 2.1. Every family shares one path for training, previews and every workbench tab: Repair Studio, LoRA the Explorer, Profiler, Extract and LoRA Royale. Each model is described once, and everything else comes from that description, so new models, and older ones, are far quicker to add. SDXL and Anima, new in this release, are the first two added this way. A feature built for one family also becomes available to the others.
+Anima and SDXL join with the full workbench. Full fine-tuning now works on all six models, trains the whole model at once when your card has room, and reaches cards down to 8 GB. The driver system is complete: every model now runs on it, and the guide to adding your own is ready.
 
-**Add your own model.** The guide to the driver system is in [`docs/drivers`](https://github.com/shootthesound/Fizgig/tree/master/docs/drivers): where your code is called from, step-by-step walkthroughs for a stills model and a video model, every optional ability a model can switch on, and a checklist of what a finished model includes. SDXL and Anima were built by following it.
+## Headlines
 
-## Klein and MiniMax H3
+- **Two new models, Anima and SDXL,** with LoRA training, fine-tuning and every workbench tab.
+- **Fine-tune every model.** Klein 9B, Krea 2, Qwen Image 2.1, MiniMax H3, SDXL and Anima all fine-tune from the Training tab: pick Fine-tune as the Kind of training. It's new for Klein, SDXL and Anima. Each checkpoint is a complete model file you load in place of the base.
+- **The whole model at once when it fits.** Fine-tuning packs as much of the model into each pass as your card holds, and trains everything together when it all fits: SDXL and Anima from 10 GB cards, Qwen Image 2.1 from 24 GB, Klein on a 32 GB card, Krea 2 on 48 GB. On a 32 GB card Krea 2 and MiniMax H3 train in two passes instead of four. Training everything together got through the whole model about 2.6× faster than four separate passes (measured on Anima).
+- **Fine-tune on smaller cards:** SDXL and Anima on 8 GB, Klein on 16 GB (it streams the blocks it isn't training from system memory).
+- **Window size:** a new Training-tab setting caps how many parts train together, for more headroom on a card that's close to its limit. The Training tab shows the plan your card gets before you start.
+- **The driver system is complete, guide included.** Klein and MiniMax H3 now run on the driver system that Krea 2 and Qwen Image 2.1 already use, so every model shares training, previews, Repair Studio, LoRA the Explorer, Profiler, Extract and LoRA Royale, and a feature built for one model is available to the others. The guide to adding your own model is below.
 
-- **Klein:** trains on the new engine with your existing model files and presets. The first run on each dataset caches it again, which happens automatically. In-training previews still use Klein Distilled at 4 steps.
-- **MiniMax H3:** photos, clips and voice, sliders, RefMod and fine-tuning all work as before. Your saved H3 settings carry over.
-- **Fine-tuning on every model:** pick Fine-tune on the Training tab for Klein, MiniMax H3, Krea 2, Qwen Image 2.1, SDXL or Anima. It's new for Klein, SDXL and Anima. An SDXL fine-tune trains the UNet's attention and feed-forward layers with the text encoders frozen, and saves a complete checkpoint you load like any other.
-- **Fine-tuning packs as much of the model into each window as your card holds.** The whole model trains at once when it fits (Anima from 10 GB, Qwen Image 2.1 from 24 GB, Klein on 32 GB), and Krea 2 and MiniMax H3 go from four windows to two on a 32 GB card. The Training tab shows what your card gets, and a new Window size setting gives you more headroom if you want it.
-- **Klein fine-tunes on 16 GB cards,** streaming the blocks it isn't training from system memory.
-- **The new Profiler** now covers Klein and MiniMax H3 too.
-- **Repair Studio:** moving a slider now re-renders only the blocks after the change, on every family, with the same picture as a full render. It's on by default and can be switched off with the tick on the Setup card.
-
-## New: SDXL (experimental)
-
-- **Any SDXL checkpoint, one file:** its VAE and text encoders are read from the checkpoint. Juggernaut XL v9 is the default download, with Illustrious XL offered beside it.
-- **Presets:** Strong (rank 32, alpha 16, 5e-5) is the default, then Standard (rank 16, alpha 8, 5e-5) and Slider (rank 32, alpha 16, 5e-5). All run with EMA on, a flat learning rate, and per-image learning rates and auto-recaption on (not on Slider).
-- **Previews:** DPM++ 2M SDE Karras, 30 steps, CFG 3, with a full default negative prompt. The Samples tab shows the sampler with its ComfyUI names.
-- **Fast:** about 0.5–0.75 s a step at 1 MP on a 5090.
-- **Long prompts and captions aren't cut off.** Anything past CLIP's 77 tokens is encoded in chunks, as ComfyUI does.
-- **Community SDXL LoRAs load fully in the workbench,** including kohya files, LoCon, and speed LoRAs such as Lightning and LCM.
-- **Slider LoRAs,** from prompt pairs or photo pairs.
+**The community can now add models to Fizgig.** The guide to the driver system is in [`docs/drivers`](https://github.com/shootthesound/Fizgig/tree/master/docs/drivers): where your code is called from, walkthroughs for a stills model and a video model, every optional ability, fine-tuning (optional, and can be added after a model first ships), and a checklist of what a finished model includes. SDXL and Anima were built by following it.
 
 ## New: Anima (experimental)
 
 - **CircleStone Labs' anime and illustration model,** with the full workbench. Note its non-commercial licence.
-- **Presets:** Character (rank 16, 1e-4, 50 epochs), Style (rank 16, 5e-5) and Official (rank 32, 2e-5, the model card's recipe).
+- **LoRA presets:** Character (rank 16, 1e-4, 50 epochs), Style (rank 16, 5e-5) and Official (rank 32, 2e-5, the model card's recipe).
+- **Fine-tuning** trains every block's attention and feed-forward layers, the text adapter left untouched. Two presets: Fine-tune (1e-5) and Fine-tune Official (1e-6). The checkpoint loads in ComfyUI in place of the base.
 - **Previews:** the official negative prompt by default. The official Turbo LoRA is available for fast previews.
+
+## New: SDXL (experimental)
+
+- **Any SDXL checkpoint, one file:** its VAE and text encoders are read from the checkpoint. Juggernaut XL v9 is the default download, with Illustrious XL offered beside it.
+- **LoRA presets:** Strong (rank 32, alpha 16, 5e-5) is the default, then Standard (rank 16, alpha 8, 5e-5) and Slider (rank 32, alpha 16, 5e-5). All run with EMA on, a flat learning rate, and per-image learning rates and auto-recaption on (not on Slider).
+- **Fine-tuning** trains the UNet's attention and feed-forward layers with the text encoders frozen, and saves a complete checkpoint, text encoders and VAE included, that loads like any other. Two presets: Fine-tune (1e-5) and Fine-tune Official (3e-6).
+- **Previews:** DPM++ 2M SDE Karras, 30 steps, CFG 3, with a full default negative prompt. The Samples tab shows the sampler with its ComfyUI names.
+- **Fast:** about 0.5–0.75 s a step at 1 MP on a 5090 for LoRAs.
+- **Long prompts and captions aren't cut off.** Anything past CLIP's 77 tokens is encoded in chunks, as ComfyUI does.
+- **Community SDXL LoRAs load fully in the workbench,** including kohya files, LoCon, and speed LoRAs such as Lightning and LCM.
+- **Slider LoRAs,** from prompt pairs or photo pairs.
+
+## Klein and MiniMax H3
+
+- **Klein:** trains on the new engine with your existing model files and presets. The first run on each dataset caches it again, which happens automatically. In-training previews still use Klein Distilled at 4 steps.
+- **MiniMax H3:** photos, clips and voice, sliders, RefMod and fine-tuning all work as before, with fewer fine-tune passes on bigger cards. Your saved H3 settings carry over.
+- **The new Profiler** now covers Klein and MiniMax H3 too.
+- **Repair Studio:** moving a slider now re-renders only the blocks after the change, on every model, with the same picture as a full render. It's on by default and can be switched off with the tick on the Setup card.
 
 ## For every model
 
