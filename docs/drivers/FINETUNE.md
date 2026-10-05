@@ -20,7 +20,7 @@ Full fine-tuning trains the base model's own weights instead of a LoRA, and save
 
 ## What your model needs
 
-- **A bf16 model file.** The default `ft_source_unfit` refuses fp8, int8 or pre-quantised files: they have no bf16 layout to build the master from or to write the checkpoint into. Put the bf16 file's download in the description's model files.
+- **A 16- or 32-bit model file.** The default `ft_source_unfit` refuses fp8, int8 or pre-quantised files: they have no full-precision layout to build the master from or to write the checkpoint into. The master keeps the file's own precision (bf16, fp16 or fp32), and only what training changed is written back, so an fp16 checkpoint's untouched weights come back exact.
 - **Linears that quantise to NF4.** The trained parts must be among `quant_target_names(dit)`, which defaults to the LoRA targets. Only NF4 Linears rotate.
 - **Blocks in an `nn.ModuleList`**, or several lists that count as one cycle (Klein: 8 double blocks, then 24 single blocks).
 
@@ -50,7 +50,8 @@ That is Anima's. `dit` may be `None`: the Training tab calls `ft_spec` before an
 | `components` | The parts, as Linear-name prefixes within a block, in rotation order. Make them similar in size: the biggest part sets the smallest card that can hold a full-depth window. In a model with several block lists, a part may exist in some blocks only; the planner splits it only across the blocks that have it. |
 | `always_on` | Modules outside the blocks trained for the whole run (Krea 2's text fusion). Their Linears must stay bf16, outside `quant_target_names`. |
 | `file_layout` | When your model splits or renames a weight the file stores differently. Qwen's file fuses the MLP gate and projection into one `gate_up` tensor: `(("img_mlp.gate_layer.weight", "img_mlp.gate_up.weight", 0, 2), ("img_mlp.proj.weight", "img_mlp.gate_up.weight", 1, 2))`. |
-| `file_prefix` | A prefix every DiT key in the file carries (Anima's `net.`). A `diffusion_model.` prefix is found without it. |
+| `file_prefix` | A prefix every DiT key in the file carries (Anima's `net.`, a single-file SDXL checkpoint's `model.diffusion_model.`). A `diffusion_model.` prefix is found without it. Keys without the prefix (a checkpoint's text encoders and VAE) are copied into the saved file untouched. |
+| `file_names` | Where the file names a block differently from the loaded model: `(model prefix, file prefix)` pairs. SDXL loads in diffusers names but its checkpoints use the LDM layout, so `("down_blocks.1.attentions.0.", "input_blocks.4.1.")` and so on. |
 | `overhead_gb`, `calib_mp`, `act_gb_per_mp` | The planner's memory figures; see [Measure the memory](#measure-the-memory). Until you measure, the cautious defaults apply, and they refuse cards that could run it. |
 | `stream_base_gb`, `trunk_gb_per_block` | Streaming figures; leave them unset unless streaming plans come out badly. |
 
@@ -72,6 +73,8 @@ def install_ft_streamer(self, dit, streamer):
 ```
 
 That is Klein's. A model with no block swap can still fine-tune: it simply needs a card that holds its smallest window.
+
+A model whose blocks sit in several small lists (SDXL: 11 attention modules of 2 or 10 transformer blocks) lists each one in `blocks`; a part is then sized and split over the lists that hold it.
 
 ## Measure the memory
 
