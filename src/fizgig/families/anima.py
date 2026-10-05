@@ -12,7 +12,7 @@ _CARD = f"https://huggingface.co/{_REPO}"
 _SHIFT = (("shift", 3.0),)
 
 
-def _preset(rank, lr, epochs=30, mp="1.0"):
+def _preset(rank, lr, epochs=30, mp="1.0", slider=False):
     return {
         "NETWORK_DIM": rank, "NETWORK_ALPHA": rank, "NETWORK_TYPE": "LoRA (standard)", "LEARNING_RATE": lr,
         "MAX_TRAIN_EPOCHS": epochs, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42, "ADAPTIVE_LR": False,
@@ -20,7 +20,7 @@ def _preset(rank, lr, epochs=30, mp="1.0"):
         "DATASET_MEGAPIXELS": mp, "BLOCKS_SWAP": "Auto (detect from GPU)",
         "FAMILY_PRECISION": "Auto (fits your free VRAM)", "FAMILY_EMA": "0.98 (recommended)",
         "KREA2_LOSS_WATCH": True, "KREA2_PER_IMAGE_LR": False, "KREA2_AUTO_RECAPTION": False,
-        "KREA2_WARMUP_LOOK": False, "FAMILY_FT": False,
+        "KREA2_WARMUP_LOOK": False, "FAMILY_FT": False, "FAMILY_SLIDER": slider,
     }
 
 
@@ -85,6 +85,7 @@ ANIMA = FamilyDescription(
     # full fine-tune (families/ft.py, the driver's ft_spec): attention and MLP of every block, rotating on an NF4 trunk;
     # the shared default rate 1e-5 (OneTrainer's Anima fine-tune preset uses 1e-6). Not yet measured on Anima.
     finetune=True,
+    slider_training=True,             # from photo pairs (training_loss diff weighting) or prompts (noise_latents)
     # Measured 5 Oct 2026 on a 5090 (rank 16, adamw8bit, gradient checkpointing, 1024 previews), peak GB including
     # the preview, which sets it (training alone: bf16 5.1 / 5.7, INT8 3.4 / 4.0, NF4 2.9 / 3.5 at 0.5 / 1 MP); s/step
     # bf16 0.53 / 0.71, INT8 0.74 / 0.81, NF4 0.69 / 0.60. No block swap.
@@ -156,6 +157,8 @@ ANIMA = FamilyDescription(
         ("✨ Anima Character (rank 16, 1e-4)", _preset(16, 1e-4, epochs=50)),
         ("✨ Anima Style (rank 16, 5e-5)", _preset(16, 5e-5)),
         ("✨ Anima Official (rank 32, 2e-5)", _preset(32, 2e-5)),
+        # Slider: Qwen's slider recipe (rank 4, 2e-4, 30 epochs). Not yet measured on Anima
+        ("✨ Anima Slider (rank 4, 2e-4)", _preset(4, 2e-4, slider=True)),
         # full fine-tune at the shared fine-tune rate (Peter), and at OneTrainer's
         ("✨ Anima Fine-tune (1e-5)", {**_preset(16, 1e-5), "FAMILY_FT": True, "FAMILY_FT_ROTATIONS": "10"}),
         # OneTrainer's Anima fine-tune rate ("#anima Finetune.json": 1e-6, Adafactor, the

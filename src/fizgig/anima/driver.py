@@ -172,7 +172,32 @@ class AnimaDriver(FamilyDriver):
         tb = t.view(-1, 1, 1, 1, 1)
         xt = (1 - tb) * x0 + tb * noise
         pred = self._velocity(dit, xt, t, cond).float()
+        if diff_ref is not None and diff_weight > 0.0:
+            # slider pairs: positions where the two poles differ count more (Krea 2's formula, as Qwen and SDXL)
+            ref = diff_ref.to(x0.device).float()
+            ref = ref.unsqueeze(2) if ref.dim() == 4 else ref
+            d = (x0 - ref).abs().mean(dim=1).flatten(1)                                 # (B, h*w)
+            dm = d.mean(dim=1, keepdim=True)
+            r = (d / dm.clamp_min(1e-8)).clamp(max=8.0)
+            w = (1.0 - float(diff_weight)) + float(diff_weight) * r
+            w = w / w.mean(dim=1, keepdim=True).clamp_min(1e-8)
+            w = torch.where(dm > 1e-6, w, torch.ones_like(w))      # identical pair: uniform, never all-zero
+            se = (pred - (noise - x0)).pow(2).mean(dim=1).flatten(1)
+            return (se * w).mean(), {"t": float(t.mean())}
         return F.mse_loss(pred, noise - x0), {"t": float(t.mean())}
+
+    def noise_latents(self, latents, generator, *, min_t=0.0, max_t=1.0):
+        x0 = latents.float()
+        if x0.dim() == 4:
+            x0 = x0.unsqueeze(2)
+        t = torch.sigmoid(torch.randn(1, generator=generator))
+        t = (min_t + (max_t - min_t) * t).to(x0.device)
+        noise = torch.randn(x0.shape, generator=generator).to(x0.device)
+        tb = t.view(-1, 1, 1, 1, 1)
+        return {"xt": (1 - tb) * x0 + tb * noise, "t": t}
+
+    def predict(self, dit, state, cond):
+        return self._velocity(dit, state["xt"], state["t"], cond)
 
     # ---- sampling -------------------------------------------------------------------------------
     @torch.no_grad()
