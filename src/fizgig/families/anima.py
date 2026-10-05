@@ -20,7 +20,7 @@ def _preset(rank, lr, epochs=30, mp="1.0"):
         "DATASET_MEGAPIXELS": mp, "BLOCKS_SWAP": "Auto (detect from GPU)",
         "FAMILY_PRECISION": "Auto (fits your free VRAM)", "FAMILY_EMA": "0.98 (recommended)",
         "KREA2_LOSS_WATCH": True, "KREA2_PER_IMAGE_LR": False, "KREA2_AUTO_RECAPTION": False,
-        "KREA2_WARMUP_LOOK": False,
+        "KREA2_WARMUP_LOOK": False, "FAMILY_FT": False,
     }
 
 
@@ -156,6 +156,10 @@ ANIMA = FamilyDescription(
         ("✨ Anima Character (rank 16, 1e-4)", _preset(16, 1e-4, epochs=50)),
         ("✨ Anima Style (rank 16, 5e-5)", _preset(16, 5e-5)),
         ("✨ Anima Official (rank 32, 2e-5)", _preset(32, 2e-5)),
+        # full fine-tune at OneTrainer's Anima fine-tune rate ("#anima Finetune.json": 1e-6, Adafactor, the
+        # transformer blocks, text encoder frozen - the same scope as here)
+        ("✨ Anima Fine-tune (recommended 1e-6)", {**_preset(16, 1e-6), "FAMILY_FT": True,
+                                                   "FAMILY_FT_ROTATIONS": "10"}),
     ),
 
     notes=(

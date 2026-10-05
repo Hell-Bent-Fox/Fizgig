@@ -31,6 +31,10 @@ ATTENTIONS = (
     ("OUT02", "Output 2", "up_blocks.0.attentions.2"), ("OUT03", "Output 3", "up_blocks.1.attentions.0"),
     ("OUT04", "Output 4", "up_blocks.1.attentions.1"), ("OUT05", "Output 5", "up_blocks.1.attentions.2"),
 )
+# the same 11 in the checkpoint's own (LDM) names, which the fine-tune reads and writes
+LDM_ATTENTIONS = ("input_blocks.4.1", "input_blocks.5.1", "input_blocks.7.1", "input_blocks.8.1", "middle_block.1",
+                  "output_blocks.0.1", "output_blocks.1.1", "output_blocks.2.1", "output_blocks.3.1",
+                  "output_blocks.4.1", "output_blocks.5.1")
 # transformer blocks per attention module (SDXL's transformer_layers_per_block: 2 at 1/2, 10 at 1/4)
 DEPTH = {"down_blocks.1": 2, "down_blocks.2": 10, "mid_block": 10, "up_blocks.0": 10, "up_blocks.1": 2}
 TRANSFORMER_LINEARS = ("attn1.to_q", "attn1.to_k", "attn1.to_v", "attn1.to_out.0",
@@ -327,6 +331,28 @@ class SDXLDriver(FamilyDriver):
         return None
 
     # ---- LoRA and the block map -----------------------------------------------------------------
+    def quant_target_names(self, dit):
+        # proj_in / proj_out stay bf16: the fine-tune trains them for the whole run (ft_spec's always_on)
+        return [n for n in self.lora_target_names(dit) if not n.endswith(("proj_in", "proj_out"))]
+
+    def ft_spec(self, dit):
+        """Fine-tuning: every Linear of the UNet's 70 transformer blocks (the 11 attention modules' lists), as
+        self-attention, cross-attention and the two feed-forward matrices, plus each module's proj_in / proj_out all
+        run. Convs, the time and added embeddings and the text encoders stay frozen: the community's SDXL tunes keep
+        the text encoders frozen (OneTrainer's SDXL fine-tune preset, sd-scripts' 24 GB recipe, Animagine 3.1) and
+        attention + MLP is LyCORIS's recommended scope (docs/algorithms/guidelines.md). The checkpoint names the
+        blocks in LDM layout; the saved file keeps it, text encoders and VAE included, so it loads as a checkpoint."""
+        from fizgig.families.ft import FTSpec
+        return FTSpec(blocks=tuple(f"{p}.transformer_blocks" for _i, _l, p in ATTENTIONS),
+                      components=("attn1", "attn2", "ff.net.0", "ff.net.2"),
+                      always_on=tuple(f"{p}.{m}" for _i, _l, p in ATTENTIONS for m in ("proj_in", "proj_out")),
+                      file_prefix="model.diffusion_model.",
+                      file_names=tuple((f"{p}.", f"{ldm}.") for (_i, _l, p), ldm in zip(ATTENTIONS, LDM_ATTENTIONS)),
+                      # measured 5 Oct on a 5090, one part per window: peaks 3.8-4.6 GB at 1 MP, 3.2-4.4 at 0.25 MP
+                      # (2.39 GB allocated at planning, ~1.2 GB NF4 trunk) -> resident base 1.75 GB at 1 MP, growing
+                      # ~0.8 GB/MP; every part at once peaked 6.7 GB (0.2 over a 2.0 base), so 2.3
+                      overhead_gb=2.3, calib_mp=1.0, act_gb_per_mp=1.0)
+
     def block_map(self, dit=None):
         names = {n for n, _ in dit.named_modules()} if dit is not None else None
 

@@ -15,7 +15,7 @@ def _preset(rank, lr=1e-4, adaptive=None, epochs=20, mp="1.0", alpha=None, slide
     lo, hi = adaptive or ("1e-4", "4e-4")
     return {
         "NETWORK_DIM": rank, "NETWORK_ALPHA": rank if alpha is None else alpha, "NETWORK_TYPE": "LoRA (standard)",
-        "LEARNING_RATE": lr, "FAMILY_SLIDER": slider,
+        "LEARNING_RATE": lr, "FAMILY_SLIDER": slider, "FAMILY_FT": False,
         "MAX_TRAIN_EPOCHS": epochs, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42,
         "ADAPTIVE_LR": adaptive is not None, "ADAPTIVE_LR_MIN": lo, "ADAPTIVE_LR_MAX": hi,
         "OPTIMIZER_TYPE": "adamw", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
@@ -123,6 +123,8 @@ SDXL = FamilyDescription(
     # Slider LoRAs (prompt pairs, or before/after photo pairs): epsilon prediction works as Concept Sliders' SDXL
     # recipe does - the target is built from the UNet's own predictions (families/train.py)
     slider_training=True,
+    # full fine-tune (the driver's ft_spec): the UNet's transformer Linears, text encoders frozen; the shared 1e-5 rate
+    finetune=True,
     workbench_follows_samples=True,   # previews take the Samples tab's steps, CFG and negative
     # INT8 attention not used: measured 5 Oct 2026 on a 5090, 2.74 -> 2.72 s per 30-step render (SDXL's renders are
     # launch-bound, not attention-bound), so it would only cost fidelity
@@ -168,6 +170,11 @@ SDXL = FamilyDescription(
         ("✨ SDXL Standard (rank 16, alpha 8, 5e-5)", _preset(16, lr=5e-5, alpha=8)),
         # Slider: the default's rank 32 / alpha 16 at 5e-5 (Peter, 5 Oct 2026). Not yet measured on SDXL.
         ("✨ SDXL Slider (rank 32, alpha 16, 5e-5)", _preset(32, lr=5e-5, alpha=16, epochs=30, slider=True)),
+        # full fine-tune at OneTrainer's SDXL fine-tune rate: its "#sdxl 1.0" preset takes the TrainConfig default
+        # 3e-6 (modules/util/config/TrainConfig.py), text encoders frozen as here
+        ("✨ SDXL Fine-tune (recommended 3e-6)", {**_preset(32, lr=3e-6, alpha=16), "FAMILY_FT": True,
+                                                  "FAMILY_FT_ROTATIONS": "10", "KREA2_PER_IMAGE_LR": False,
+                                                  "KREA2_AUTO_RECAPTION": False}),
     ),
 
     options=(

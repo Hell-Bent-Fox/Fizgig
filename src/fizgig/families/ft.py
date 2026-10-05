@@ -54,7 +54,10 @@ class FTSpec:
         that slice and the checkpoint writes the parts back as the file had them. A "diffusion_model." prefix in the
         file is found on its own.
     file_prefix: a prefix every DiT key in the model file carries besides that one (Anima's "net."), so weights are
-        read from and written back under the file's own names.
+        read from and written back under the file's own names. Keys without it (a checkpoint's text encoders and VAE)
+        are not the model's.
+    file_names: ((model prefix, file prefix), ...) where the file names a block differently from the loaded model
+        (SDXL: diffusers' "down_blocks.1.attentions.0." is the checkpoint's "input_blocks.4.1.").
     """
     blocks: str = "blocks"
     components: tuple = ()
@@ -64,6 +67,7 @@ class FTSpec:
     slots_gb: float = 1.5
     file_layout: tuple = ()
     file_prefix: str = ""
+    file_names: tuple = ()
     # streaming: what a step needs beyond its own resident blocks and window (activations, streamed blocks in flight,
     # fragmentation), in the planner's budget frame. None = derived from overhead_gb (conservative)
     stream_base_gb: Optional[float] = None
@@ -89,18 +93,42 @@ def _file_loc(spec: FTSpec, mkey: str, have) -> Optional[tuple]:
         if mkey.endswith(msuf):
             fkey, part, parts = mkey[:-len(msuf)] + fsuf, int(pt), int(n)
             break
+    for mp, fp in spec.file_names:
+        if fkey.startswith(mp):
+            fkey = fp + fkey[len(mp):]
+            break
     for k in (fkey, _PREFIX + fkey) + ((spec.file_prefix + fkey,) if spec.file_prefix else ()):
         if k in have:
             return k, part, parts
     return None
 
 
+def _model_name(spec: FTSpec, fkey: str) -> str:
+    """A file key (prefix already stripped) under the loaded model's name (FTSpec.file_names, reversed)."""
+    for mp, fp in spec.file_names:
+        if fkey.startswith(fp):
+            return mp + fkey[len(fp):]
+    return fkey
+
+
 def _read(src, loc):
+    """A master weight in the file's own precision: bf16, or fp16 / fp32 (most SDXL checkpoints are fp16), so a
+    weight training leaves alone is written back exactly."""
     fkey, part, parts = loc
     t = src.get_tensor(fkey)
     if parts > 1:
         t = t.chunk(parts, dim=0)[part]
-    return t.to(torch.bfloat16)
+    return t if t.dtype in (torch.bfloat16, torch.float16, torch.float32) else t.to(torch.bfloat16)
+
+
+def _merge(base: torch.Tensor, trained: torch.Tensor) -> torch.Tensor:
+    """The master after training: `base` (the master, in the file's precision) plus what training changed in the bf16
+    copy it trained - the whole of `trained` for a bf16 file, and for an fp16 / fp32 one the change alone, so the
+    bf16 round trip's rounding never reaches the weights."""
+    trained = trained.detach().to("cpu")
+    if base.dtype == torch.bfloat16:
+        return trained.to(torch.bfloat16).clone()
+    return (base.float() + (trained.float() - base.to(torch.bfloat16).float())).to(base.dtype)
 
 
 def source_unfit_reason(path: str) -> Optional[str]:
@@ -174,8 +202,10 @@ class DiskMaster:
         import numpy as np
         rec = self._trained.get(key)
         if rec is not None:
-            arr = np.fromfile(os.path.join(self.dir, rec), dtype=np.uint16)
-            return torch.from_numpy(arr).view(torch.bfloat16).reshape(self._shape[key])
+            fn, dt = rec
+            dt = getattr(torch, dt)
+            arr = np.fromfile(os.path.join(self.dir, fn), dtype=np.uint32 if dt == torch.float32 else np.uint16)
+            return torch.from_numpy(arr).view(dt).reshape(self._shape[key])
         if key in self._shape:
             return _read(self._f, self._loc[key])
         return default
@@ -193,9 +223,12 @@ class DiskMaster:
             raise KeyError(f"not a master weight: {key}")
         fn = hashlib.sha1(key.encode()).hexdigest()[:16] + ".bin"
         tmp = os.path.join(self.dir, fn + ".tmp")
-        t.detach().to("cpu", dtype=torch.bfloat16).contiguous().view(torch.uint16).numpy().tofile(tmp)
+        t = t.detach().to("cpu")
+        if t.dtype not in (torch.bfloat16, torch.float16, torch.float32):
+            t = t.to(torch.bfloat16)
+        t.contiguous().view(torch.int32 if t.dtype == torch.float32 else torch.int16).numpy().tofile(tmp)
         os.replace(tmp, os.path.join(self.dir, fn))          # the old bytes stay valid until this instant
-        self._trained[key] = fn
+        self._trained[key] = [fn, str(t.dtype).replace("torch.", "")]
         mt = self._manifest + ".tmp"
         with open(mt, "w", encoding="utf-8") as f:
             json.dump({"source": os.path.basename(self.src), "trained": self._trained}, f)
@@ -218,6 +251,7 @@ class _TrainedView:
 
     def __init__(self, master, live, loc, src_path):
         self._m, self._live, self._src = master, live, src_path     # live: model key -> Linear with a current .weight
+        self._loc, self._srcf = loc, None
         self._parts = {}                                             # file key -> {part: model key}, and its count
         for mk, (fk, part, parts) in loc.items():
             self._parts.setdefault(fk, [parts, {}])[1][part] = mk
@@ -234,8 +268,17 @@ class _TrainedView:
     def _value(self, mk):
         lin = self._live.get(mk)
         if lin is not None:
-            return lin.weight.detach().to("cpu", dtype=torch.bfloat16)
+            return _merge(self._base(mk), lin.weight)
         return self._m[mk]
+
+    def _base(self, mk):
+        """The weight before training: the master's, or for an always-on Linear (no master copy) the model file's."""
+        if mk in self._m:
+            return self._m[mk]
+        if self._srcf is None:
+            from fizgig.krea2.safetensors_utils import MemoryEfficientSafeOpen
+            self._srcf = MemoryEfficientSafeOpen(self._src)
+        return _read(self._srcf, self._loc[mk])
 
     def __getitem__(self, fkey):
         parts, have = self._parts[fkey]
@@ -254,6 +297,8 @@ class _TrainedView:
 
 def _unwrapped(name: str) -> str:
     """A Linear's name as the model file knows it: FamilyLoRA wraps each target and keeps the real Linear as `.base`."""
+    if name == "base":                     # the wrapped module itself (an always-on Linear named on its own)
+        return ""
     return name[:-len(".base")] if name.endswith(".base") else name
 
 
@@ -298,7 +343,7 @@ class Rotator:
                 if getattr(m, "_is_nf4", False) or getattr(m, "_is_int8", False):
                     raise RuntimeError(f"[finetune] always-on module {mod_name}.{lname} is quantised - always-on "
                                        f"modules must stay bf16 (outside the family's quant targets)")
-                self.always.append((f"{mod_name}.{lname}.weight", m))
+                self.always.append((f"{mod_name}.{lname}.weight" if lname else f"{mod_name}.weight", m))
         self.master: Dict[str, torch.Tensor] = {}
         self.loc: Dict[str, tuple] = {}       # model key -> (file key, part, parts)
         self.src = None
@@ -365,7 +410,7 @@ class Rotator:
             # it a window-sized .grad (~6 GB on Krea 2's MLP windows) that freeing the weight storage does not free
             lin.weight.grad = None
             trained = lin.weight.detach()
-            self.master[key] = trained.to("cpu", dtype=torch.bfloat16).clone()   # before the lossy re-encode
+            self.master[key] = _merge(self.master[key], trained)                 # before the lossy re-encode
             packed, state = quantize_nf4(trained.contiguous())
             lin._nf4_packed, lin._nf4_state = packed, state
             lin.weight = nn.Parameter(torch.empty(0, device=packed.device, dtype=torch.bfloat16), requires_grad=False)
@@ -472,7 +517,8 @@ def plan_from_file(path: str, spec: FTSpec, free_gb: float, mp=None, max_parts=0
     import re
     with MemoryEfficientSafeOpen(path) as f:
         pre = tuple(p for p in (_PREFIX, spec.file_prefix) if p)
-        hdr = {next((k[len(p):] for p in pre if k.startswith(p)), k): f.header[k] for k in f.keys()}
+        keys = [k for k in f.keys() if not spec.file_prefix or k.startswith(pre)]
+        hdr = {_model_name(spec, next((k[len(p):] for p in pre if k.startswith(p)), k)): f.header[k] for k in keys}
     if not isinstance(spec.blocks, str):
         return _plan_from_header_lists(hdr, spec, free_gb, mp, max_parts)
     pat = re.compile(rf"^{re.escape(spec.blocks)}\.(\d+)\.(.+)$")
