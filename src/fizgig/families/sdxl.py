@@ -99,7 +99,9 @@ SDXL = FamilyDescription(
     # Speed (measured 5 Oct 2026, 5090, 1 MP, rank 16, checkpointing on): the step is launch-bound, not compute-bound.
     # 8-bit AdamW steps each of the LoRA's 1,444 tensors separately (~0.3 s/step): 1493 ms/step -> fused AdamW 1046
     # -> fused AdamW + compiled blocks 629 (6.2 GB either way; isolated loop, synced). Through the GUI (real run, 40
-    # photos): 1.03 -> ~0.75 s/step from epoch 2, peak 6.6 GB unchanged. Compile warm-up ~25 s + a few s per new bucket.
+    # photos): 1.03 -> ~0.75 s/step from epoch 2, peak 6.6 GB unchanged; a second 5090 host 0.51-0.57 (the step is
+    # CPU-launch-bound, so the host CPU sets it). Compile warm-up ~25 s + a few s per new bucket. Also measured, not
+    # adopted: the LoRA in bf16 (~5% once compiled), cuDNN autotuning (no gain), loss watch / Adaptive LR off (~0.05 s).
     compiles=True,
     compile_boundary="outside",
     compile_fullgraph=False,
