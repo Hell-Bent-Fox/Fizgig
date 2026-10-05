@@ -147,11 +147,12 @@ SDXL = FamilyDescription(
     repair_size=1024,                 # a 1 MP model; a 1024 render at 30 steps took 3.3 s on a 5090
 
     presets=(
-        # measured 5 Oct 2026 (Juggernaut v9, 115 photos, 1 MP, 5090): the subject by epoch 2-3, steady from 3 on
-        ("✨ SDXL Standard (rank 16, adaptive LR)", _preset(16, adaptive=("1e-4", "4e-4"))),
+        # The first is a first visit's preset. Flat LR: SDXL's per-epoch loss swings with its uniform timesteps, so
+        # Adaptive LR reacted to noise (Peter, 5 Oct 2026: adaptive preset removed, can come back). The former
+        # adaptive "Standard" (rank 16, Adaptive 1e-4..4e-4) had the subject by epoch 2-3 on 115 photos at 1 MP.
+        ("✨ SDXL Standard (rank 16, 1e-4)", _preset(16, lr=1e-4)),
         # the community default (Civitai's trainer, Kohya's docs, r/StableDiffusion): rank = alpha = 32, flat 1e-4
         ("✨ SDXL Strong (rank 32, 1e-4)", _preset(32, lr=1e-4)),
-        ("✨ SDXL Style (rank 16, 1e-4)", _preset(16, lr=1e-4)),
     ),
 
     options=(
