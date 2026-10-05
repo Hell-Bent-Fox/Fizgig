@@ -222,6 +222,19 @@ class AnimaDriver(FamilyDriver):
         arr = (pixels[0].float().permute(1, 2, 0).clamp(0, 1) * 255.0).round().byte().cpu().numpy()
         return Image.fromarray(arr)
 
+    def compile_blocks(self, dit, boundary="inside", blocks_to_swap=0):
+        """torch.compile the 28 blocks in place, after the LoRA has wrapped its Linears. Each block does its own
+        gradient checkpoint, so the checkpoint compiles inside the graph. A real 1 MP run on a 5090 went 0.71 ->
+        0.31 s/step with fused AdamW (peak 5.7 -> 6.1 GB)."""
+        import logging
+        from fizgig.families.compile import ready_to_compile
+        if not ready_to_compile(blocks_to_swap):
+            return
+        for i, blk in enumerate(dit.blocks):
+            dit.blocks[i] = torch.compile(blk, fullgraph=False)
+        logging.getLogger(__name__).info("[compile] %d Anima blocks compiled - the first step of each new shape "
+                                         "pauses to compile", len(dit.blocks))
+
     # ---- LoRA -----------------------------------------------------------------------------------
     def alias_flat(self, flat):
         """diffusers naming (AI-Toolkit's Anima files before its ComfyUI rename): transformer_blocks_N_attn1_to_q ->

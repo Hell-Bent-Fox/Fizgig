@@ -101,6 +101,74 @@ def find_host_compiler() -> bool:
     return False
 
 
+def ready_to_compile(blocks_to_swap: int = 0, fp8_scaled: bool = False) -> bool:
+    """The machine and the run can torch.compile (no block swap, Triton matching torch, a host C compiler, fp8 only on
+    SM 8.9+), with Fizgig's compile settings applied. False = say why in the log and run eager. A driver that compiles
+    its own way (FamilyDriver.compile_blocks overridden, e.g. SDXL's blocks spread over several lists) calls this
+    first."""
+    if blocks_to_swap > 0:
+        logger.warning("[compile] ignored — block swap moves weights between devices every step, "
+                       "which invalidates compiled graphs. Quantise instead of swapping if you "
+                       "want both.")
+        return False
+    if fp8_scaled:
+        _cc = None
+        try:
+            # `import torch as _torch`, NOT the bare name: the `import torch._dynamo`
+            # further down makes `torch` function-LOCAL, so referencing it here raises
+            # UnboundLocalError — which the except below would silently eat, and the
+            # guard would never fire (caught by the #97 regression test's tracer).
+            import torch as _torch
+            if _torch.cuda.is_available():
+                _cc = _torch.cuda.get_device_capability()
+        except Exception:
+            pass
+        if _cc is not None and _cc < (8, 9):
+            logger.warning("[compile] ignored — the fp8 base needs fp8 Triton kernels "
+                           "(fp8e4nv), which need SM 8.9+ (RTX 40-series or newer); this GPU "
+                           "is SM %d.%d. Pick INT8 or NF4 Base Precision to compile on this "
+                           "card. Training continues uncompiled.", _cc[0], _cc[1])
+            return False
+    try:
+        import triton  # noqa: F401
+    except Exception:
+        logger.warning("[compile] ignored — triton is not installed (pip install triton-windows "
+                       "on Windows, triton on Linux)")
+        return False
+    try:
+        from fizgig.utils.capabilities import triton_matches_torch
+        _ok, _why = triton_matches_torch()
+    except Exception:
+        _ok, _why = True, ""
+    if not _ok:
+        # A triton built for another torch imports fine and then fails or hangs INSIDE
+        # torch.compile (a preview that never comes back, no log) — say so and run eager.
+        logger.warning("[compile] ignored — %s. Training continues uncompiled.", _why)
+        return False
+    if not find_host_compiler():
+        return False
+    import torch._dynamo
+    # Raises the recompile ceiling (default 8, which a bucketed dataset exhausts immediately —
+    # after which dynamo silently runs eager) and works around a torch assertion that otherwise
+    # aborts inductor mid-run. See fizgig/modules/compile_util.py.
+    from fizgig.modules.compile_util import init_compile
+    init_compile()
+    # Settle the SDPA backend global BEFORE tracing: its lazy first-use probe (device alloc +
+    # global write + logging) inside a compiled block is exactly what fullgraph=True raises on.
+    from fizgig.modules import sdpa as _sdpa
+    _sdpa.prime()
+    # A compile failure must cost speed, not the run.
+    torch._dynamo.config.suppress_errors = True
+    # Two inductor notices that are expected here, not problems: TF32 stays off on purpose (the LoRA's fp32 maths
+    # would change), and a complex-number op (Qwen's RoPE) runs uncompiled inside the compiled block.
+    import warnings
+    warnings.filterwarnings("ignore", category=UserWarning,
+                            message=r"TensorFloat32 tensor cores for float32 matrix multiplication available")
+    warnings.filterwarnings("ignore", category=UserWarning,
+                            message=r"Torchinductor does not support code generation for complex operators")
+    return True
+
+
 def compile_blocks(dit, blocks, blocks_to_swap: int = 0, fp8_scaled: bool = False,
                    boundary: str = "inside", fullgraph: bool = True) -> None:
     """Compile each block of `blocks` (the driver's ModuleList, replaced in place). The DiT's forward must call a
@@ -124,67 +192,8 @@ def compile_blocks(dit, blocks, blocks_to_swap: int = 0, fp8_scaled: bool = Fals
     resulting ValueError escapes dynamo's suppress_errors and kills the run before step one
     (#97, RTX 3090).
     """
-    if blocks_to_swap > 0:
-        logger.warning("[compile] ignored — block swap moves weights between devices every step, "
-                       "which invalidates compiled graphs. Quantise instead of swapping if you "
-                       "want both.")
+    if not ready_to_compile(blocks_to_swap, fp8_scaled):
         return
-    if fp8_scaled:
-        _cc = None
-        try:
-            # `import torch as _torch`, NOT the bare name: the `import torch._dynamo`
-            # further down makes `torch` function-LOCAL, so referencing it here raises
-            # UnboundLocalError — which the except below would silently eat, and the
-            # guard would never fire (caught by the #97 regression test's tracer).
-            import torch as _torch
-            if _torch.cuda.is_available():
-                _cc = _torch.cuda.get_device_capability()
-        except Exception:
-            pass
-        if _cc is not None and _cc < (8, 9):
-            logger.warning("[compile] ignored — the fp8 base needs fp8 Triton kernels "
-                           "(fp8e4nv), which need SM 8.9+ (RTX 40-series or newer); this GPU "
-                           "is SM %d.%d. Pick INT8 or NF4 Base Precision to compile on this "
-                           "card. Training continues uncompiled.", _cc[0], _cc[1])
-            return
-    try:
-        import triton  # noqa: F401
-    except Exception:
-        logger.warning("[compile] ignored — triton is not installed (pip install triton-windows "
-                       "on Windows, triton on Linux)")
-        return
-    try:
-        from fizgig.utils.capabilities import triton_matches_torch
-        _ok, _why = triton_matches_torch()
-    except Exception:
-        _ok, _why = True, ""
-    if not _ok:
-        # A triton built for another torch imports fine and then fails or hangs INSIDE
-        # torch.compile (a preview that never comes back, no log) — say so and run eager.
-        logger.warning("[compile] ignored — %s. Training continues uncompiled.", _why)
-        return
-    if not find_host_compiler():
-        return
-    import torch._dynamo
-    # Raises the recompile ceiling (default 8, which a bucketed dataset exhausts immediately —
-    # after which dynamo silently runs eager) and works around a torch assertion that otherwise
-    # aborts inductor mid-run. See fizgig/modules/compile_util.py.
-    from fizgig.modules.compile_util import init_compile
-    init_compile()
-    # Settle the SDPA backend global BEFORE tracing: its lazy first-use probe (device alloc +
-    # global write + logging) inside a compiled block is exactly what fullgraph=True raises on.
-    from fizgig.modules import sdpa as _sdpa
-    _sdpa.prime()
-    # A compile failure must cost speed, not the run.
-    torch._dynamo.config.suppress_errors = True
-    # Two inductor notices that are expected here, not problems: TF32 stays off on purpose (the LoRA's fp32 maths
-    # would change), and a complex-number op (Qwen's RoPE) runs uncompiled inside the compiled block.
-    import warnings
-    warnings.filterwarnings("ignore", category=UserWarning,
-                            message=r"TensorFloat32 tensor cores for float32 matrix multiplication available")
-    warnings.filterwarnings("ignore", category=UserWarning,
-                            message=r"Torchinductor does not support code generation for complex operators")
-
     # fullgraph=True refuses to compile around a graph break instead of quietly degrading. The
     # known break (attn_params.seqlens[0].item(), a device sync in the trim check) was fixed
     # earlier, so this should now hold — and if it does not, it says so instead of hiding.

@@ -17,7 +17,7 @@ def _preset(rank, lr=1e-4, adaptive=None, epochs=20, mp="1.0"):
         "NETWORK_DIM": rank, "NETWORK_ALPHA": rank, "NETWORK_TYPE": "LoRA (standard)", "LEARNING_RATE": lr,
         "MAX_TRAIN_EPOCHS": epochs, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42,
         "ADAPTIVE_LR": adaptive is not None, "ADAPTIVE_LR_MIN": lo, "ADAPTIVE_LR_MAX": hi,
-        "OPTIMIZER_TYPE": "adamw8bit", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
+        "OPTIMIZER_TYPE": "adamw", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
         "DATASET_MEGAPIXELS": mp, "BLOCKS_SWAP": "Auto (detect from GPU)",
         "FAMILY_PRECISION": "Auto (fits your free VRAM)", "FAMILY_EMA": "Off",
         "KREA2_LOSS_WATCH": True, "KREA2_PER_IMAGE_LR": False, "KREA2_AUTO_RECAPTION": False,
@@ -96,9 +96,22 @@ SDXL = FamilyDescription(
     # Measured 5 Oct 2026 on a 5090 (Juggernaut v9, rank 16, adamw8bit, gradient checkpointing, 1024 previews), peak
     # GB including the preview, which sets it (training alone: bf16 6.0 / 6.5, INT8 4.0 / 4.4, NF4 3.2 / 3.6 at
     # 0.5 / 1 MP); s/step bf16 0.99 / 1.03, INT8 1.41 / 1.47, NF4 1.32 / 1.17. No block swap.
+    # Speed (measured 5 Oct 2026, 5090, 1 MP, rank 16, checkpointing on): the step is launch-bound, not compute-bound.
+    # 8-bit AdamW steps each of the LoRA's 1,444 tensors separately (~0.3 s/step): 1493 ms/step -> fused AdamW 1046
+    # -> fused AdamW + compiled blocks 629 (6.2 GB either way; isolated loop, synced). Through the GUI (real run, 40
+    # photos): 1.03 -> ~0.75 s/step from epoch 2, peak 6.6 GB unchanged. Compile warm-up ~25 s + a few s per new bucket.
+    compiles=True,
+    compile_boundary="outside",
+    compile_fullgraph=False,
+    compile_payback_steps={"bf16": 200},
+    compile_hint=("Auto (recommended) compiles SDXL's 70 transformer blocks when the run is long enough to repay the "
+                  "warm-up: measured about 1.4x faster on a 5090 (1.03 -> 0.75 s/step at 1 MP, with fused AdamW) and no extra memory. The "
+                  "first steps pause to compile (~25 s, then a few seconds for each new image shape). Auto waits for "
+                  "runs over about 200 steps; the INT8 and NF4 bases are not compiled by Auto (On still compiles). "
+                  "Requires Triton and, on Windows, a C++ compiler (VS Build Tools) - both located automatically."),
     train_memory={"bf16": (((0.5, 10.3), (1.0, 10.3)), 0.0), "int8": (((0.5, 8.2), (1.0, 8.2)), 0.0),
                   "nf4": (((0.5, 7.4), (1.0, 7.4)), 0.0)},
-    optimizers=("adamw8bit", "adamw"),
+    optimizers=("adamw", "adamw8bit"),
     network_types=("lora",),
     workbench_follows_samples=True,   # previews take the Samples tab's steps, CFG and negative
     helper_files=((_SDXL, ("model_index.json", "*/config.json", "tokenizer/*", "tokenizer_2/*", "scheduler/*")),),

@@ -16,7 +16,7 @@ def _preset(rank, lr, epochs=30, mp="1.0"):
     return {
         "NETWORK_DIM": rank, "NETWORK_ALPHA": rank, "NETWORK_TYPE": "LoRA (standard)", "LEARNING_RATE": lr,
         "MAX_TRAIN_EPOCHS": epochs, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42, "ADAPTIVE_LR": False,
-        "OPTIMIZER_TYPE": "adamw8bit", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
+        "OPTIMIZER_TYPE": "adamw", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
         "DATASET_MEGAPIXELS": mp, "BLOCKS_SWAP": "Auto (detect from GPU)",
         "FAMILY_PRECISION": "Auto (fits your free VRAM)", "FAMILY_EMA": "Off",
         "KREA2_LOSS_WATCH": True, "KREA2_PER_IMAGE_LR": False, "KREA2_AUTO_RECAPTION": False,
@@ -85,9 +85,21 @@ ANIMA = FamilyDescription(
     # Measured 5 Oct 2026 on a 5090 (rank 16, adamw8bit, gradient checkpointing, 1024 previews), peak GB including
     # the preview, which sets it (training alone: bf16 5.1 / 5.7, INT8 3.4 / 4.0, NF4 2.9 / 3.5 at 0.5 / 1 MP); s/step
     # bf16 0.53 / 0.71, INT8 0.74 / 0.81, NF4 0.69 / 0.60. No block swap.
+    # Speed (measured 5 Oct 2026, 5090, 1 MP, rank 16, checkpointing on): 8-bit AdamW 741 ms/step -> fused AdamW 619
+    # -> fused AdamW + compiled blocks 452 (isolated loop, synced). Through the GUI (real run, 40 photos): 0.71 -> 0.31
+    # s/step from epoch 2, peak 5.7 -> 6.1 GB. Compile warm-up ~40 s plus a few s per new shape.
+    compiles=True,
+    compile_boundary="inside",
+    compile_fullgraph=False,
+    compile_payback_steps={"bf16": 300},
+    compile_hint=("Auto (recommended) compiles Anima's 28 blocks when the run is long enough to repay the warm-up: "
+                  "measured about 2.3x faster on a 5090 (0.71 -> 0.31 s/step at 1 MP, with fused AdamW), about 0.4 GB more memory. The first "
+                  "steps pause to compile (~40 s, then a few seconds for each new image shape). Auto waits for runs "
+                  "over about 300 steps; the INT8 and NF4 bases are not compiled by Auto (On still compiles). "
+                  "Requires Triton and, on Windows, a C++ compiler (VS Build Tools) - both located automatically."),
     train_memory={"bf16": (((0.5, 8.9), (1.0, 8.9)), 0.0), "int8": (((0.5, 7.3), (1.0, 7.3)), 0.0),
                   "nf4": (((0.5, 6.6), (1.0, 6.6)), 0.0)},
-    optimizers=("adamw8bit", "adamw"),
+    optimizers=("adamw", "adamw8bit"),
     network_types=("lora",),
     helper_files=(("circlestone-labs/Anima-Base-v1.0-Diffusers",
                    ("tokenizer/*", "t5_tokenizer/*")),),
