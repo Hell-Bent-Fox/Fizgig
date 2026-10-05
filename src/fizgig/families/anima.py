@@ -18,7 +18,7 @@ def _preset(rank, lr, epochs=30, mp="1.0"):
         "MAX_TRAIN_EPOCHS": epochs, "SAVE_EVERY_N_EPOCHS": 1, "SEED": 42, "ADAPTIVE_LR": False,
         "OPTIMIZER_TYPE": "adamw", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
         "DATASET_MEGAPIXELS": mp, "BLOCKS_SWAP": "Auto (detect from GPU)",
-        "FAMILY_PRECISION": "Auto (fits your free VRAM)", "FAMILY_EMA": "Off",
+        "FAMILY_PRECISION": "Auto (fits your free VRAM)", "FAMILY_EMA": "0.98 (recommended)",
         "KREA2_LOSS_WATCH": True, "KREA2_PER_IMAGE_LR": False, "KREA2_AUTO_RECAPTION": False,
         "KREA2_WARMUP_LOOK": False,
     }
@@ -80,7 +80,7 @@ ANIMA = FamilyDescription(
     driver="fizgig.anima.driver:AnimaDriver",
     modelspec_arch="anima",
     implementation=_CARD,
-    ema_default="Off",
+    ema_default="0.98",               # as Krea 2, MiniMax H3 and Qwen 2.1 (Peter, 5 Oct 2026)
     precisions=("bf16", "int8", "nf4"),   # 2.1B DiT, 4.2 GB in bf16; the community reports fp8 bases train badly
     # Measured 5 Oct 2026 on a 5090 (rank 16, adamw8bit, gradient checkpointing, 1024 previews), peak GB including
     # the preview, which sets it (training alone: bf16 5.1 / 5.7, INT8 3.4 / 4.0, NF4 2.9 / 3.5 at 0.5 / 1 MP); s/step

@@ -19,7 +19,7 @@ def _preset(rank, lr=1e-4, adaptive=None, epochs=20, mp="1.0"):
         "ADAPTIVE_LR": adaptive is not None, "ADAPTIVE_LR_MIN": lo, "ADAPTIVE_LR_MAX": hi,
         "OPTIMIZER_TYPE": "adamw", "GRADIENT_ACCUMULATION": 1, "MAX_GRAD_NORM": 1.0,
         "DATASET_MEGAPIXELS": mp, "BLOCKS_SWAP": "Auto (detect from GPU)",
-        "FAMILY_PRECISION": "Auto (fits your free VRAM)", "FAMILY_EMA": "Off",
+        "FAMILY_PRECISION": "Auto (fits your free VRAM)", "FAMILY_EMA": "0.98 (recommended)",
         "KREA2_LOSS_WATCH": True, "KREA2_PER_IMAGE_LR": False, "KREA2_AUTO_RECAPTION": False,
         "KREA2_WARMUP_LOOK": False,
     }
@@ -91,7 +91,7 @@ SDXL = FamilyDescription(
     driver="fizgig.sdxl.driver:SDXLDriver",
     modelspec_arch="stable-diffusion-xl-v1-base/lora",
     implementation="https://github.com/Stability-AI/generative-models",
-    ema_default="Off",
+    ema_default="0.98",               # as Krea 2, MiniMax H3 and Qwen 2.1 (Peter, 5 Oct 2026)
     precisions=("bf16", "int8", "nf4"),   # 2.6B UNet: 5.1 GB in bf16
     # Measured 5 Oct 2026 on a 5090 (Juggernaut v9, rank 16, adamw8bit, gradient checkpointing, 1024 previews), peak
     # GB including the preview, which sets it (training alone: bf16 6.0 / 6.5, INT8 4.0 / 4.4, NF4 3.2 / 3.6 at
