@@ -2,7 +2,7 @@
 Pony, RealVis and the rest load the same way). The checkpoint carries the UNet, VAE and both CLIP text encoders, so
 the VAE and text-encoder rows are optional overrides (ModelFile.inside). Driver: sdxl/driver.py.
 """
-from fizgig.families.description import FamilyDescription, LoRAFormat, ModelFile, SamplingSettings
+from fizgig.families.description import FamilyDescription, FamilyOption, LoRAFormat, ModelFile, SamplingSettings
 
 _JUGG = "RunDiffusion/Juggernaut-XL-v9"
 _SDXL = "stabilityai/stable-diffusion-xl-base-1.0"
@@ -120,11 +120,21 @@ SDXL = FamilyDescription(
     preview_height=1024,
 
     presets=(
+        # measured 5 Oct 2026 (Juggernaut v9, 115 photos, 1 MP, 5090): the subject by epoch 2-3, steady from 3 on
         ("✨ SDXL Standard (rank 16, adaptive LR)", _preset(16, adaptive=("1e-4", "4e-4"))),
-        ("✨ SDXL Strong (rank 32, adaptive LR)", _preset(32, adaptive=("5e-5", "2e-4"))),
+        # the community default (Civitai's trainer, Kohya's docs, r/StableDiffusion): rank = alpha = 32, flat 1e-4
+        ("✨ SDXL Strong (rank 32, 1e-4)", _preset(32, lr=1e-4)),
         ("✨ SDXL Style (rank 16, 1e-4)", _preset(16, lr=1e-4)),
     ),
 
+    options=(
+        FamilyOption("SDXL_MIN_SNR", "Min-SNR weighting", choices=(("γ 5 (recommended)", "min_snr=5"),
+                                                                 ("off", "min_snr=0")),
+                     hint="Evens out how much the noisiest and cleanest steps count; gamma 5 is the SDXL trainers' "
+                          "default (Kohya, the Hugging Face guide, Civitai).", section="other"),
+        FamilyOption("SDXL_NOISE_OFFSET", "Noise offset", kind="entry", tokens="noise_offset={}", default="0.0357",
+                     width=8, hint="0.0357 is what SDXL base was trained with; 0 turns it off.", section="other"),
+    ),
     notes=(
         ("Captions: each CLIP reads 77 tokens (about 60 words); anything longer is cut off.",
          "tokenizer max_length 77"),

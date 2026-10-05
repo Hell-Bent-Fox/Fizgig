@@ -175,12 +175,23 @@ class SDXLDriver(FamilyDriver):
         h, w = x0.shape[-2] * 8, x0.shape[-1] * 8
         lo, hi = int(round(min_t * 999)), max(int(round(min_t * 999)) + 1, int(round(max_t * 999)) + 1)
         t = int(torch.randint(lo, min(hi, 1000), (1,), generator=generator).item())
-        noise = torch.randn(x0.shape, generator=generator).to(device)
+        noise = torch.randn(x0.shape, generator=generator)
+        off = float(self.options.get("noise_offset") or 0.0)
+        if off:
+            # SDXL base was trained with a 0.0357 offset (sd-scripts docs/train_network_advanced.md)
+            noise = noise + off * torch.randn((x0.shape[0], x0.shape[1], 1, 1), generator=generator)
+        noise = noise.to(device)
         a = self._alphas(device)[t]
         xt = a.sqrt() * x0 + (1 - a).sqrt() * noise
         pred = self._unet(dit, xt, torch.tensor([t], device=device), cond, h, w).float()
         target = (a.sqrt() * noise - (1 - a).sqrt() * x0) if self._v_pred() else noise
-        return F.mse_loss(pred, target), {"t": t / 999.0}
+        loss = F.mse_loss(pred, target)
+        gamma = float(self.options.get("min_snr") or 0.0)
+        if gamma:
+            # Min-SNR weighting (Hang et al. 2023), the SDXL trainers' default gamma 5
+            snr = float(a / (1 - a))
+            loss = loss * (min(snr, gamma) / ((snr + 1) if self._v_pred() else snr))
+        return loss, {"t": t / 999.0}
 
     # ---- sampling -------------------------------------------------------------------------------
     @torch.no_grad()
