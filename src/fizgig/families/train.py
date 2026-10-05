@@ -891,11 +891,15 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
 
     # ---- previews: encode prompts once, keep the VAE ---------------------------------------------
     encoded = neg = vae = ref_imgs = ref_latents = None
-    slider_enc = None
+    slider_enc = slider_neg = None
     if slider_prompts:
         te = driver.load_text_encoder(te_path, device)
         slider_enc = [{k: v[None] for k, v in c.items()}
                       for c in driver.encode_text(te, [str(x) for x in slider_prompts])]
+        if sample_cfg_scale > 1.0 and desc.preview_negative is not None:
+            # the practice pictures render as previews do: the Samples tab's negative (else the family's default)
+            text = sample_negative if sample_negative is not None else desc.preview_negative
+            slider_neg = {k: v[None] for k, v in driver.encode_text(te, [text])[0].items()}
         driver.unload_text_encoder(te)
         del te
         torch.cuda.empty_cache()
@@ -1016,7 +1020,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                                           sigmas=speed_desc.settings.sigmas, options=speed_desc.settings.options)
                 else:
                     lat = driver.generate(dit, n_c, slider_bank_res, slider_bank_res, steps=desc.preview_steps,
-                                          seed=seed + 1000 + i, cfg=desc.preview_cfg)
+                                          seed=seed + 1000 + i, cfg=sample_cfg_scale,
+                                          **({"neg_cond": slider_neg} if slider_neg is not None else {}))
                 img = driver.decode(vae, lat, slider_bank_res, slider_bank_res)
                 bank.append(driver.encode_images(vae, [np.array(img)])[0][None].cpu())
         if use_speed:
