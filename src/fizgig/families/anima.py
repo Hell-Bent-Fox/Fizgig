@@ -156,7 +156,9 @@ ANIMA = FamilyDescription(
         ("✨ Anima Character (rank 16, 1e-4)", _preset(16, 1e-4, epochs=50)),
         ("✨ Anima Style (rank 16, 5e-5)", _preset(16, 5e-5)),
         ("✨ Anima Official (rank 32, 2e-5)", _preset(32, 2e-5)),
-        # full fine-tune at OneTrainer's Anima fine-tune rate ("#anima Finetune.json": 1e-6, Adafactor, the
+        # full fine-tune at the shared fine-tune rate (Peter), and at OneTrainer's
+        ("✨ Anima Fine-tune (1e-5)", {**_preset(16, 1e-5), "FAMILY_FT": True, "FAMILY_FT_ROTATIONS": "10"}),
+        # OneTrainer's Anima fine-tune rate ("#anima Finetune.json": 1e-6, Adafactor, the
         # transformer blocks, text encoder frozen - the same scope as here)
         ("✨ Anima Fine-tune (recommended 1e-6)", {**_preset(16, 1e-6), "FAMILY_FT": True,
                                                    "FAMILY_FT_ROTATIONS": "10"}),

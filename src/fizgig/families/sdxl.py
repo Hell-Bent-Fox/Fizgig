@@ -170,7 +170,10 @@ SDXL = FamilyDescription(
         ("✨ SDXL Standard (rank 16, alpha 8, 5e-5)", _preset(16, lr=5e-5, alpha=8)),
         # Slider: the default's rank 32 / alpha 16 at 5e-5 (Peter, 5 Oct 2026). Not yet measured on SDXL.
         ("✨ SDXL Slider (rank 32, alpha 16, 5e-5)", _preset(32, lr=5e-5, alpha=16, epochs=30, slider=True)),
-        # full fine-tune at OneTrainer's SDXL fine-tune rate: its "#sdxl 1.0" preset takes the TrainConfig default
+        # full fine-tune at the shared fine-tune rate (Peter), and at OneTrainer's
+        ("✨ SDXL Fine-tune (1e-5)", {**_preset(32, lr=1e-5, alpha=16), "FAMILY_FT": True, "FAMILY_FT_ROTATIONS": "10",
+                                      "KREA2_PER_IMAGE_LR": False, "KREA2_AUTO_RECAPTION": False}),
+        # OneTrainer's SDXL fine-tune rate: its "#sdxl 1.0" preset takes the TrainConfig default
         # 3e-6 (modules/util/config/TrainConfig.py), text encoders frozen as here
         ("✨ SDXL Fine-tune (recommended 3e-6)", {**_preset(32, lr=3e-6, alpha=16), "FAMILY_FT": True,
                                                   "FAMILY_FT_ROTATIONS": "10", "KREA2_PER_IMAGE_LR": False,
