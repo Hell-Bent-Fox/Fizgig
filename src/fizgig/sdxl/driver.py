@@ -76,6 +76,14 @@ class _TextEncoders:
         self.device = device
         del pipe
 
+    def _chunks(self, tok, cap):
+        """The caption's token ids in 75-token chunks, each as BOS + chunk + EOS padded to 77 - ComfyUI's way past
+        CLIP's 77-token limit (a longer prompt is several chunks side by side, nothing cut off)."""
+        ids = tok(cap, add_special_tokens=False, truncation=False).input_ids
+        bos, eos, pad = tok.bos_token_id, tok.eos_token_id, tok.pad_token_id
+        parts = [ids[i:i + 75] for i in range(0, len(ids), 75)] or [[]]
+        return [[bos] + c + [eos] + [pad] * (75 - len(c)) for c in parts]
+
     @torch.no_grad()
     def encode(self, captions):
         out = []
@@ -85,14 +93,18 @@ class _TextEncoders:
                 out.append({"hidden_states": torch.zeros(77, 2048, dtype=DTYPE),
                             "pooled": torch.zeros(1280, dtype=DTYPE)})
                 continue
-            ids1 = self.tok1([cap], padding="max_length", max_length=77, truncation=True,
-                             return_tensors="pt").input_ids.to(self.device)
-            ids2 = self.tok2([cap], padding="max_length", max_length=77, truncation=True,
-                             return_tensors="pt").input_ids.to(self.device)
-            o1 = self.te1(ids1, output_hidden_states=True)
-            o2 = self.te2(ids2, output_hidden_states=True)
-            h = torch.cat([o1.hidden_states[-2], o2.hidden_states[-2]], dim=-1)[0]       # (77, 2048)
-            out.append({"hidden_states": h.to(DTYPE).cpu(), "pooled": o2.text_embeds[0].to(DTYPE).cpu()})
+            c1, c2 = self._chunks(self.tok1, cap), self._chunks(self.tok2, cap)
+            n = max(len(c1), len(c2))
+            c1 += [self._chunks(self.tok1, "")[0]] * (n - len(c1))
+            c2 += [self._chunks(self.tok2, "")[0]] * (n - len(c2))
+            hs, pooled = [], None
+            for a, b in zip(c1, c2):
+                o1 = self.te1(torch.tensor([a], device=self.device), output_hidden_states=True)
+                o2 = self.te2(torch.tensor([b], device=self.device), output_hidden_states=True)
+                hs.append(torch.cat([o1.hidden_states[-2], o2.hidden_states[-2]], dim=-1)[0])   # (77, 2048)
+                if pooled is None:
+                    pooled = o2.text_embeds[0]                     # the first chunk's, as ComfyUI
+            out.append({"hidden_states": torch.cat(hs).to(DTYPE).cpu(), "pooled": pooled.to(DTYPE).cpu()})
         return out
 
     def unload(self):
@@ -220,8 +232,9 @@ class SDXLDriver(FamilyDriver):
         if use_cfg:
             # SDXL's empty-prompt negative is zeros (the base pipeline's force_zeros_for_empty_prompt)
             neg = neg_cond if neg_cond is not None else {k: torch.zeros_like(v) for k, v in cond.items()}
-            both = {k: torch.cat([_batched(k, neg[k]), _batched(k, cond[k])]).to(device)
-                    for k in ("hidden_states", "pooled")}
+            n_c, c_c = self.pad_conditioning([{k: _batched(k, v) for k, v in neg.items()},
+                                              {k: _batched(k, v) for k, v in cond.items()}])
+            both = {k: torch.cat([n_c[k], c_c[k]]).to(device) for k in ("hidden_states", "pooled")}
         for i, t in enumerate(sch.timesteps):
             if on_step is not None:
                 on_step(i, len(sch.timesteps))
@@ -240,8 +253,22 @@ class SDXLDriver(FamilyDriver):
         return inspect.signature(sch.step).parameters
 
     def pad_conditioning(self, conds):
-        """Both CLIPs always give 77 tokens, so prompts blend as they are (prompt travel)."""
-        return list(conds)
+        """Prompts of different lengths (77 tokens per chunk) brought to one: each repeated to the least common
+        multiple of the lengths. Repeating every key and value of cross-attention the same number of times leaves its
+        output unchanged, so this is exact - and lets CFG and prompt travel stack them."""
+        import math
+        lens = [_batched("hidden_states", c["hidden_states"]).shape[-2] for c in conds]
+        L = lens[0]
+        for n in lens[1:]:
+            L = L * n // math.gcd(L, n)
+        out = []
+        for c, n in zip(conds, lens):
+            c = dict(c)
+            if n != L:
+                h = c["hidden_states"]                                 # (..., n, 2048) -> (..., L, 2048)
+                c["hidden_states"] = torch.cat([h] * (L // n), dim=-2)
+            out.append(c)
+        return out
 
     @torch.no_grad()
     def decode(self, vae, latents, width, height):

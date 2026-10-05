@@ -133,7 +133,13 @@ SDXL = FamilyDescription(
     ),
     preview_steps=30,
     preview_cfg=4.5,
-    preview_negative="",               # Juggernaut's card and Fooocus: start with no negative
+    # Peter's SDXL negative (5 Oct 2026); about 130 tokens, encoded in 77-token chunks as ComfyUI does
+    preview_negative=("deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime, "
+                      "text, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, "
+                      "morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, "
+                      "mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned "
+                      "face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, "
+                      "extra legs, fused fingers, too many fingers, long neck,mask"),
     preview_cfg_note="SDXL needs CFG: about 4 to 5 (Juggernaut's skin turns waxy above 6-7). Above 1 the negative "
                      "prompt applies.",
     preview_width=1024,
@@ -159,8 +165,8 @@ SDXL = FamilyDescription(
                                    "Fizgig's A/B.", section="other"),
     ),
     notes=(
-        ("Captions: each CLIP reads 77 tokens (about 60 words); anything longer is cut off.",
-         "tokenizer max_length 77"),
+        ("Captions and prompts longer than CLIP's 77 tokens are encoded in 77-token chunks side by side, as ComfyUI "
+         "does, so nothing is cut off.", "ComfyUI sd1_clip.SDTokenizer chunking"),
         ("Training: DDPM epsilon prediction on SDXL's scaled-linear schedule (betas 0.00085-0.012, 1000 steps), "
          "uniform timesteps, unweighted MSE; size conditioning (time_ids) from the bucket size with no crop.",
          f"{_SDXL} scheduler/scheduler_config.json"),

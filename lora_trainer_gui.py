@@ -177,6 +177,60 @@ class ToolTip:
             self.tooltip_window = None
 
 
+class TextEntry(tk.Text):
+    """A wrapping multi-line box that the code around it can treat as a ttk.Entry with a textvariable: get() with no
+    index returns the text, delete(0, END) / insert(0, s) work, and the StringVar stays in step both ways. One logical
+    line: Enter is ignored and pasted line breaks become spaces (the text goes into one-line prompt files)."""
+
+    def __init__(self, parent, textvariable, **kw):
+        super().__init__(parent, **kw)
+        self._var = textvariable
+        self._syncing = False
+        super().insert("1.0", textvariable.get())
+        self.edit_modified(False)
+        self.bind("<<Modified>>", self._to_var)
+        self.bind("<Return>", lambda e: "break")
+        textvariable.trace_add("write", self._from_var)
+
+    def _to_var(self, *_):
+        if not self.edit_modified():
+            return
+        if not self._syncing:
+            self._syncing = True
+            try:
+                self._var.set(" ".join(super().get("1.0", "end-1c").splitlines()))
+            finally:
+                self._syncing = False
+        self.edit_modified(False)
+
+    def _from_var(self, *_):
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            disabled = str(self.cget("state")) == "disabled"
+            if disabled:
+                super().configure(state="normal")
+            super().delete("1.0", "end")
+            super().insert("1.0", self._var.get())
+            if disabled:
+                super().configure(state="disabled")
+            self.edit_modified(False)
+        finally:
+            self._syncing = False
+
+    def get(self, index1=None, index2=None):
+        if index1 is None:
+            return " ".join(super().get("1.0", "end-1c").splitlines())
+        return super().get(index1, index2)
+
+    def delete(self, index1, index2=None):
+        return super().delete("1.0" if index1 in (0, "0") else index1, index2)
+
+    def insert(self, index, chars, *args):
+        return super().insert("1.0" if index in (0, "0") else index, chars, *args)
+
+
 class CollapsibleFrame(tk.Frame):
     """
     A frame that can be collapsed/expanded with a header.
@@ -10637,7 +10691,11 @@ class LoRATrainerGUI:
         self.sample_negative_var = tk.StringVar(value=self.settings["SAMPLE_NEGATIVE"])
         _neg_frame = tk.Frame(arch_card, bg=COLORS["bg_surface"])
         _neg_frame.grid(row=1, column=1, columnspan=2, sticky=tk.W, pady=4)
-        self.sample_negative_entry = ttk.Entry(_neg_frame, textvariable=self.sample_negative_var, width=50)
+        self.sample_negative_entry = TextEntry(
+            _neg_frame, self.sample_negative_var, height=4, width=60, bg=COLORS["bg_surface"],
+            fg=COLORS["text_primary"], insertbackground=COLORS["text_primary"], font=(FONT_FAMILY, 10), wrap="word",
+            relief="flat", highlightthickness=1, highlightbackground=COLORS["border"],
+            highlightcolor=COLORS["border_focus"])
         self.sample_negative_entry.pack(side=tk.LEFT)
         self._sample_neg_note = _arch_note(_neg_frame, "Base samples only — Distilled ignores it")
         self._sample_neg_note.pack(side=tk.LEFT, padx=(10, 0))
