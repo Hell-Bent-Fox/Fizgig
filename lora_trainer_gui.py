@@ -18178,12 +18178,41 @@ class LoRATrainerGUI:
         # Sync DiT-radio labels + Master Controls visibility for the restored family.
         self._apply_repair_family_ui()
 
+    def _repair_cfg_for(self, desc):
+        """The CFG Repair Studio renders this family at: the Samples tab's for a family whose workbench follows it,
+        else its default sampling's."""
+        if desc.workbench_follows_samples:
+            try:
+                return float(self._samples_settings_for(desc).get("cfg") or 1.0)
+            except (TypeError, ValueError):
+                return 1.0
+        return float(desc.default_sampling().cfg)
+
+    def _refresh_repair_negative_row(self):
+        """Show Repair Studio's negative box when the family takes a negative (preview_negative) and renders above CFG 1;
+        on a family switch, fill it with that family's own remembered text or its default."""
+        if not hasattr(self, "_repair_neg_text"):
+            return
+        desc = self._repair_desc()
+        if desc is not None and desc.key != self._repair_neg_family:
+            self._repair_neg_loading = True
+            try:
+                self.repair_negative_var.set(self.last_used.get("repair_negatives", {}).get(
+                    desc.key, desc.preview_negative or ""))
+            finally:
+                self._repair_neg_loading = False
+            self._repair_neg_family = desc.key
+        show = desc is not None and desc.preview_negative is not None and self._repair_cfg_for(desc) > 1.0
+        for w in (self._repair_neg_label, self._repair_neg_text):
+            (w.grid if show else w.grid_remove)()
+
     def _apply_repair_family_ui(self):
         """Relabel the DiT radios per family and hide Master Controls for the no-block-map
         families (MiniMax H3 and the described families — the per-block sliders stay as the discovery
         instrument). `krea2` below means "any no-map family" (historical naming)."""
         fam = self.repair_family_var.get()
         desc = self._repair_desc(fam)
+        self._refresh_repair_negative_row()
         video = self._wb_video(fam)
         krea2 = desc is not None and not desc.category_masters
         if desc is not None and not video:
@@ -18831,6 +18860,31 @@ class LoRATrainerGUI:
                                      variable=self.repair_turbo_var,
                                      command=self._on_turbo_toggled)
         self._repair_turbo_chk.pack(side=tk.RIGHT)
+        r += 1
+
+        # Negative prompt row: shown for a family whose Repair Studio renders use CFG above 1 and that takes a negative
+        # (description preview_negative; _refresh_repair_negative_row). Starts from the family's default like the
+        # Samples tab's, but is kept separately per family (last_used["repair_negatives"]).
+        self._repair_neg_label = ttk.Label(parent, text="Negative:")
+        self._repair_neg_label.grid(row=r, column=0, sticky=tk.NW, padx=4, pady=2)
+        self.repair_negative_var = tk.StringVar(value="")
+        self._repair_neg_text = TextEntry(
+            parent, self.repair_negative_var, height=3, wrap="word", bg=COLORS["bg_surface"],
+            fg=COLORS["text_primary"], insertbackground=COLORS["text_primary"], font=(FONT_FAMILY, 10),
+            relief="flat", highlightthickness=1, highlightbackground=COLORS["border"],
+            highlightcolor=COLORS["border_focus"])
+        self._repair_neg_text.grid(row=r, column=1, sticky=tk.EW, padx=4, pady=2)
+        self._repair_neg_loading = False
+        self._repair_neg_family = None
+
+        def _neg_written(*_):
+            fam = self._repair_neg_family
+            if fam and not self._repair_neg_loading:
+                self.last_used.setdefault("repair_negatives", {})[fam] = self.repair_negative_var.get()
+                self._push_samples_to_workbench()
+                self._repair_mark_update_needed()
+        self.repair_negative_var.trace_add("write", _neg_written)
+        self._repair_neg_text.bind("<FocusOut>", lambda e: self._save_last_used_paths())
         r += 1
 
         # MiniMax H3 clip row (hidden for Klein / Krea 2 — see _apply_repair_family_ui). H3
@@ -19831,7 +19885,7 @@ class LoRATrainerGUI:
         sp = desc.preview_speed()
         steps = ck.steps if ck else (sp.settings.steps if speed_path else desc.default_sampling().steps)
         if follow:
-            self.repair_engine.preview_settings = self._samples_settings_for(desc)
+            self.repair_engine.preview_settings = self._repair_preview_settings(desc)
             steps = self.repair_engine.preview_settings["steps"]
         self.repair_status_var.set(f"Loading {desc.display_name} "
                                    f"({ck.name + ', ' if ck else ''}{steps}-step previews)…")
@@ -19867,7 +19921,17 @@ class LoRATrainerGUI:
         for eng in (getattr(self, "repair_engine", None), getattr(self, "_explorer_engine", None),
                     getattr(self, "royale_engine", None)):
             if getattr(eng, "desc", None) is not None and eng.desc.workbench_follows_samples:
-                eng.preview_settings = self._samples_settings_for(eng.desc)
+                eng.preview_settings = (self._repair_preview_settings(eng.desc)
+                                        if eng is getattr(self, "repair_engine", None)
+                                        else self._samples_settings_for(eng.desc))
+        self._refresh_repair_negative_row()       # the Samples tab's CFG decides whether the negative box shows
+
+    def _repair_preview_settings(self, desc):
+        """The Samples tab's settings with Repair Studio's own negative prompt in place of the Samples tab's."""
+        ps = dict(self._samples_settings_for(desc))
+        if getattr(self, "repair_negative_var", None) is not None and self._repair_neg_family == desc.key:
+            ps["negative"] = self.repair_negative_var.get().strip()
+        return ps
 
     def _show_samples_note(self, label, desc):
         if label is None:
