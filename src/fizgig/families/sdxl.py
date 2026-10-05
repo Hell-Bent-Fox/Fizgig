@@ -116,6 +116,9 @@ SDXL = FamilyDescription(
                   "nf4": (((0.5, 7.4), (1.0, 7.4)), 0.0)},
     optimizers=("adamw", "adamw8bit"),
     network_types=("lora",),
+    # SDXL's per-epoch loss swings with its uniform timesteps, so Adaptive LR's plateau detector reacts to noise:
+    # hidden and never sent (Peter, 5 Oct 2026)
+    adaptive_lr=False,
     workbench_follows_samples=True,   # previews take the Samples tab's steps, CFG and negative
     helper_files=((_SDXL, ("model_index.json", "*/config.json", "tokenizer/*", "tokenizer_2/*", "scheduler/*")),),
 
