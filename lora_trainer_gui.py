@@ -18819,7 +18819,7 @@ class LoRATrainerGUI:
         self._repair_res_label.pack(side=tk.LEFT, padx=(0, 4))
         self.repair_res_var = tk.StringVar(value="512")
         res_combo = ttk.Combobox(params_frame, textvariable=self.repair_res_var,
-                                 values=["256", "384", "512", "768"], state="readonly", width=6)
+                                 values=["256", "384", "512", "768", "1024"], state="readonly", width=6)
         res_combo.pack(side=tk.LEFT)
         res_combo.bind("<<ComboboxSelected>>", lambda e: self._on_preview_param_changed())
         self._repair_res_combo = res_combo
