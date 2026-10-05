@@ -7634,6 +7634,9 @@ class LoRATrainerGUI:
                 else:
                     _txt = f"  ✓ caption re-encoded @ epoch {_ep}"
                 ui["badge"].config(text=_txt, fg="#2ECC71")
+            elif s.get("earlier_exclusion"):
+                ui["badge"].config(text="  \u27f2 excluded by an earlier run \u2014 training normally; stuck again = "
+                                        "excluded", fg=COLORS["text_muted"])
             else:
                 ui["badge"].config(text="")
             # Trend shows the DECISION metric (the half-window drop test the verdicts actually

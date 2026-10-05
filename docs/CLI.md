@@ -215,7 +215,7 @@ Captioning rules that come from real runs:
 Two JSON files can live alongside the images and travel with the dataset:
 
 - `fizgig_look_scores.json` — written by the GUI's Look Consistency Filter scan (ArcFace similarity of every image to 3 baseline picks). `--warmup_look_outliers` reads it to give real-but-unusual images a gentle LR ramp. Keys are image basenames, so the file survives the folder being moved or copied. There's no headless generator for it yet — run the Look Filter once in the GUI, or skip the flag.
-- `fizgig_excluded.json` — the per-image watch's persistent exclusion list, written during training. It follows the images across runs; editing an excluded image's caption auto-pardons it. Delete the file to give everything a clean slate.
+- `fizgig_excluded.json` — the per-image watch's record of images it excluded, per model family. A later run of the same family still trains them from the start (they teach the run until they get stuck), but their two AI recaptions are spent, so if one is confirmed stuck again it is excluded at once. Editing an image's caption clears its record. Delete the file to give everything a clean slate.
 
 ---
 
@@ -346,7 +346,7 @@ The non-obvious flags (`--help` lists them all):
 - `--auto_recaption` — between epochs, confirmed-stuck images get their captions rewritten by Qwen3-VL from what's actually visible, the text cache is re-encoded, and the image gets a fresh start. Two failed attempts and a still-stuck image is excluded from the run entirely. Requires `--text_encoder`. Pass `--trigger_word` so rewritten captions keep your trigger (appended as `, <trigger>`).
 - `--warmup_look_outliers` — curriculum entry (×0.4 LR ramping to ×1.0) for real-but-unusual images. Reads `<dataset>/fizgig_look_scores.json`, which is produced by the GUI's Look Consistency Filter scan — **GUI-only prerequisite**; without the file this flag logs a warning and disables itself.
 
-Persistent artifacts: exclusions are stored in `<image_directory>/fizgig_excluded.json` so they travel with the dataset across runs; editing an excluded image's caption auto-pardons it. Fresh runs rotate the old JSONL to `.bak`; `--resume` replays the log to restore full watch history.
+Persistent artifacts: exclusions are recorded per model family in `<image_directory>/fizgig_excluded.json`; a later run of that family trains the image normally and excludes it at once if it gets stuck again (no new recaptions). Editing an excluded image's caption clears the record. Fresh runs rotate the old JSONL to `.bak`; `--resume` replays the log to restore full watch history.
 
 **LR schedule and batching**
 
