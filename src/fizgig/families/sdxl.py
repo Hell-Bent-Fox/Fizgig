@@ -46,10 +46,10 @@ SDXL = FamilyDescription(
                   alt_repo="OnomaAIResearch/Illustrious-xl-early-release-v0", alt_path="Illustrious-XL-v0.1.safetensors",
                   alt_label="Download Illustrious XL v0.1", alt_note="~6.9 GB - anime / illustration base"),
         ModelFile("sdxl_vae", "VAE (optional)", False, "stabilityai/sdxl-vae", "sdxl_vae.safetensors", 0.33,
-                  role="vae", inside="sdxl_checkpoint", fetch_optional=False,
+                  role="vae", inside="sdxl_checkpoint", fetch_optional=True,
                   hint="Leave empty to use the checkpoint's own VAE. Set it only to swap in a separate SDXL VAE."),
         ModelFile("sdxl_text_encoder", "Text encoders (optional)", False, role="text_encoder", inside="sdxl_checkpoint",
-                  fetch_optional=False,
+                  fetch_optional=True,
                   hint="Leave empty: both CLIP text encoders are read from the checkpoint. Set it to another SDXL "
                        "checkpoint to take its text encoders instead."),
     ),
