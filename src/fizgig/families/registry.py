@@ -61,13 +61,13 @@ def family_of_lora(path: str) -> Optional[FamilyDescription]:
     except Exception:
         return None
     for d in training_families():
-        from fizgig.families.lorafile import lokr_modules, lora_pairs
+        from fizgig.families.lorafile import loha_modules, lokr_modules, lora_pairs
         try:
             # every naming the readers accept (own keys, kohya-flattened, another trainer's via alias_flat)
             mods = [m for m, *_ in lora_pairs(d, keys) if m is not None]
         except ValueError:
             continue
-        mods += [m for m, _ in lokr_modules(d, keys) if m is not None]
+        mods += [m for m, _ in lokr_modules(d, keys) + loha_modules(d, keys) if m is not None]
         if not mods:
             continue
         drv = d.load_driver()

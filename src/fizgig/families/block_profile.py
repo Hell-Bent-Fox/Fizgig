@@ -43,7 +43,7 @@ def weight_stats(desc, lora_path):
     """-> {"blocks": {block: {"norm", "retained": {k: share}}}, "retained": {k: share}, "max_rank", "modules",
     "rank_for": {0.9/0.95/0.99: k}}. Block ids follow the family's block map; modules outside it are OUTSIDE."""
     from safetensors import safe_open
-    from fizgig.families.lorafile import block_of, lokr_factors, lokr_modules, lora_pairs
+    from fizgig.families.lorafile import block_of, loha_delta, loha_modules, lokr_factors, lokr_modules, lora_pairs
     blocks = block_of(desc)
     mods = []                                    # (block, singular values, rank)
     with safe_open(lora_path, "pt") as f:
@@ -58,6 +58,9 @@ def weight_stats(desc, lora_path):
             w1, w2, scale = lokr_factors(f, stem)
             s = torch.outer(torch.linalg.svdvals(w1.double()), torch.linalg.svdvals(w2.double())).flatten()
             s = torch.sort(s, descending=True).values * scale
+            mods.append((blocks.get(mod, OUTSIDE), s, int((s > s[0] * 1e-6).sum()) if len(s) else 0))
+        for mod, stem in loha_modules(desc, f.keys()):
+            s = torch.linalg.svdvals(loha_delta(f, stem).double())
             mods.append((blocks.get(mod, OUTSIDE), s, int((s > s[0] * 1e-6).sum()) if len(s) else 0))
     if not mods:
         raise RuntimeError(f"No LoRA modules found — is this a {desc.display_name} LoRA?")

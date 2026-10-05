@@ -31,7 +31,7 @@ def extract_weight_only(desc, source, output, rank, dtype=torch.bfloat16, progre
     (outside `blocks`), mean kept energy, seconds, params)."""
     from safetensors import safe_open
     from safetensors.torch import save_file
-    from fizgig.families.lorafile import family_keys, lokr_factors, lokr_modules, lora_pairs
+    from fizgig.families.lorafile import family_keys, loha_delta, loha_modules, lokr_factors, lokr_modules, lora_pairs
     t0 = time.time()
     sd, energies, skipped, params, dropped = {}, [], 0, 0, 0
     block_of = desc.load_driver().block_of if blocks else None
@@ -63,11 +63,13 @@ def extract_weight_only(desc, source, output, rank, dtype=torch.bfloat16, progre
             sd[ka] = torch.tensor(float(down.shape[0]))
             energies.append(e)
             params += down.numel() + up.numel()
-        lokrs = lokr_modules(desc, f.keys())
         dev = "cuda" if torch.cuda.is_available() else "cpu"
-        for i, (mod, stem) in enumerate(lokrs):      # LoKR: the Kronecker delta is full rank - SVD it densely
+        # LoKR and LoHa: the delta is full rank - build it densely and SVD it
+        dense = [("LoKR", mod, stem) for mod, stem in lokr_modules(desc, f.keys())]
+        dense += [("LoHa", mod, stem) for mod, stem in loha_modules(desc, f.keys())]
+        for i, (kind, mod, stem) in enumerate(dense):
             if progress is not None:
-                progress("SVD (LoKR)", i, len(lokrs))
+                progress(f"SVD ({kind})", i, len(dense))
             if mod is None:
                 skipped += 1
                 continue
@@ -75,8 +77,11 @@ def extract_weight_only(desc, source, output, rank, dtype=torch.bfloat16, progre
             if m is None:
                 dropped += 1
                 continue
-            w1, w2, scale = lokr_factors(f, stem)
-            dW = torch.kron(w1.to(dev), w2.to(dev)) * (scale * m)
+            if kind == "LoKR":
+                w1, w2, scale = lokr_factors(f, stem)
+                dW = torch.kron(w1.to(dev), w2.to(dev)) * (scale * m)
+            else:
+                dW = loha_delta(f, stem).to(dev) * m
             U, S, Vh = torch.linalg.svd(dW, full_matrices=False)
             k = min(rank, S.numel())
             root = S[:k].sqrt()

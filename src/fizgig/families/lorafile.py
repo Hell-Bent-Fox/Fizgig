@@ -9,7 +9,7 @@ import re
 _DOWN = re.compile(r"(.+)\.(lora_A|lora_down|lora\.down)\.weight$")
 _PREFIXES = ("transformer.", "unet.", "diffusion_model.", "model.diffusion_model.", "base_model.model.")
 _UP = {"lora_A": "lora_B", "lora_down": "lora_up", "lora.down": "lora.up"}
-_LOHA = re.compile(r"\.hada_w1_a(\.|$)")
+_LOHA = re.compile(r"(.+)\.hada_w1_a$")
 _LOKR = re.compile(r"(.+)\.lokr_w1(_a)?$")
 
 
@@ -31,8 +31,6 @@ def lora_pairs(desc, keys):
     """-> [(module or None, down key, up key, alpha key or None)] for every down/up pair in `keys`. module is None
     for a kohya-flattened name outside the block map (it cannot be un-flattened without the model)."""
     keys = set(keys)
-    if any(_LOHA.search(k) for k in keys):
-        raise ValueError("LoHa files are not supported by the standard layer yet")
     drv = desc.load_driver()
     known = {m for g in drv.block_map() for b in g.blocks for m in b.modules}
     flat = {m.replace(".", "_"): m for m in known}
@@ -75,6 +73,24 @@ def lokr_factors(f, stem):
     w1 = keys["lokr_w1"] if "lokr_w1" in keys else keys["lokr_w1_a"].float() @ keys["lokr_w1_b"].float()
     w2 = keys["lokr_w2"] if "lokr_w2" in keys else keys["lokr_w2_a"].float() @ keys["lokr_w2_b"].float()
     return w1.float(), w2.float(), lycoris_scale_from_keys(keys)
+
+
+def loha_modules(desc, keys):
+    """-> [(module or None, stem)] for every LoHa module in `keys` (stem = the key prefix before .hada_*)."""
+    drv = desc.load_driver()
+    known = {m for g in drv.block_map() for b in g.blocks for m in b.modules}
+    resolve = _resolver(drv, known, {m.replace(".", "_"): m for m in known})
+    return [(resolve(m.group(1)), m.group(1)) for m in (_LOHA.match(k) for k in sorted(set(keys))) if m]
+
+
+def loha_delta(f, stem):
+    """A LoHa module's whole weight change (out, in), float32: (w1_a @ w1_b) * (w2_a @ w2_b) times the LyCORIS
+    scale - the same product the workbench applies."""
+    from fizgig.networks.lora import lycoris_scale_from_keys
+    keys = {k[len(stem) + 1:]: f.get_tensor(k) for k in f.keys() if k.startswith(stem + ".")}
+    w1 = keys["hada_w1_a"].float() @ keys["hada_w1_b"].float()
+    w2 = keys["hada_w2_a"].float() @ keys["hada_w2_b"].float()
+    return (w1 * w2).reshape(w1.shape[0], -1) * lycoris_scale_from_keys(keys)
 
 
 def block_of(desc):
