@@ -119,20 +119,20 @@ SDXL = FamilyDescription(
     helper_files=((_SDXL, ("model_index.json", "*/config.json", "tokenizer/*", "tokenizer_2/*", "scheduler/*")),),
 
     sampling=(
-        SamplingSettings("Juggernaut (community)", steps=30, cfg=4.5, sampler="dpmpp_2m_sde", scheduler="karras",
+        SamplingSettings("Juggernaut (community)", steps=30, cfg=3.0, sampler="dpmpp_2m_sde", scheduler="karras",
                          options=(("sampler", "dpmpp_2m_sde_karras"),), negative_prompt=True,
                          note="DPM++ 2M SDE Karras, 30 steps, CFG 4-5, little or no negative: Fooocus's Juggernaut "
                               "default and the Civitai card. CFG above 6-7 turns skin waxy.",
                          source="lllyasviel/Fooocus presets/default.json; civarchive.com/models/133005; "
                                 "rundiffusion.com/juggernaut-xl-rundiffusion-guide"),
-        SamplingSettings("Euler (softer)", steps=30, cfg=4.5, sampler="euler", scheduler="normal",
+        SamplingSettings("Euler (softer)", steps=30, cfg=3.0, sampler="euler", scheduler="normal",
                          options=(("sampler", "euler"),), negative_prompt=True,
                          note="Plain Euler, trailing spacing (starts at full noise): a softer look, less pore detail.",
                          source="rundiffusion.com/prompt-guide-for-juggernaut-xi-and-xii; "
                                 "huggingface.co/RunDiffusion/Juggernaut-XL-v9/discussions/4"),
     ),
     preview_steps=30,
-    preview_cfg=4.5,
+    preview_cfg=3.0,                  # Peter, 5 Oct 2026 (the card's range is 3-7, "less is a bit more realistic")
     # Peter's SDXL negative (5 Oct 2026); about 130 tokens, encoded in 77-token chunks as ComfyUI does
     preview_negative=("deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime, "
                       "text, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, "
@@ -140,8 +140,8 @@ SDXL = FamilyDescription(
                       "mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned "
                       "face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, "
                       "extra legs, fused fingers, too many fingers, long neck,mask"),
-    preview_cfg_note="SDXL needs CFG: about 4 to 5 (Juggernaut's skin turns waxy above 6-7). Above 1 the negative "
-                     "prompt applies.",
+    preview_cfg_note="SDXL needs CFG: 3 is the default, 3 to 5 the usual range (Juggernaut's skin turns waxy above "
+                     "6-7). Above 1 the negative prompt applies.",
     preview_width=1024,
     preview_height=1024,
     repair_size=1024,                 # a 1 MP model; a 1024 render at 30 steps took 3.3 s on a 5090
