@@ -588,7 +588,8 @@ class H3RepairEngine(ClipContract):
     def _wire_primary(self, path: str) -> None:
         from safetensors.torch import load_file
         from fizgig.networks.lora import ensure_kohya_lora_state_dict
-        sd = ensure_kohya_lora_state_dict(load_file(path))
+        from fizgig.minimax.reflora import lora_tensors
+        sd = ensure_kohya_lora_state_dict(lora_tensors(load_file(path)))     # a ReFLoRA: its weights
         self.primary_network = _apply_lora(self.dit, sd, 1.0, self.device, self.dtype)
         self.primary_path = path
         self.primary_block_ids = extract_block_ids_h3(self.primary_network)
@@ -615,8 +616,9 @@ class H3RepairEngine(ClipContract):
             raise RuntimeError("No primary loaded; call load_primary() first.")
         from fizgig.networks.lora import ensure_kohya_lora_state_dict
         from safetensors.torch import load_file
+        from fizgig.minimax.reflora import lora_tensors
         try:
-            sd = ensure_kohya_lora_state_dict(load_file(path))
+            sd = ensure_kohya_lora_state_dict(lora_tensors(load_file(path)))
         except Exception:
             logger.exception("swap_primary_weights: failed to load %s", path)
             return False
@@ -650,7 +652,8 @@ class H3RepairEngine(ClipContract):
     def _wire_donor(self, path: str) -> None:
         from safetensors.torch import load_file
         from fizgig.networks.lora import ensure_kohya_lora_state_dict
-        sd = ensure_kohya_lora_state_dict(load_file(path))
+        from fizgig.minimax.reflora import lora_tensors
+        sd = ensure_kohya_lora_state_dict(lora_tensors(load_file(path)))
         net = _apply_lora(self.dit, sd, 1.0, self.device, self.dtype)
         net.set_enabled(False)  # donor blocks are opt-in per-slider
         self.donor_network = net
@@ -663,6 +666,20 @@ class H3RepairEngine(ClipContract):
         except Exception:
             self.donor_hash = None
         logger.info("H3 donor loaded: %s (%d blocks)", path, len(self.donor_block_ids))
+
+    @_locked
+    def unload_primary(self) -> None:
+        """Take the primary out without a full reset (RefMod Studio changing its LoRA): switched off for good,
+        like unload_donor, and its AdaLN rows dropped."""
+        if self.primary_network is not None:
+            self.primary_network.set_enabled(False)
+            self.primary_network = None
+            self.primary_path = None
+            self.primary_hash = None
+            self.primary_block_ids = set()
+            self._primary_adaln = []
+            self._reinstall_adaln()
+            self._invalidate_baseline_cache()
 
     @_locked
     def unload_donor(self) -> None:
@@ -1474,8 +1491,10 @@ class H3RepairEngine(ClipContract):
     def render_refmod(self, *, seed: int, prompt: str, width: int, height: int, frames: int = 1,
                       regime: str = "confirm", ref_latents=None, ref_schedule=None,
                       with_audio: bool = True, early_step: int = 0, on_early=None,
-                      steps=None, turbo_strength=None, ref_images=None, ref_items=None) -> dict:
-        """The RefMod Studio's render: the base model (no LoRA state) with bare reference
+                      steps=None, turbo_strength=None, ref_images=None, ref_items=None,
+                      no_lora: bool = False) -> dict:
+        """The RefMod Studio's render: the base model - with its LoRA when one is loaded (a ReFLoRA's weights; no_lora
+        leaves it out) at default sliders - and bare reference
         latents as condition rows, decoded to the same clip dict render_clip returns
         ({"latent", "audio_rows", "frames", "wav", "middle", "regime", "steps",
         "turbo_strength", "frames_n"}). frames=1 is a still (no sound). No render cache —
@@ -1497,7 +1516,7 @@ class H3RepairEngine(ClipContract):
                                       turbo_strength=strength,
                                       on_denoised=_on_denoised if early_step > 0 else None,
                                       ref_latents=ref_latents, ref_schedule=ref_schedule,
-                                      ref_images=ref_images, ref_items=ref_items)
+                                      ref_images=ref_images, ref_items=ref_items, no_lora=no_lora)
         imgs = self.decode_clip_frames(lat)
         wav = self.decode_audio(aud) if (with_audio and frames > 1) else None
         return {"latent": lat, "audio_rows": aud, "frames": imgs, "wav": wav,
