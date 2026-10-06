@@ -25892,10 +25892,19 @@ class LoRATrainerGUI:
 
         self._add_tab_banner(
             outer, "RefMod Studio",
-            "Try your RefMods before ComfyUI. Point it at the folder your mods live in, pick one "
-            "or a few, set how strongly they apply, and render a still or a short clip with and "
-            "without them, side by side on the same seed. Every dial here is a setting on the "
-            "ComfyUI-MiniMaxH3Mod nodes, so what works here is what to type there.")
+            "Try RefMods and ReFLoRAs on MiniMax H3 before ComfyUI: render a still or a short clip with "
+            "them and without them, side by side on the same seed. Every dial here is a setting on the "
+            "ComfyUI nodes, so what works here is what to type there.")
+
+        # ── What this tab does ──────────────────────────────────────────────────────────
+        _wh = self._start_section_card(outer, "What this tab does")
+        for _t in ("A RefMod is a few reference pictures of a person or a style, packed into a small file. ComfyUI's "
+                   "RefMod nodes (ComfyUI-MiniMaxH3Mod) add it to an H3 render, with no training.",
+                   "A ReFLoRA is a LoRA and its RefMods in one file (ComfyUI-MiniMaxH3RefLoRA). To try one you have "
+                   "made, open it in the LoRA or ReFLoRA card below and press Render.",
+                   "The render shows your setup on the left and, on the right, the same seed without it."):
+            tk.Label(_wh, text="\u2022  " + _t, font=(FONT_FAMILY, 11), fg=COLORS["text_primary"],
+                     bg=COLORS["bg_surface"], wraplength=1000, justify=tk.LEFT, anchor=tk.W).pack(anchor=tk.W, pady=(0, 4))
 
         # ── Card 1: Setup ──────────────────────────────────────────────────────────────
         setup = self._start_section_card(
@@ -25942,23 +25951,6 @@ class LoRATrainerGUI:
         _rms_tip(_bc, "Same tiers as Repair Studio: int8 on big cards, streamed blocks for "
                      "long clips, NF4 for the smallest footprint. Applies at the next Load.")
         r += 1
-        ttk.Label(setup, text="LoRA:").grid(row=r, column=0, sticky=tk.W, pady=2)
-        _lf = tk.Frame(setup, bg=COLORS["bg_surface"])
-        _lf.grid(row=r, column=1, sticky=tk.EW, pady=2)
-        _lf.columnconfigure(0, weight=1)
-        self.rms_lora_var = tk.StringVar(value=str(saved.get("lora", "") or ""))
-        _le = ttk.Entry(_lf, textvariable=self.rms_lora_var)
-        _le.grid(row=0, column=0, sticky=tk.EW)
-        _le.bind("<Return>", lambda e: self._rms_lora_changed())
-        _le.bind("<FocusOut>", lambda e: self._rms_lora_changed())
-        ttk.Button(_lf, text="Browse…", width=9, command=self._rms_browse_lora).grid(row=0, column=1, padx=(6, 0))
-        ttk.Button(_lf, text="Clear", width=6,
-                   command=lambda: (self.rms_lora_var.set(""), self._rms_lora_changed())).grid(row=0, column=2, padx=(4, 0))
-        _rms_tip(_le, "Optional: an H3 LoRA to render with your mods, or a ReFLoRA - a LoRA and its RefMod "
-                     "references in one file (ComfyUI-MiniMaxH3RefLoRA) - whose references join the mod pickers. "
-                     "Empty: the mods on the base model alone.")
-        self._rms_lora_seen = self.rms_lora_var.get().strip()
-        r += 1
         _br = tk.Frame(setup, bg=COLORS["bg_surface"])
         _br.grid(row=r, column=0, columnspan=2, sticky=tk.EW, pady=(8, 2))
         self._rms_load_btn = ttk.Button(_br, text="Load base", width=12, command=self._rms_load)
@@ -25972,6 +25964,32 @@ class LoRATrainerGUI:
         tk.Label(_br, textvariable=self.rms_status_var, font=(FONT_FAMILY, 10, "bold"),
                  fg=COLORS["warning"], bg=COLORS["bg_surface"], anchor=tk.W
                  ).pack(side=tk.LEFT, padx=(14, 0), fill=tk.X, expand=True)
+
+        # ── Card 1b: LoRA or ReFLoRA ─────────────────────────────────────────────────────
+        lcard = self._start_section_card(
+            outer, "LoRA or ReFLoRA (optional)",
+            "Add a LoRA to the render, or open a ReFLoRA you have made: its LoRA and its RefMods load together.")
+        tk.Label(lcard, text="LoRA or ReFLoRA file", font=(FONT_FAMILY, 10, "bold"), fg=COLORS["text_primary"],
+                 bg=COLORS["bg_surface"]).pack(anchor=tk.W)
+        tk.Label(lcard, text="A ReFLoRA puts its RefMods into the Mods card below, ready to render. A plain H3 LoRA "
+                             "renders together with the mods you pick there. Leave it empty to try mods on their own.",
+                 font=(FONT_FAMILY, 10), fg=COLORS["text_explain"], bg=COLORS["bg_surface"], wraplength=1000,
+                 justify=tk.LEFT, anchor=tk.W).pack(anchor=tk.W, pady=(2, 4))
+        _lf = tk.Frame(lcard, bg=COLORS["bg_surface"])
+        _lf.pack(fill=tk.X)
+        _lf.columnconfigure(0, weight=1)
+        self.rms_lora_var = tk.StringVar(value=str(saved.get("lora", "") or ""))
+        _le = ttk.Entry(_lf, textvariable=self.rms_lora_var)
+        _le.grid(row=0, column=0, sticky=tk.EW)
+        _le.bind("<Return>", lambda e: self._rms_lora_changed())
+        _le.bind("<FocusOut>", lambda e: self._rms_lora_changed())
+        ttk.Button(_lf, text="Browse…", width=9, command=self._rms_browse_lora).grid(row=0, column=1, padx=(6, 0))
+        ttk.Button(_lf, text="Clear", width=6,
+                   command=lambda: (self.rms_lora_var.set(""), self._rms_lora_changed())).grid(row=0, column=2, padx=(4, 0))
+        self.rms_lora_info_var = tk.StringVar(value="")
+        tk.Label(lcard, textvariable=self.rms_lora_info_var, font=(FONT_FAMILY, 10, "bold"), fg=COLORS["accent"],
+                 bg=COLORS["bg_surface"], wraplength=1000, justify=tk.LEFT, anchor=tk.W).pack(anchor=tk.W, pady=(6, 0))
+        self._rms_lora_seen = self.rms_lora_var.get().strip()
 
         # ── Card 2: Mods ───────────────────────────────────────────────────────────────
         mods = self._start_section_card(
@@ -26272,20 +26290,21 @@ class LoRATrainerGUI:
                                       "current rows / strength / curves. Loads the base first if needed.")
         self._rms_cancel_btn = ttk.Button(_rrow, text="Cancel", width=8, command=self._rms_cancel, state="disabled")
         self._rms_cancel_btn.pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Label(_rrow, text="Compare with:").pack(side=tk.LEFT, padx=(12, 4))
+        self._rms_compare_lbl = ttk.Label(_rrow, text="Right-hand picture:")
+        self._rms_compare_lbl.pack(side=tk.LEFT, padx=(12, 4))
         self.rms_compare_var = tk.StringVar(value=str(saved.get("compare", self._RMS_COMPARE[0])))
         if self.rms_compare_var.get() not in self._RMS_COMPARE:
             self.rms_compare_var.set(self._RMS_COMPARE[0])
         self._rms_compare_combo = ttk.Combobox(_rrow, textvariable=self.rms_compare_var, values=list(self._RMS_COMPARE),
-                                               state="readonly", width=20)
+                                               state="readonly", width=max(len(c) for c in self._RMS_COMPARE) + 2)
         self._rms_compare_combo.pack(side=tk.LEFT)
         self._rms_compare_combo.bind("<<ComboboxSelected>>", lambda e: (self._rms_refresh_titles(), self._rms_persist()))
-        _rms_tip(self._rms_compare_combo, "What the right-hand picture leaves out, with a LoRA set: the mods (LoRA "
-                                          "alone), the LoRA (mods alone), or both (the base model). Without a LoRA it "
-                                          "is always No mod.")
-        tk.Label(_rrow, text="Render this setup beside the comparison, same seed, everything as set above.",
-                 font=(FONT_FAMILY, 10), fg=COLORS["text_explain"], bg=COLORS["bg_surface"],
-                 anchor=tk.W).pack(side=tk.LEFT, padx=(12, 0))
+        _rms_tip(self._rms_compare_combo, "With a LoRA set: what the right-hand picture leaves out - the mods (the "
+                                          "LoRA alone), the LoRA (the mods alone), or both (the base model).")
+        self._rms_render_note = tk.Label(_rrow, text="Render this setup beside the comparison, same seed, everything as set above.",
+                                         font=(FONT_FAMILY, 10), fg=COLORS["text_explain"], bg=COLORS["bg_surface"],
+                                         anchor=tk.W)
+        self._rms_render_note.pack(side=tk.LEFT, padx=(12, 0))
         _srow = tk.Frame(_sw, bg=COLORS["bg_surface"])
         _srow.pack(anchor=tk.W, fill=tk.X, pady=(8, 0))
         self.rms_sweep_var = tk.StringVar(value=self._RMS_SWEEPS[0])
@@ -26343,6 +26362,7 @@ class LoRATrainerGUI:
                       "this render in the node pack, ready to copy.")
         _bk = ttk.Button(_ar, text="🧪 Bake as new RefMod…", command=self._rms_bake)
         _bk.pack(side=tk.LEFT, padx=(6, 0))
+        self._rms_bake_btn = _bk
         _rms_tip(_bk, "Writes a NEW mod file from one row. Carried into the file: that row's Strength "
                      "multiplied by the master Strength (Retention), its Copies (as repeated frames), and the "
                      "Fade-across-the-clip curve, applied to the latent itself. Load the new file in ComfyUI at "
@@ -26351,14 +26371,17 @@ class LoRATrainerGUI:
                      "values). Not carried, because they act at render time: Shuffle and Change-during-the-render.")
         _rf2 = ttk.Button(_ar, text="📦 Save as ReFLoRA…", command=self._rms_save_reflora)
         _rf2.pack(side=tk.LEFT, padx=(6, 0))
+        self._rms_reflora_btn = _rf2
         _rms_tip(_rf2, "One file holding the LoRA in Setup and the references of the active rows, as they are "
                       "(ComfyUI-MiniMaxH3RefLoRA's format). In ComfyUI, Load H3 RefLoRA gives the patched model and "
                       "the references from that one file; a plain LoRA loader still reads its LoRA. Row strengths, "
                       "copies and curves stay node settings (ComfyUI settings gives them).")
-        tk.Label(act, text="\u2022  Save as ReFLoRA \u2014 the LoRA in Setup and the active rows' references in one "
-                           "file, for ComfyUI-MiniMaxH3RefLoRA's Load H3 RefLoRA node.",
-                 font=(FONT_FAMILY, 10), fg=COLORS["text_explain"], bg=COLORS["bg_surface"],
-                 wraplength=900, justify=tk.LEFT, anchor=tk.W).pack(anchor=tk.W, pady=(6, 0))
+        self._rms_reflora_line = tk.Label(
+            act, text="\u2022  Save as ReFLoRA \u2014 writes one new file: the LoRA from the LoRA or ReFLoRA card and the "
+                      "RefMods of the ticked Mods rows, for ComfyUI's Load H3 RefLoRA node. Nothing else is changed.",
+            font=(FONT_FAMILY, 10), fg=COLORS["text_explain"], bg=COLORS["bg_surface"],
+            wraplength=900, justify=tk.LEFT, anchor=tk.W)
+        self._rms_reflora_line.pack(anchor=tk.W, pady=(6, 0))
         self._add_youtube_help_button(outer, "refmod_studio")
 
         # rows (restored or one empty), first scan, curve plot
@@ -27727,17 +27750,54 @@ class LoRATrainerGUI:
         return {0: "nomod", 1: "nolora", 2: "neither"}[self._RMS_COMPARE.index(self.rms_compare_var.get())]
 
     def _rms_refresh_titles(self):
+        """Pane titles, and what only applies with a LoRA (the comparison choice, Save as ReFLoRA) shown or hidden."""
         lora = self._rms_lora_path()
         mode = self._rms_compare_mode()
         try:
-            self._rms_compare_combo.configure(state="readonly" if lora else "disabled")
+            if lora and not self._rms_compare_combo.winfo_manager():
+                self._rms_compare_lbl.pack(side=tk.LEFT, padx=(12, 4), before=self._rms_render_note)
+                self._rms_compare_combo.pack(side=tk.LEFT, before=self._rms_render_note)
+            elif not lora:
+                self._rms_compare_lbl.pack_forget()
+                self._rms_compare_combo.pack_forget()
+            if lora and not self._rms_reflora_btn.winfo_manager():
+                self._rms_reflora_btn.pack(side=tk.LEFT, padx=(6, 0), after=self._rms_bake_btn)
+                self._rms_reflora_line.pack(anchor=tk.W, pady=(6, 0))
+            elif not lora:
+                self._rms_reflora_btn.pack_forget()
+                self._rms_reflora_line.pack_forget()
         except Exception:
             pass
+        self._rms_refresh_lora_info()
         self._rms_baseline_title.configure(text={
             "nomod": "LoRA alone (no mod, same seed)" if lora else "No mod (base, same seed)",
             "nolora": "Mods alone (no LoRA, same seed)", "neither": "Neither (base, same seed)"}[mode])
         if not self._rms_clips.get("tweaked"):
             self._rms_tweaked_title.configure(text="LoRA + mods" if lora else "With mods")
+
+    def _rms_lora_ref_names(self):
+        """The picker names of the Setup ReFLoRA's own RefMods, in file order."""
+        lora = self._rms_lora_path()
+        return [n for n, m in self._rms_mod_meta.items()
+                if lora and os.path.normcase(os.path.abspath(m.get("path", ""))) == os.path.normcase(os.path.abspath(lora))]
+
+    def _rms_refresh_lora_info(self):
+        """The LoRA or ReFLoRA card's line: what is open and what it does to the render."""
+        var = getattr(self, "rms_lora_info_var", None)
+        if var is None:
+            return
+        raw = self.rms_lora_var.get().strip()
+        lora = self._rms_lora_path()
+        if raw and not lora:
+            var.set(f"File not found: {raw}")
+        elif not lora:
+            var.set("No LoRA: the render uses the mods alone.")
+        elif self._rms_lora_references():
+            n = len(self._rms_lora_ref_names())
+            var.set(f"Opened ReFLoRA {os.path.basename(lora)}: its LoRA, and its {n} RefMod{'s' if n != 1 else ''}, "
+                    f"now the rows in the Mods card. Press Render: the left picture is the ReFLoRA as ComfyUI runs it.")
+        else:
+            var.set(f"LoRA {os.path.basename(lora)}: renders together with the mods in the Mods card.")
 
     def _rms_lora_references(self):
         """The visual references inside the Setup LoRA when it is a ReFLoRA (header only), else []."""
@@ -27773,19 +27833,17 @@ class LoRATrainerGUI:
         if path and not os.path.isfile(path):
             self.rms_status_var.set(f"LoRA not found: {path}")
         self._rms_rescan(quiet=True)
-        refs = self._rms_lora_references()
-        if refs:
-            names = [n for n, m in self._rms_mod_meta.items()
-                     if os.path.normcase(m.get("path", "")) == os.path.normcase(os.path.abspath(path))
-                     or os.path.normcase(m.get("path", "")) == os.path.normcase(path)]
-            if names and self._rms_rows and self._rms_rows[0]["mod_var"].get() == ra.NONE_MOD:
-                self._rms_rows[0]["mod_var"].set(names[0])
-                self._rms_row_refresh(self._rms_rows[0])
-            self.rms_status_var.set(f"ReFLoRA: {os.path.basename(path)} — its {len(refs)} reference"
-                                    f"{'s' if len(refs) != 1 else ''} are in the mod pickers; the LoRA renders "
-                                    f"with them.")
+        if self._rms_lora_references():
+            names = self._rms_lora_ref_names()
+            for row in list(self._rms_rows):          # the Mods rows become the ReFLoRA's own RefMods
+                row["frame"].destroy()
+            self._rms_rows = []
+            self._rms_add_btn.state(["!disabled"])
+            for n in names[:ra.MAX_ROWS]:
+                self._rms_add_row({"on": True, "mod": n, "value": 1.0, "copies": 1})
+            self.rms_status_var.set(f"Opened the ReFLoRA {os.path.basename(path)} — press Render.")
         elif path and os.path.isfile(path):
-            self.rms_status_var.set(f"LoRA: {os.path.basename(path)} — renders with your mods from the next Render.")
+            self.rms_status_var.set(f"LoRA {os.path.basename(path)} set — it renders with the mods from the next Render.")
         self._rms_baseline_key = None
         self._rms_refresh_titles()
         self._rms_refresh_tokens()
@@ -27815,8 +27873,8 @@ class LoRATrainerGUI:
         from fizgig.minimax.reflora import save_reflora
         lora = self._rms_lora_path()
         if not lora:
-            messagebox.showinfo("Save as ReFLoRA", "Set the LoRA in Setup first — a ReFLoRA is that LoRA with "
-                                                   "the references of your active rows.")
+            messagebox.showinfo("Save as ReFLoRA", "Open a LoRA in the LoRA or ReFLoRA card first — a ReFLoRA "
+                                                   "is that LoRA with the RefMods of your ticked Mods rows.")
             return
         refs, seen = [], set()
         for row in self._rms_rows:
@@ -27851,7 +27909,7 @@ class LoRATrainerGUI:
                                 f"{'s' if info['references'] != 1 else ''}.")
         messagebox.showinfo("Save as ReFLoRA",
                             f"Saved {os.path.basename(p)}: {os.path.basename(lora)} ({info['lora_keys']} tensors) and "
-                            f"{info['references']} reference{'s' if info['references'] != 1 else ''} "
+                            f"{info['references']} RefMod{'s' if info['references'] != 1 else ''} "
                             f"({', '.join(info['names'])}).\n\nIn ComfyUI put it in models/loras and load it with "
                             f"Load H3 RefLoRA (ComfyUI-MiniMaxH3RefLoRA) at refmod_retention "
                             f"{self._rms_retention():.2f}; a plain LoRA loader still reads its LoRA. Row strengths, "
