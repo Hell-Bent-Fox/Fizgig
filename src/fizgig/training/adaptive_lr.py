@@ -23,9 +23,17 @@ class AdaptiveLR:
     BLEND = 0.7
     WEIGHT_GROWTH_THRESHOLD = 0.30
 
-    def __init__(self, min_lr, max_lr):
+    CLIP_RATIO_THRESHOLD = 0.5
+
+    def __init__(self, min_lr, max_lr, clip_signal=False):
+        """clip_signal: Klein's rules - a grad-clip ratio over 50% of the epoch's steps is a stability signal
+        (checked before the weight-norm growth; record_clip() counts the steps), and, as the old Klein trainer, the
+        weight-norm baseline starts at the first comparison and the first epoch's clip counts carry into it."""
         self.min_lr = float(min_lr)
         self.max_lr = float(max_lr)
+        self.clip_signal = bool(clip_signal)
+        self.clip_steps = 0
+        self.clip_events = 0
         self.best_loss = None
         self.good_streak = 0
         self.bad_streak = 0
@@ -33,6 +41,15 @@ class AdaptiveLR:
         self.stability_triggered = False
         self.prev_weight_norm = None
         self.snapshot = None  # {"weights": {...cpu...}, "optim": cpu state} — not persisted
+
+    def record_clip(self, pre_clip_norm, max_norm):
+        """One optimizer step's clip, for clip_signal (the norm clip_grad_norm_ returned, before clipping)."""
+        self.clip_steps += 1
+        try:
+            if float(pre_clip_norm) > float(max_norm):
+                self.clip_events += 1
+        except (TypeError, ValueError):
+            pass
 
     def state_dict(self):
         return {"best_loss": self.best_loss, "good_streak": self.good_streak,
@@ -95,7 +112,8 @@ class AdaptiveLR:
         """epoch is 0-indexed (global). epoch 0 arms the baseline; epoch >= 1 adjusts the LR."""
         if epoch == 0:
             self.best_loss = current_loss
-            self.prev_weight_norm = self._weight_norm(network)
+            if not self.clip_signal:        # Klein's baseline starts at the first comparison
+                self.prev_weight_norm = self._weight_norm(network)
             logger.info(f"[adaptive_lr] epoch 1: loss={current_loss:.4f} "
                         f"lr={optimizer.param_groups[0]['lr']:.2e} | ARMED")
             self._snapshot(network, optimizer)
@@ -110,7 +128,10 @@ class AdaptiveLR:
         if self.prev_weight_norm and self.prev_weight_norm > 0:
             weight_growth = (cur_wn - self.prev_weight_norm) / self.prev_weight_norm
         stability_reason = None
-        if weight_growth is not None and weight_growth > self.WEIGHT_GROWTH_THRESHOLD:
+        clip_ratio = self.clip_events / max(self.clip_steps, 1)
+        if self.clip_signal and clip_ratio > self.CLIP_RATIO_THRESHOLD:
+            stability_reason = f"grad clip {clip_ratio*100:.0f}% > {self.CLIP_RATIO_THRESHOLD*100:.0f}%"
+        elif weight_growth is not None and weight_growth > self.WEIGHT_GROWTH_THRESHOLD:
             stability_reason = f"wnorm_Δ {weight_growth*100:+.0f}% > {self.WEIGHT_GROWTH_THRESHOLD*100:.0f}%"
 
         action, reason = "HOLD", ""
@@ -173,7 +194,9 @@ class AdaptiveLR:
                 pg["lr"] = new_lr
         lr_str = f"{cur_lr:.2e}" if new_lr == cur_lr else f"{cur_lr:.2e}->{new_lr:.2e}"
         wn_str = f"{weight_growth*100:+.0f}%" if weight_growth is not None else "—"
+        clip_str = f"clip={clip_ratio*100:.0f}% " if self.clip_signal else ""
         logger.info(f"[adaptive_lr] epoch {epoch + 1}: loss={current_loss:.4f} lr={lr_str} "
-                    f"wnorm_Δ={wn_str} | {action} ({reason})")
+                    f"{clip_str}wnorm_Δ={wn_str} | {action} ({reason})")
         self.prev_weight_norm = cur_wn
+        self.clip_steps = self.clip_events = 0
         self._snapshot(network, optimizer)

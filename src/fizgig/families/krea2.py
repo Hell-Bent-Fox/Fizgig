@@ -4,6 +4,7 @@ its own cache files (arch_id krea2drv - the cache layout differs from the origin
 Facts are the original trainer's (src/fizgig/krea2/trainer.py - removed with the original family on 30 Sep 2026, in git history - utils.py, sampling.py), cited per value.
 """
 from fizgig.families.description import (
+    GENERAL_NEGATIVE,
     FamilyDescription, LoRAFormat, ModelFile, SamplingSettings, SpeedLoRA,
 )
 
@@ -106,6 +107,8 @@ KREA2 = FamilyDescription(
         "Turbo checkpoint", steps=8, cfg=1.0, sampler="euler", scheduler="simple", options=(("mu", 1.15),),
         note="The distilled Turbo: CFG-free, mu pinned at 1.15, as the original workbench.",
         source="the original Krea 2 workbench engine (removed with the original family)"),
+    int8_attention=True,              # workbench renders: comfy-kitchen's INT8 attention
+    activation_cache=True,            # Turbo Preview: step-1 replay, identical to a full render
     finetune=True,
     workbench=("repair", "explorer", "profiler", "extract", "royale"),
     # the text-fusion boosts (15 Sep 2026, #137): the four text-fusion blocks at x2 / x3, everything else untouched.
@@ -158,6 +161,7 @@ KREA2 = FamilyDescription(
     preview_speed_lora="Krea 2 Turbo LoRA (8-step)",
     preview_steps=8,
     preview_cfg=1.0,
+    preview_negative=GENERAL_NEGATIVE,
     preview_width=1024,
     preview_height=1024,
 

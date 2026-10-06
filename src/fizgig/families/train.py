@@ -19,6 +19,7 @@ import logging
 import math
 import os
 import random
+import re
 import sys
 import time
 from multiprocessing import Value
@@ -45,6 +46,7 @@ logger = logging.getLogger(__name__)
 ADAPTER = "training_adapter"
 CONTEXT = "context"
 SPEED = "speed_lora"
+TRAINABLE_PREVIEW = "epoch_lora"         # the epoch's LoRA, frozen on a preview checkpoint
 
 
 class _Collator:
@@ -117,11 +119,51 @@ def _optimizer_family_groups(desc, net, lr):
     return [{"params": buckets[f], "lr": float(lr), "family": f, "modules": counts[f]} for f in order if f in buckets]
 
 
-def _load_state(state_dir, net, optimizer, device, arch):
+def _legacy_perm(driver, net):
+    """{old parameter index: family LoRA parameter index} for an older trainer's state (driver.legacy_state_order), or
+    None when the orders already agree. Only modules that train here count, in the old order, down then up."""
+    order = driver.legacy_state_order(net.dit)
+    if order is None:
+        return None
+    from fizgig.families.lora import TRAINABLE
+    here, i = {}, 0
+    for full, w in net.wrapped.items():
+        if TRAINABLE in w.adapters:
+            for part, _p in enumerate(w.adapters[TRAINABLE].parameters()):
+                here[(full, part)] = i
+                i += 1
+    old = [(m, part) for m in order if (m, 0) in here for part in range(2) if (m, part) in here]
+    if len(old) != len(here):
+        raise RuntimeError(f"[resume] the old state's layout ({len(old)} tensors) does not match this LoRA "
+                           f"({len(here)}) - different rank, blocks or network type?")
+    return {k: here[key] for k, key in enumerate(old)}
+
+
+def _load_state(state_dir, net, optimizer, device, arch, untagged_own=False, driver=None):
     """(epoch, global step, training_state.json) of a saved state, its LoRA weights and RNG restored. The optimizer
     (and, by the caller, the EMA) is restored only from a state this family wrote: another trainer's (the original
     Krea 2's) orders its parameters differently, so its moments would land on the wrong tensors - that state goes on
-    from its weights with a fresh optimizer."""
+    from its weights with a fresh optimizer.
+    A pause saved by an accelerate trainer (the old Klein trainer: model.safetensors holding the LoRA, the epoch in the
+    folder name, adaptive_lr_state.json beside it) goes on the same way; its global step is None (the caller counts
+    it from the epoch)."""
+    legacy = os.path.join(state_dir, "model.safetensors")
+    if not os.path.isfile(os.path.join(state_dir, "training_state.json")) and os.path.isfile(legacy):
+        m = re.search(r"-(\d{6})-state$", os.path.basename(os.path.normpath(state_dir)))
+        if not m:
+            raise RuntimeError(f"[resume] {state_dir}: no epoch in the folder name ('<lora name>-000012-state')")
+        if net.load_trainable(legacy) == 0:
+            raise RuntimeError(f"[resume] {state_dir} matched none of this LoRA's modules - different rank or "
+                               f"target modules?")
+        meta = {"epoch": int(m.group(1)), "own_state": False}
+        side = os.path.join(state_dir, "adaptive_lr_state.json")
+        if os.path.isfile(side):
+            with open(side, encoding="utf-8") as f:
+                meta["adaptive_lr_state"] = json.load(f)
+        logger.info("[resume] this pause was saved by the old trainer: continuing from its LoRA weights and epoch"
+                    + (" (and its adaptive LR state)" if "adaptive_lr_state" in meta else "")
+                    + ", with a fresh optimizer")
+        return meta["epoch"], None, meta
     for need in ("lora.safetensors", "optimizer.pt", "training_state.json"):
         if not os.path.isfile(os.path.join(state_dir, need)):
             raise RuntimeError(f"[resume] {state_dir} is not a saved training state (missing {need}). Pick the "
@@ -131,9 +173,15 @@ def _load_state(state_dir, net, optimizer, device, arch):
                            f"target modules?")
     with open(os.path.join(state_dir, "training_state.json"), encoding="utf-8") as f:
         meta = json.load(f)
-    meta["own_state"] = meta.get("architecture") == arch
+    meta["own_state"] = meta.get("architecture") == arch or (untagged_own and "architecture" not in meta)
     if meta["own_state"]:
-        optimizer.load_state_dict(torch.load(os.path.join(state_dir, "optimizer.pt"), map_location=device))
+        sd = torch.load(os.path.join(state_dir, "optimizer.pt"), map_location=device)
+        perm = _legacy_perm(driver, net) if (driver is not None and "architecture" not in meta) else None
+        if perm is not None:            # an older trainer's order: each moment back onto its own tensor
+            sd["state"] = {perm[int(k)]: v for k, v in sd["state"].items()}
+            meta["legacy_perm"] = perm
+            logger.info("[resume] an older trainer's state: optimizer moments remapped into this LoRA's order")
+        optimizer.load_state_dict(sd)
     else:
         logger.info("[resume] this state was saved by another trainer: continuing from its LoRA weights, with a "
                     "fresh optimizer and weight average (they settle within a few steps)")
@@ -202,7 +250,8 @@ def _encode_override(driver, te_path, prompt, dit, device, parkable=True, refere
     encoder when VRAM is short)."""
     from fizgig.families import quant
     te_gb = os.path.getsize(te_path) / 1024 ** 3 if te_path and os.path.exists(te_path) else 0.0
-    park = parkable and quant.free_vram_gb() < te_gb + 2.0
+    tok = driver.park_for(dit, device, te_gb + 2.0, "the override prompt's text encoder")
+    park = tok is None and parkable and quant.free_vram_gb() < te_gb + 2.0
     if park:
         quant.move(dit, "cpu")
         torch.cuda.empty_cache()
@@ -220,6 +269,8 @@ def _encode_override(driver, te_path, prompt, dit, device, parkable=True, refere
             del te
             torch.cuda.empty_cache()
     finally:
+        if tok is not None:
+            driver.unpark(dit, device, tok)
         if park:
             quant.move(dit, device)
 
@@ -377,8 +428,12 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
                 else:
                     lats.append(driver.generate(dit, cond, width, height, steps=steps, seed=seed + i, cfg=cfg,
                                                 neg_cond=neg, **ref_kw))
-        park = lowmem and not swapped      # a swapped DiT is already mostly on CPU; moving it would undo the layout
+        tok = driver.park_for(dit, device, None, "decode")   # None = the shared rule below
+        if tok is not None:
+            done.add("decode_park")
+        park = lowmem and not swapped and tok is None   # a swapped DiT is already mostly on CPU
         if park:                            # #123: never hold the training DiT and the VAE decode together
+            done.add("lowmem_park")
             _preview_vram("before decode")
             quant.move(dit, "cpu")
             torch.cuda.empty_cache()
@@ -387,12 +442,18 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
         for i in range(len(lats) // per):
             p = os.path.join(out_dir, f"{output_name}_e{epoch:06d}_{i:02d}_{ts}_{seed + i}.png")
             frames = [driver.decode(vae, lat, width, height) for lat in lats[i * per:(i + 1) * per]]
-            (_slider_strip(frames, SLIDER_PREVIEW_MULTIPLIERS) if slider else frames[0]).save(p)
-            paths.append(p)
+            if slider:
+                strip = driver.slider_preview(frames, SLIDER_PREVIEW_MULTIPLIERS)
+                paths += driver.save_preview(_slider_strip(frames, SLIDER_PREVIEW_MULTIPLIERS) if strip is None
+                                             else strip, p)
+            else:
+                paths += driver.save_preview(frames[0], p)
     finally:
         if slider:
             net.set_trainable_multiplier(1.0)  # a preview that failed mid-dial must not leave the LoRA scaled
-        if lowmem and not swapped:
+        if "decode_park" in done:
+            driver.unpark(dit, device, tok)
+        if "lowmem_park" in done:
             quant.move(dit, device)
             _preview_vram("after decode, DiT restored")
         if "swap" in done:
@@ -411,6 +472,94 @@ def _render_previews(driver, dit, net, vae, encoded, out_dir, epoch, *, output_n
     return paths
 
 
+class _CheckpointPreviews:
+    """Training previews on the family's preview checkpoint (train_preview_checkpoint: Klein's Distilled), with the
+    old Klein trainer's memory handoff: the driver parks the training model, loads the checkpoint (its own swap by
+    card, optionally INT8), the epoch's LoRA - the live adapter, EMA weights if EMA is on - and the context LoRA ride
+    on it as frozen adapters, and the training model is put back exactly. Between epochs the checkpoint stays in
+    system RAM when it isn't block-swapped and the cache mode allows (auto: decided once per run, free RAM >= 18 GB,
+    so caching never flip-flops); any failure to reuse it falls back to a fresh load."""
+
+    def __init__(self, driver, path, device, cache_mode="auto", int8=False, context=None):
+        self.driver, self.path, self.device = driver, path, torch.device(device)
+        self.cache_mode, self.int8, self.context = str(cache_mode or "auto").lower(), bool(int8), context
+        self.cached = None                 # (model, FamilyLoRA, swapped) on the CPU between epochs
+        self._auto = None
+        self._lora_file = os.path.join(os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp",
+                                       f"fizgig_preview_lora_{os.getpid()}.safetensors")
+
+    def _cache_on(self, swapped):
+        if self.cache_mode == "off" or swapped:
+            return False
+        if self.cache_mode == "on":
+            return True
+        if self._auto is None:
+            try:
+                import psutil
+                self._auto = psutil.virtual_memory().available / 1e9 >= 18.0
+            except Exception:
+                self._auto = False
+        return self._auto
+
+    def render(self, dit, net, ema, render):
+        """Park, put the checkpoint up with this epoch's LoRA, call render(model, adapters), restore."""
+        if ema is not None:
+            ema.swap_in()
+        try:
+            net.save(self._lora_file, dtype=torch.bfloat16)
+        finally:
+            if ema is not None:
+                ema.swap_out()
+        rng = torch.get_rng_state()
+        cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        token = self.driver.park_for_preview(dit, self.device)
+        m = fl = None
+        swapped = 0
+        try:
+            gc.collect()
+            torch.cuda.empty_cache()
+            if self.cached is not None:
+                try:
+                    m, fl, swapped = self.cached
+                    self.cached = None
+                    quant.move(m, self.device)
+                    fl.swap_file(TRAINABLE_PREVIEW, self._lora_file)
+                    logger.info("[sample] preview checkpoint reused from RAM (no disk reload)")
+                except Exception:
+                    logger.warning("[sample] preview checkpoint reuse failed - reloading from disk", exc_info=True)
+                    m = fl = None
+            if m is None:
+                m, swapped = self.driver.load_preview_checkpoint(self.path, self.device, int8=self.int8)
+                fl = FamilyLoRA(m, self.driver, device=self.device)
+                fl.add_file(self._lora_file, TRAINABLE_PREVIEW)
+                if self.context:
+                    fl.add_file(self.context[0], CONTEXT, self.context[1])
+                logger.info(f"[sample] previews on {os.path.basename(self.path)}"
+                            + (f" ({swapped} blocks streamed)" if swapped else ""))
+            return render(m, fl, swapped)
+        finally:
+            keep = m is not None and self._cache_on(swapped)
+            if keep:
+                try:
+                    quant.move(m, "cpu")
+                    self.cached = (m, fl, swapped)
+                except Exception:
+                    logger.warning("[sample] could not keep the preview checkpoint in RAM", exc_info=True)
+                    self.cached = None
+            del m, fl
+            gc.collect()
+            gc.collect()
+            torch.cuda.empty_cache()
+            self.driver.unpark_after_preview(dit, self.device, token)
+            torch.set_rng_state(rng)
+            if cuda_rng is not None:
+                torch.cuda.set_rng_state_all(cuda_rng)
+            try:
+                os.remove(self._lora_file)
+            except OSError:
+                pass
+
+
 def _largest_bucket_mp(group):
     """Megapixels of the run's largest actual bucket (what sets activation memory), or None."""
     try:
@@ -424,23 +573,20 @@ class _FineTune:
     whole-rotation length and cadence, a fresh optimizer per window, and the full-checkpoint save."""
 
     def __init__(self, driver, desc, dit, net, dit_path, device, *, max_train_epochs, rotations, save_every_rotations,
-                 rotate_every, start_window, epochs_done, fused, lr, master_dir, mp=None):
+                 rotate_every, start_window, epochs_done, fused, lr, master_dir, mp=None, group=None, max_parts=0):
         from fizgig.families import ft
         from fizgig.utils.device import plannable_free_vram
         self.ft, self.driver, self.desc, self.dit, self.src, self.lr = ft, driver, desc, dit, dit_path, lr
-        spec = driver.ft_spec(dit)
-        if spec is None:
-            raise RuntimeError(f"{desc.display_name}'s driver declares no fine-tune (ft_spec)")
-        self.rot = ft.Rotator(dit, spec, device)
+        self.be = driver.ft_backend(dit, device, dit_path, group) or ft.SharedBackend(driver, dit, device, dit_path,
+                                                                                         group)
         where = os.environ.get("FIZGIG_FT_MASTER", "auto")
         self.scratch = os.path.join(master_dir, ".fizgig_ft_master")
-        gb, where = self.rot.build_master(dit_path, where, self.scratch)
-        n_always = self.rot.start_always()
-        logger.info(f"[finetune] bf16 master: {len(self.rot.master)} weights, {gb:.1f} GB "
-                    + ("in system RAM" if where == "ram" else f"ON DISK at {self.scratch} (system memory can't "
-                       f"comfortably hold it; untouched weights read from the model file, trained ones spill there)")
-                    + f"; {n_always} always-on Linears ({', '.join(spec.always_on) or 'none'}) train all run; "
-                      f"biases frozen")
+        gb, where = self.be.build_master(where, self.scratch)
+        n_always = self.be.start_always()
+        logger.info(f"[finetune] bf16 master: {len(list(self.be.master.keys()))} weights, {gb:.1f} GB "
+                    + ("in system RAM" if where == "ram" else f"ON DISK (system memory can't comfortably hold it; "
+                       f"untouched weights read from the model file, trained ones spill there)")
+                    + f"; {n_always} always-on Linears ({self.be.always_label}) train all run")
         if where == "ram":
             try:
                 import psutil
@@ -450,12 +596,12 @@ class _FineTune:
                                    f"FIZGIG_FT_MASTER=disk keeps the master on disk instead")
             except Exception:
                 pass
-        n_blocks = len(self.rot.blocks)
+        n_blocks = self.be.cycle_len()
         logger.info(f"[finetune] planning with {torch.cuda.memory_allocated() / 1e9:.2f} GB allocated, "
                     f"{plannable_free_vram():.2f} GB free")
-        windows, stream, why, usable = ft.plan_windows(
-            dit, spec, self.rot, plannable_free_vram(), allow_stream=os.environ.get("FIZGIG_NO_FT_STREAM") != "1",
-            mp=mp)
+        windows, stream, why, usable = self.be.plan(
+            plannable_free_vram(), allow_stream=os.environ.get("FIZGIG_NO_FT_STREAM") != "1", mp=mp,
+            max_parts=max_parts)
         for line in why:
             logger.info(f"[finetune] {line}")
         if windows is None:
@@ -467,13 +613,8 @@ class _FineTune:
         self.epochs = max(1, int(rotations)) * self.cycle
         self.save_every = max(1, int(save_every_rotations)) * self.cycle
         self.epochs_done = int(epochs_done)
-        self.streamer = None
-        if stream and any(isinstance(w, tuple) for w in windows):
-            from fizgig.krea2.rotation import RotationOffloader
-            self.streamer = RotationOffloader(self.rot.blocks, torch.device(device), range(n_blocks))
-            driver.install_ft_streamer(dit, self.streamer)
-            self.streamer.set_resident(self.rot.resident_blocks(self.sched.active_at(0)))
-            logger.info("[finetune] frozen blocks outside the window stream from CPU")
+        self.streamer = getattr(self.be, "streamer", None) or (True if stream else None)
+        driver.ft_cycle(self.cycle, self.epochs_done, self.epochs)
         self.fused = ft.FusedSteps(lr) if fused else None
         self.opt_label = ("per-parameter " if fused else "") + ft.make_optimizer([torch.zeros(1)], lr)[1] + " (fine-tune)"
         logger.info(f"[finetune] FULL FINE-TUNE - {self.sched.describe()}")
@@ -495,7 +636,7 @@ class _FineTune:
 
     def needs_window(self, epoch):
         """A new window this epoch - or the same one after a save parked it."""
-        return self.sched.active_at(epoch) != self.rot.active
+        return list(self.sched.active_at(epoch)) != list(self.be.active)
 
     def enter(self, epoch):
         """The epoch's window trainable, with a fresh optimizer (the old one's state belonged to the outgoing
@@ -506,13 +647,12 @@ class _FineTune:
             self.fused.detach()
         gc.collect()
         torch.cuda.empty_cache()
-        if self.streamer is not None:
-            self.streamer.set_resident(self.rot.resident_blocks(want))
-        n = self.rot.rotate_to(want)
+        n = self.be.rotate(want)
         torch.cuda.reset_peak_memory_stats()
-        params = self.rot.trainable_params()
+        params = self.be.trainable_params()
         logger.info(f"[finetune] epoch {epoch + 1 + self.epochs_done}: window {self.sched.window_at(epoch) + 1}/"
-                    f"{self.sched.n_windows} {want} - {n} Linears trainable, "
+                    f"{self.sched.n_windows} {want} - "
+                    f"{n} Linears trainable, "
                     f"{sum(p.numel() for p in params) / 1e9:.2f}B parameters")
         if self.fused is not None:
             self.fused.attach(params)
@@ -524,7 +664,7 @@ class _FineTune:
         if self.fused is not None:
             self.fused.detach()
         gc.collect()
-        self.rot.rotate_to([])
+        self.be.park()
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -536,8 +676,8 @@ class _FineTune:
                 self.desc.modelspec_arch if hasattr(self.desc, "modelspec_arch") else self.desc.key}
         logger.info(f"[finetune] saving the full checkpoint at epoch {n_ep} -> {os.path.basename(path)} "
                     f"(~{os.path.getsize(self.src) / 1e9:.0f} GB; training waits for it)")
-        replaced, total = self.ft.save_checkpoint(self.rot.state_dict(), self.src, path, meta)
-        logger.info(f"[save] {path} ({replaced}/{total} tensors trained)")
+        replaced, total = self.be.save(path, meta)
+        logger.info(f"[save] {path} ({replaced}{'/' + str(total) if total else ''} tensors trained)")
 
 
 def train_family(family, dit_path, dataset_config, output_dir, output_name, *, network_dim=32, network_alpha=32,
@@ -561,8 +701,10 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                  log_per_image_loss=False, per_image_lr=False, auto_recaption=False, warmup_look_outliers=False,
                  trigger_word=None, trigger_position="start", recaption_instruction=None,
                  recaption_instruction_detailed=None, captioner=None,
-                 finetune=False, ft_rotations=10, ft_save_every_rotations=1, ft_rotate_every=1, ft_start_window=0,
-                 ft_epochs_done=0, ft_fused_backward=False, reg_lr_multiplier=0.2):
+                 finetune=False, ft_rotations=10, ft_save_every_rotations=1, ft_rotate_every=1, ft_max_parts=0,
+                 ft_start_window=0,
+                 ft_epochs_done=0, ft_fused_backward=False, reg_lr_multiplier=0.2, preview_checkpoint=None,
+                 preview_checkpoint_cache="auto", preview_int8=False, family_options=None):
     desc = get_family(family)
     if desc is None or not desc.training_ready:
         raise RuntimeError(f"unknown or untrainable family {family!r}")
@@ -571,6 +713,9 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         raise RuntimeError("A Context LoRA trains a LoRA on top of another one; a fine-tune trains the base model "
                            "itself, so the two don't combine. Drop --context_lora_path.")
     driver = desc.load_driver()
+    driver.set_options(dict(family_options or {}))      # before the data: an option may shape the dataset
+    if train_blocks:
+        train_blocks = driver.expand_train_blocks(train_blocks)
     arch = desc.arch_id
     speed_desc = desc.preview_speed() if speed_lora else None
     if speed_lora and speed_desc is None:
@@ -607,10 +752,6 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             logger.info("[slider] network type %s -> LoRA: a slider is a plain LoRA whose strength is the dial",
                         network_type)
             network_type = "lora"
-        if str(optimizer_type).lower().startswith("automagic"):
-            logger.info("[slider] optimizer %s -> adamw8bit: the +1/-1 flip every step reads as noise to an "
-                        "optimizer that sets its own rate", optimizer_type)
-            optimizer_type = "adamw8bit"
         if adaptive_lr or ema_decay or log_per_image_loss or per_image_lr or auto_recaption or warmup_look_outliers:
             logger.info("[slider] adaptive LR, weight averaging and the per-image loss watch are off: they assume "
                         "one target per image, and a slider step has two")
@@ -636,11 +777,9 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         if resume_state_dir:
             raise RuntimeError("[finetune] a fine-tune continues from its saved checkpoint (the Model / --dit), not a "
                                "state folder")
-        from fizgig.families import ft as _ft
-        _why = _ft.source_unfit_reason(dit_path)
+        _why = driver.ft_source_unfit(dit_path)
         if _why:
-            raise RuntimeError(f"[finetune] {os.path.basename(dit_path)} {_why} - a fine-tune trains from, and "
-                               f"saves over, a bf16 model file")
+            raise RuntimeError(f"[finetune] {os.path.basename(dit_path)} {_why}")
         if precision != "nf4" or blocks_to_swap:
             logger.info(f"[finetune] frozen base: NF4 (asked {precision}, swap {blocks_to_swap}) - the fine-tune "
                         f"trunk is always 4-bit, and blocks outside the window stream only if the plan needs it")
@@ -681,6 +820,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         if shared:                           # the dial is shown on what both ends of a pair have in common
             sample_prompts = [shared]
             logger.info("[slider] previews use the pairs' caption: '%s'", shared)
+    if slider:
+        driver.slider_setup(group)           # e.g. H3: still previews unless the pairs are clips
     for ds in group.datasets:
         if getattr(ds, "batch_size", 1) != 1:
             raise RuntimeError(f"{desc.display_name} trains at batch size 1 here (conditioning lengths differ per "
@@ -710,12 +851,20 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                        "train as ordinary images at full LR; remove the is_reg block if that is not what you want")
 
     # ---- Auto precision / swap: planned on an empty card (the description's figures include the preview VAE)
+    auto_precision = precision == "auto"
     if precision == "auto" or blocks_to_swap < 0:
         req = (precision, blocks_to_swap)
         res = user_config.get("general", {}).get("resolution") or [1024, 1024]
         mp = (res[0] * res[1] if isinstance(res, (list, tuple)) else res * res) / 1e6
-        precision, blocks_to_swap, why = quant.plan(desc, driver, precision, blocks_to_swap, megapixels=mp)
-        why += f" at {mp:.2f} MP"
+        own = driver.plan_run(precision, blocks_to_swap, group=group, run=dict(
+            dit_path=dit_path, network_type=network_type, network_dim=network_dim, lokr_factor=lokr_factor,
+            optimizer_type=optimizer_type, training_adapter=training_adapter, context_lora_path=context_lora_path,
+            ema_decay=0.98 if str(ema_decay).lower().startswith("short") else ema_decay))
+        if own is not None:
+            precision, blocks_to_swap, why = own
+        else:
+            precision, blocks_to_swap, why = quant.plan(desc, driver, precision, blocks_to_swap, megapixels=mp)
+            why += f" at {mp:.2f} MP"
         logger.info(f"[precision] Auto plan: {precision}, block swap {blocks_to_swap} ({why}); asked {req}")
 
     # ---- torch.compile (Krea 2's rule), decided here on the empty card as the original does - the free VRAM its
@@ -736,14 +885,24 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                         else ("ENABLED" if do_compile else "off"), why)
         elif why:
             logger.info("[compile] %s", why)
+    if auto_precision and not do_compile:
+        alt = driver.auto_uncompiled_precision(dit_path, precision)
+        if alt and alt != precision:
+            logger.info(f"[precision] Auto: {desc.precision_labels.get(alt, alt)} instead of {precision} - this run "
+                        "is not compiled, and uncompiled that is the faster base for this file")
+            precision = alt
 
     # ---- previews: encode prompts once, keep the VAE ---------------------------------------------
     encoded = neg = vae = ref_imgs = ref_latents = None
-    slider_enc = None
+    slider_enc = slider_neg = None
     if slider_prompts:
         te = driver.load_text_encoder(te_path, device)
         slider_enc = [{k: v[None] for k, v in c.items()}
                       for c in driver.encode_text(te, [str(x) for x in slider_prompts])]
+        if sample_cfg_scale > 1.0 and desc.preview_negative is not None:
+            # the practice pictures render as previews do: the Samples tab's negative (else the family's default)
+            text = sample_negative if sample_negative is not None else desc.preview_negative
+            slider_neg = {k: v[None] for k, v in driver.encode_text(te, [text])[0].items()}
         driver.unload_text_encoder(te)
         del te
         torch.cuda.empty_cache()
@@ -789,20 +948,25 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     if gradient_checkpointing:
         driver.enable_gradient_checkpointing(dit, True)
     net = FamilyLoRA(dit, driver, device=device)
+    driver.prepare_training(dit, group, net)
     if training_adapter:
         n = net.add_file(training_adapter, ADAPTER, training_adapter_strength)
         if n == 0:
             raise RuntimeError(f"Training adapter {training_adapter} matched no {desc.display_name} modules.")
+        driver.frozen_file_added(dit, training_adapter, training_adapter_strength, "adapter")
         logger.info(f"[adapter] training adapter ON ({n} Linears, strength {training_adapter_strength:g}) - frozen, "
                     f"off in previews, not saved into the LoRA")
-    else:
+    elif desc.training_adapter:                 # the family has one and this run goes without it
         logger.warning("[adapter] no training adapter for this run")
     if context_lora_path:
         n = net.add_file(context_lora_path, CONTEXT, context_lora_strength)
+        driver.frozen_file_added(dit, context_lora_path, context_lora_strength, "context")
         logger.info(f"[context] {os.path.basename(context_lora_path)} frozen + active at {context_lora_strength:g} "
                     f"({n} Linears)")
     if speed_lora and encoded is not None:
-        n = net.add_file(speed_lora, SPEED, speed_desc.strength if speed_lora_strength is None else speed_lora_strength)
+        _ss = speed_desc.strength if speed_lora_strength is None else speed_lora_strength
+        n = net.add_file(speed_lora, SPEED, _ss)
+        driver.frozen_file_added(dit, speed_lora, _ss, "speed")
     if speed_lora and encoded is not None and n == 0:
         net.remove(SPEED)
         logger.warning(f"[sample] {os.path.basename(speed_lora)} matched no {desc.display_name} layers "
@@ -822,7 +986,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         ftr = _FineTune(driver, desc, dit, net, dit_path, device, max_train_epochs=None, rotations=ft_rotations,
                         save_every_rotations=ft_save_every_rotations, rotate_every=ft_rotate_every,
                         start_window=ft_start_window, epochs_done=ft_epochs_done, fused=ft_fused_backward,
-                        lr=learning_rate, master_dir=output_dir, mp=_largest_bucket_mp(group))
+                        lr=learning_rate, master_dir=output_dir, mp=_largest_bucket_mp(group), group=group,
+                        max_parts=ft_max_parts)
         max_train_epochs, save_every_n_epochs = ftr.epochs, ftr.save_every
         if ftr.streamer is not None:
             swapped = 1          # blocks stream: previews and caption re-encodes must not park + restore the whole DiT
@@ -851,7 +1016,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             net.set_enabled(SPEED, True)
         dit.eval()
         bank = []
-        with torch.no_grad():
+        with torch.no_grad(), driver.still_renders():     # practice pictures are stills, whatever the previews are
             for i in tqdm(range(len(group)), desc="[slider] practice images"):
                 if use_speed:
                     lat = driver.generate(dit, n_c, slider_bank_res, slider_bank_res, steps=speed_desc.settings.steps,
@@ -859,7 +1024,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                                           sigmas=speed_desc.settings.sigmas, options=speed_desc.settings.options)
                 else:
                     lat = driver.generate(dit, n_c, slider_bank_res, slider_bank_res, steps=desc.preview_steps,
-                                          seed=seed + 1000 + i, cfg=desc.preview_cfg)
+                                          seed=seed + 1000 + i, cfg=sample_cfg_scale,
+                                          **({"neg_cond": slider_neg} if slider_neg is not None else {}))
                 img = driver.decode(vae, lat, slider_bank_res, slider_bank_res)
                 bank.append(driver.encode_images(vae, [np.array(img)])[0][None].cpu())
         if use_speed:
@@ -893,7 +1059,12 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                 optimizer_args = f"{optimizer_args or ''} polarity_history={desc.automagic_sign_window}".strip()
                 logger.info(f"[optimizer] Automagic v3: sign window {desc.automagic_sign_window} (this family's "
                             f"default; set polarity_history in Optimizer Args to override)")
-        optimizer, opt_label = create_optimizer(optimizer_type, opt_params, learning_rate, optimizer_args)
+        _oargs = optimizer_args or ""
+        if (desc.optimizer_weight_decay is not None and "weight_decay" not in _oargs
+                and "adam" in str(optimizer_type or "").lower()):
+            _oargs = (_oargs + f" weight_decay={desc.optimizer_weight_decay:g}").strip()
+        optimizer, opt_label = create_optimizer(optimizer_type, opt_params, learning_rate, _oargs,
+                                                eps_floor_8bit=desc.optimizer_eps_floor_8bit)
     if owns_its_rate(optimizer):        # Automagic v3 sets its own rate: the watcher and schedulers stand down
         if adaptive_lr:
             logger.info("[adaptive_lr] ignored - the optimizer sets its own learning rate")
@@ -908,20 +1079,39 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
             g["lr"] = learning_rate
         logger.info(f"[adaptive_lr] ENABLED - start_lr={learning_rate:.3e} min_lr={adaptive_lr_min:.3e} "
                     f"max_lr={adaptive_lr_max:.3e} (the Learning Rate box is ignored)")
-    adaptive = AdaptiveLR(adaptive_lr_min, adaptive_lr_max) if adaptive_lr else None
+    adaptive = (AdaptiveLR(adaptive_lr_min, adaptive_lr_max, clip_signal=desc.adaptive_lr_clip_signal)
+                if adaptive_lr else None)
     ema = None
-    if ema_decay and ema_decay > 0:
+    if str(ema_decay).lower().startswith("short"):
+        # short-run mode (from H3): the normal ramp never reaches 0.98 on a short run, so the window is sized to the
+        # run instead - decay 1 - 4/steps (about the last quarter), fast ramp
+        from fizgig.training.ema import EMAWeights
+        _total = max(1, int(group.num_train_items) * max(1, int(max_train_epochs)))
+        ema_decay = min(0.995, max(0.5, 1.0 - 4.0 / _total))
+        ema = EMAWeights(net, ema_decay, ramp=2)
+        logger.info(f"[ema] SHORT-RUN mode: {_total} steps -> decay {ema_decay:.3f} (window ~ a quarter of the run), "
+                    f"fast ramp - checkpoints and previews use the average")
+    elif ema_decay and float(ema_decay) > 0:
         from fizgig.training.ema import EMAWeights
         ema = EMAWeights(net, float(ema_decay))
-        logger.info(f"[ema] ON at decay {ema_decay:g} - checkpoints and previews use the running average")
+        logger.info(f"[ema] ON at decay {float(ema_decay):g} - checkpoints and previews use the running average")
 
     start_epoch = global_step = 0
     if resume_state_dir:
-        start_epoch, global_step, meta = _load_state(resume_state_dir, net, optimizer, device, arch)
+        start_epoch, global_step, meta = _load_state(resume_state_dir, net, optimizer, device, arch,
+                                                     untagged_own=desc.resumes_untagged_states, driver=driver)
+        if global_step is None:
+            global_step = start_epoch * steps_per_epoch
         if adaptive:
             adaptive.load_state_dict(meta.get("adaptive_lr_state"))
         if ema is not None and meta["own_state"] and os.path.exists(os.path.join(resume_state_dir, "ema.pt")):
-            ema.load_state_dict(torch.load(os.path.join(resume_state_dir, "ema.pt"), map_location="cpu"))
+            _esd = torch.load(os.path.join(resume_state_dir, "ema.pt"), map_location="cpu")
+            if meta.get("legacy_perm"):     # an older trainer's order, as the optimizer's
+                _sh = [None] * len(_esd["shadow"])
+                for _i, _t in enumerate(_esd["shadow"]):
+                    _sh[meta["legacy_perm"][_i]] = _t
+                _esd["shadow"] = _sh
+            ema.load_state_dict(_esd)
         logger.info(f"[resume] from {resume_state_dir}: continuing at epoch {start_epoch + 1}/{max_train_epochs}")
     from fizgig.families.loss_watch import Watch
     watch = Watch(output_dir, group, user_config, driver, log=log_per_image_loss, per_image_lr=per_image_lr,
@@ -984,6 +1174,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                 md.update({"ss_slider_diff_weight": f"{float(slider_diff_weight):g}"})
         if train_blocks:
             md.update({"ss_train_blocks": ",".join(train_blocks)})
+        md.update(driver.run_metadata())
         return md
 
     def save_lora(path, epoch):
@@ -1006,7 +1197,17 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         run and training carries on, as the original Krea 2 trainer did: a picture is never worth the run."""
         if encoded is None or previews_off[0]:
             return
+        parked = []
         try:
+            if desc.preview_park_optimizer and optimizer is not None:
+                for st in optimizer.state.values():
+                    for k, v in st.items():
+                        if torch.is_tensor(v) and v.is_cuda:
+                            st[k] = v.to("cpu")
+                            parked.append((st, k))
+                if parked:
+                    torch.cuda.empty_cache()
+                    logger.info(f"[preview] {len(parked)} optimizer tensors parked on CPU for the preview")
             _previews(epoch)
         except Exception as exc:
             previews_off[0] = True
@@ -1014,6 +1215,9 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                            f"previews are off for the rest of this run; training continues", exc_info=True)
             gc.collect()
             torch.cuda.empty_cache()
+        finally:
+            for st, k in parked:            # the next training step needs it back, whatever happened
+                st[k] = st[k].to(device)
 
     def _previews(epoch):
         conds, w, h, sd, prompts = encoded, sample_width, sample_height, sample_seed, sample_prompts
@@ -1033,12 +1237,31 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                 conds = encoded
         if not sd:          # seed 0 = a fresh random seed every preview round, as on the other trainers
             sd = random.randint(1, 2 ** 31 - 1)
+        if ckpt_previews is not None and not slider:
+            ck = desc.preview_checkpoint_sampling          # the checkpoint's own recipe (Distilled: 4 steps, no CFG)
+            ckpt_previews.render(dit, net, ema, lambda m, fl, swp: _render_previews(
+                driver, m, fl, vae, conds, sample_dir, epoch, output_name=output_name, steps=ck.steps, cfg=ck.cfg,
+                neg=None, width=w, height=h, seed=sd, speed=ck, swapped=bool(swp), refs=ref_latents))
+            last_prompt[0] = prompts[-1] if prompts else None
+            return
         _render_previews(driver, dit, net, vae, conds, sample_dir, epoch, output_name=output_name,
                          steps=sample_steps, cfg=sample_cfg_scale, neg=neg, width=w, height=h,
                          seed=sd, ema=ema,
                          speed=speed_desc.settings if (speed_lora and speed_desc) else None, lowmem=lowmem,
                          swapped=bool(swapped), refs=ref_latents, slider=slider)
         last_prompt[0] = prompts[-1] if prompts else None
+
+    ckpt_previews = None
+    if preview_checkpoint and encoded is not None:
+        if not desc.train_preview_checkpoint:
+            logger.warning(f"[sample] {desc.display_name} has no checkpoint previews - ignoring --preview_checkpoint")
+        elif not os.path.isfile(preview_checkpoint):
+            logger.warning(f"[sample] preview checkpoint {preview_checkpoint} not found - previews use the training "
+                           f"model")
+        else:
+            ckpt_previews = _CheckpointPreviews(
+                driver, preview_checkpoint, device, preview_checkpoint_cache, preview_int8,
+                context=(context_lora_path, context_lora_strength) if context_lora_path else None)
 
     def state(epoch):
         _save_state(output_dir, output_name, net, optimizer, epoch=epoch, global_step=global_step, arch_id=arch,
@@ -1054,15 +1277,53 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
     progress = tqdm(total=steps_per_epoch * max_train_epochs, initial=global_step, desc="steps", smoothing=0)
     dit.train()
     pending = 0                            # micro-batches backpropagated since the last optimizer step
+    lr_acc = []                            # this window's per-step LR multipliers (driver.step_policy)
+
+    _block_params = {}
+
+    def _step_freeze(blocks):
+        """requires_grad off for the trainable adapter's parameters in `blocks` (block ids) - under a fine-tune, the
+        active window's weights in those blocks; returns them."""
+        if not blocks:
+            return []
+        if ftr is not None:
+            out = [p for p in ftr.be.params_in_blocks(blocks) if p.requires_grad]
+            for p in out:
+                p.requires_grad_(False)
+            return out
+        if not _block_params:
+            from fizgig.families.lora import TRAINABLE as _TR
+            for _full, _w in net.wrapped.items():
+                if _TR in _w.adapters:
+                    _block_params.setdefault(driver.block_of(_full), []).extend(_w.adapters[_TR].parameters())
+        out = [p for b in blocks for p in _block_params.get(b, ())]
+        for p in out:
+            p.requires_grad_(False)
+        return out
 
     def _update():
         nonlocal pending
         if ftr is not None and ftr.fused is not None:
             pending = 0                    # every parameter already stepped from its own gradient hook
+            lr_acc.clear()
             return
         if max_grad_norm:
-            torch.nn.utils.clip_grad_norm_(params, max_grad_norm)
+            pre = torch.nn.utils.clip_grad_norm_(params, max_grad_norm)
+            if adaptive is not None and adaptive.clip_signal:
+                adaptive.record_clip(pre, max_grad_norm)
+        m = sum(lr_acc) / len(lr_acc) if lr_acc else 1.0
+        lr_acc.clear()
+        if optimizer.__class__.__name__ == "Automagic3":
+            m = 1.0                        # Automagic v3 owns the rate (as on the old H3 trainer)
+        if m != 1.0:                       # the window's mean, composed into the LR for this step only (never the loss:
+            held = [g["lr"] for g in optimizer.param_groups]        # Adam is invariant to a constant on the gradient)
+            for g in optimizer.param_groups:
+                g["lr"] = g["lr"] * m
         optimizer.step()
+        if m != 1.0:
+            for g, lr in zip(optimizer.param_groups, held):
+                g["lr"] = lr
+        driver.after_optimizer_step()
         if scheduler is not None:
             scheduler.step()
         if ema is not None:
@@ -1091,16 +1352,25 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                 global_step += 1
                 progress.update(1)
                 continue
+            _skip, _lrm = driver.step_policy(batch, epoch + 1 + (ftr.epochs_done if ftr is not None else 0))
+            if _skip:                          # a retired category ("stop"): no forward, no loss, no record
+                recorder.drop(step=i)
+                global_step += 1
+                progress.update(1)
+                continue
+            lr_acc.append(_lrm)
             latents = batch["latents"].to(device)
             if slider:
                 # both poles backpropagate before the strength flips: checkpointed blocks recompute their forward
-                # in backward, at whatever strength is set then
+                # in backward, at whatever strength is set then. The family's per-step freeze applies as on any step
+                # (H3: the Training mode's block window, never the token refiner)
                 optimizer.zero_grad(set_to_none=True)
+                _frozen_sl = _step_freeze(driver.step_frozen_blocks(batch))
                 if slider_prompts:
                     _l, _t = _prompt_slider_step(driver, dit, net, latents, slider_enc, gen,
                                                  guidance=slider_guidance, min_t=min_timestep, max_t=max_timestep)
                 else:
-                    cond = {k[len("cond__"):]: v.to(device) for k, v in batch.items() if k.startswith("cond__")}
+                    cond = driver.batch_cond(batch, device)
                     _neg = batch.get("latents_control_0")
                     if _neg is None:
                         raise RuntimeError("[slider] this item has no pair image - an image-pair slider needs one in "
@@ -1118,13 +1388,20 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                     finally:
                         net.set_trainable_multiplier(1.0)
                     _t = _info.get("t", 0.5)
+                for _p in _frozen_sl:
+                    _p.requires_grad_(True)
                 loss, _info = torch.tensor(_l), {"t": _t}
             else:
-                cond = {k[len("cond__"):]: v.to(device) for k, v in batch.items() if k.startswith("cond__")}
+                cond = driver.batch_cond(batch, device)
                 refs = [batch[k].to(device) for k in sorted((k for k in batch if k.startswith("latents_control_")),
                                                             key=lambda k: int(k.rsplit("_", 1)[1]))]
+                # per-step routing (a family's step_frozen_blocks): those blocks' trainable weights sit out this
+                # step's forward and backward, so the backward stops at the first trained block and they get no grad
+                _frozen_now = _step_freeze(driver.step_frozen_blocks(batch))
                 loss, _info = driver.training_loss(dit, latents, cond, gen, min_t=min_timestep, max_t=max_timestep,
                                                    **({"refs": refs} if refs else {}))
+                if "lr_mult" in _info and lr_acc:
+                    lr_acc[-1] *= _info["lr_mult"]     # where the step landed (the H3 noise-band LR)
                 if pending == 0 and optimizer is not None:
                     optimizer.zero_grad(set_to_none=True)
                 if reg_keys and all(str(k) in reg_keys for k in batch.get("item_keys") or [None]):
@@ -1133,6 +1410,8 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
                     mult = watch.multiplier(batch)  # per-image LR (batch size 1): the raw loss is still what's recorded
                 _scaled = loss * mult if mult != 1.0 else loss
                 (_scaled / accum if accum > 1 else _scaled).backward()
+                for _p in _frozen_now:
+                    _p.requires_grad_(True)
             pending += 1
             if pending >= accum:
                 _update()
@@ -1210,8 +1489,7 @@ def train_family(family, dit_path, dataset_config, output_dir, output_name, *, n
         optimizer = params = None
         ftr.park()
         save_lora(final, max_train_epochs)
-        if hasattr(ftr.rot.master, "cleanup"):
-            ftr.rot.master.cleanup()          # the final checkpoint holds everything the scratch did
+        ftr.be.cleanup()                  # the final checkpoint holds everything the scratch did
         if sample_every_n_epochs:
             previews(max_train_epochs + ftr.epochs_done)
         logger.info(f"Fine-tune complete -> {final}")
@@ -1279,6 +1557,13 @@ def setup_parser():
     p.add_argument("--sample_negative", default=None)
     p.add_argument("--sample_at_first", action="store_true")
     p.add_argument("--sample_seed", type=int, default=42)
+    p.add_argument("--family_option", action="append", default=[], metavar="KEY=VALUE",
+                   help="a family's own training option (the driver's set_options), e.g. photo_blocks=20-49")
+    p.add_argument("--preview_checkpoint", default=None,
+                   help="Render training previews on this checkpoint (families with train_preview_checkpoint)")
+    p.add_argument("--preview_checkpoint_cache", default="auto", choices=("auto", "on", "off"),
+                   help="Keep the preview checkpoint in system RAM between epochs")
+    p.add_argument("--preview_int8", action="store_true", help="INT8 matmuls on the preview checkpoint")
     p.add_argument("--sample_reference", default=None, help="Edit previews: the photo every preview prompt edits")
     p.add_argument("--sample_image", default=None,
                    help="A picture previews see through the text encoder's vision path (families with preview_image)")
@@ -1311,6 +1596,8 @@ def setup_parser():
     p.add_argument("--ft_save_every_rotations", type=int, default=1,
                    help="checkpoint (and preview) every N rotations; never mid-rotation")
     p.add_argument("--ft_rotate_every", type=int, default=1, help="epochs each window trains before the next")
+    p.add_argument("--ft_max_parts", type=int, default=0,
+                   help="most parts per fine-tune window (0 = as many as fit; 1 = one part per window, most headroom)")
     p.add_argument("--ft_start_window", type=int, default=0, help="continuing: the window to start at")
     p.add_argument("--ft_epochs_done", type=int, default=0, help="continuing: epochs already trained (numbering)")
     p.add_argument("--ft_fused_backward", action="store_true",
@@ -1319,7 +1606,8 @@ def setup_parser():
                    help="fine-tune: LR multiplier for images in a dataset block marked is_reg = true")
     p.add_argument("--compile_blocks", default="auto", choices=("auto", "on", "outside", "off"),
                    help="torch.compile the DiT blocks (families with compiles=True); auto weighs warm-up vs run length")
-    p.add_argument("--ema_decay", type=float, default=0.0)
+    p.add_argument("--ema_decay", type=lambda v: v if str(v).lower().startswith("short") else float(v), default=0.0,
+                   help="EMA decay (0.98), 0 = off, or 'short' (sized to the run)")
     p.add_argument("--optimizer_type", default="adamw")
     p.add_argument("--optimizer_args", default="")
     p.add_argument("--lr_scheduler", default="constant",
@@ -1376,8 +1664,11 @@ def main():
         lr_scheduler_num_cycles=a.lr_scheduler_num_cycles, lr_scheduler_power=a.lr_scheduler_power,
         gradient_accumulation_steps=a.gradient_accumulation_steps, compile_blocks=a.compile_blocks,
         finetune=a.finetune, ft_rotations=a.ft_rotations, ft_save_every_rotations=a.ft_save_every_rotations,
-        ft_rotate_every=a.ft_rotate_every, ft_start_window=a.ft_start_window, ft_epochs_done=a.ft_epochs_done,
-        ft_fused_backward=a.ft_fused_backward, reg_lr_multiplier=a.reg_lr_multiplier)
+        ft_rotate_every=a.ft_rotate_every, ft_max_parts=a.ft_max_parts, ft_start_window=a.ft_start_window, ft_epochs_done=a.ft_epochs_done,
+        ft_fused_backward=a.ft_fused_backward, reg_lr_multiplier=a.reg_lr_multiplier,
+        preview_checkpoint=a.preview_checkpoint, preview_checkpoint_cache=a.preview_checkpoint_cache,
+        preview_int8=a.preview_int8,
+        family_options=dict(o.split("=", 1) for o in a.family_option if "=" in o))
 
 
 if __name__ == "__main__":

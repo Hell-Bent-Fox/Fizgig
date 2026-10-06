@@ -33,6 +33,22 @@ http://www.apache.org/licenses/LICENSE-2.0
 
 ---
 
+## sd-scripts — Apache License 2.0
+
+Upstream: https://github.com/kohya-ss/sd-scripts
+Copyright the sd-scripts authors (kohya-ss and contributors); the model code it
+carries is NVIDIA CORPORATION & AFFILIATES' (Apache-2.0).
+
+- `src/fizgig/anima/model.py` (Anima's DiT: Cosmos-Predict2 MiniTrainDIT and the
+  LLM adapter), adapted from `library/anima_models.py` and modified: PyTorch SDPA
+  attention, plain non-reentrant gradient checkpointing, no block swap / CPU
+  offload.
+
+Licensed under the Apache License, Version 2.0:
+http://www.apache.org/licenses/LICENSE-2.0
+
+---
+
 ## ai-toolkit (Ostris, LLC) — MIT License
 
 Upstream: https://github.com/ostris/ai-toolkit

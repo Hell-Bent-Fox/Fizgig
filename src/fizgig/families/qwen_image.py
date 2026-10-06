@@ -5,7 +5,7 @@ RESEARCH_qwen_image_2_1_*.md files). Sources are cited per value. Training entry
 the family is trained through its driver (qwen_image21/driver.py) by the generic cache + train entry points.
 """
 from fizgig.families.description import (
-    FamilyDescription, LoRAFormat, ModelFile, SamplingSettings, SpeedLoRA,
+    GENERAL_NEGATIVE, FamilyDescription, LoRAFormat, ModelFile, SamplingSettings, SpeedLoRA,
 )
 
 _CARD = "https://huggingface.co/Qwen/Qwen-Image-2.1"
@@ -152,6 +152,8 @@ QWEN_IMAGE_21 = FamilyDescription(
     # oversaturates (Comfy-Org/Qwen-Image-2.1 discussions, comfyui-wiki, Oct 2026)
     preview_cfg_note="1 = no CFG (the reference default). A little CFG, about 1.5 to 3, gives better previews for "
                      "many people; higher tends to oversaturate. Above 1 the negative prompt applies.",
+    int8_attention=True,              # workbench renders: comfy-kitchen's INT8 attention
+    activation_cache=True,            # Turbo Preview: step-1 replay, identical to a full render
     finetune=True,                  # the driver's ft_spec (families/ft.py)
     # measured 28 Sep 2026: 40-48 pairs learned a grade on held-out photos in 6-8 epochs at 0.5 MP
     edit_note=("About 40 pairs (20 at least; more if your photos vary a lot). Each photo 1 MP or larger, e.g. "
@@ -211,6 +213,7 @@ QWEN_IMAGE_21 = FamilyDescription(
     preview_reset="turbo-off-25-steps",
     preview_steps=25,
     preview_cfg=1.0,
+    preview_negative=GENERAL_NEGATIVE,
     preview_width=1024,
     preview_height=1024,
 

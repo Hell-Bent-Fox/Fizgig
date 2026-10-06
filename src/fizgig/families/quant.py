@@ -19,7 +19,7 @@ import torch
 
 logger = logging.getLogger(__name__)
 
-PRECISIONS = ("bf16", "int8", "nf4")
+PRECISIONS = ("bf16", "int8", "nf4", "hqq")       # hqq: a family whose driver loads it (H3)
 
 
 def _targets(dit, driver):
@@ -83,6 +83,9 @@ def load_base(driver, path, device, precision="bf16", blocks_to_swap=0, supports
     """The family's DiT at `precision`, optionally block-swapped. NF4 cannot swap (its weights are not .weight), so
     swap is dropped for it; a family whose driver has no block swap ignores the request. Returns (dit, swapped)."""
     swap = int(blocks_to_swap or 0)
+    own = driver.load_planned(path, device, precision, swap)
+    if own is not None:                               # the driver loads its own tiers (H3: ConvRot int8 / NF4 / HQQ rings)
+        return own
     if swap and precision == "nf4":
         logger.info("[block swap] off: NF4 weights cannot stream (the 4-bit base is small enough not to need it)")
         swap = 0
@@ -94,6 +97,9 @@ def load_base(driver, path, device, precision="bf16", blocks_to_swap=0, supports
         elif swap > cap:
             logger.info(f"[block swap] {swap} requested, {cap} is the maximum")
             swap = cap
+    if getattr(driver, "loads_quantized", False):     # the file is already the base precision
+        dit = driver.load_dit(path, device)
+        return dit, 0
     dit = driver.load_dit(path, "cpu" if (swap or precision != "bf16") else device)
     quantize(dit, driver, precision, device, store_device="cpu" if swap else None)
     if swap:

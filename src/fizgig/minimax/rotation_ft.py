@@ -277,7 +277,7 @@ def ft_clip_activation_gb(latent_t, spatial_mp):
     return act, _FT_CLIP_FRAG_MARGIN_GB
 
 
-def plan_h3_ft_windows(usable_gb, subset=None, n_blocks=50, allow_stream=True):
+def plan_h3_ft_windows(usable_gb, subset=None, n_blocks=50, allow_stream=True, max_parts=0):
     """The H3 component-window plan for a VRAM budget: (windows, stream, reasons).
 
     A thin wrapper over the family-agnostic plan_component_windows with H3's calibrated
@@ -292,7 +292,12 @@ def plan_h3_ft_windows(usable_gb, subset=None, n_blocks=50, allow_stream=True):
         {p: H3_COMPONENT_GB_PER_BLOCK[p] for p in H3_COMPONENT_PREFIXES},
         overhead_gb=_FT_OVERHEAD_GB, trunk_gb_per_block=_FT_NF4_GB_PER_BLOCK,
         slots_gb=_FT_STREAM_SLOTS_GB, allow_stream=allow_stream,
-        max_sane_windows=_FT_MAX_SANE_WINDOWS)
+        max_sane_windows=_FT_MAX_SANE_WINDOWS,
+        # packed windows: every part at once planned 29.0 of 29.4 GB on a 5090 (5 Oct) and spilled past 32 GB; with
+        # +2 GB the [out_proj + fc1] window (27.5 planned, 28.1-28.4 GB peaks) ran at 1.2 s/step once and spilled
+        # (17.9 s/step) on a busier desktop. So the plain sum of the parts plus 4 GB. Photo peaks don't grow with
+        # resolution (0.25 MP and 1 MP measured the same), so stills need no megapixel term
+        trunk_credit=False, pack_margin_gb=4.0, max_parts=max_parts)
 
 
 class H3NF4Rotator(BlockRotator):

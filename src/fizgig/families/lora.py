@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 
 TRAINABLE = "lora"
-_PREFIXES = ("transformer.", "diffusion_model.", "model.diffusion_model.", "base_model.model.", "")
+_PREFIXES = ("transformer.", "unet.", "diffusion_model.", "model.diffusion_model.", "base_model.model.", "")
 
 
 class LoRAFactor(nn.Linear):
@@ -62,6 +62,23 @@ class LoKR(nn.Module):
         return torch.kron(self.lokr_w1.float(), self.lokr_w2.float())
 
 
+class LoHa(nn.Module):
+    """A frozen LoHa (Hadamard) adapter: delta = (w1_a @ w1_b) * (w2_a @ w2_b), materialised per forward as the old
+    loaders' LoHaInfModule does (the Hadamard product does not factor); the scale is applied by the LoRALinear."""
+
+    def __init__(self, w1a, w1b, w2a, w2b):
+        super().__init__()
+        self.hada_w1_a, self.hada_w1_b = nn.Parameter(w1a.clone()), nn.Parameter(w1b.clone())
+        self.hada_w2_a, self.hada_w2_b = nn.Parameter(w2a.clone()), nn.Parameter(w2b.clone())
+
+    def delta(self):
+        return (self.hada_w1_a.float() @ self.hada_w1_b.float()) * (self.hada_w2_a.float() @ self.hada_w2_b.float())
+
+    def forward(self, x):
+        w = (self.hada_w1_a @ self.hada_w1_b) * (self.hada_w2_a @ self.hada_w2_b)
+        return x @ w.to(x.dtype).transpose(-1, -2)
+
+
 class LoRALinear(nn.Module):
     def __init__(self, base: nn.Linear):
         super().__init__()
@@ -69,7 +86,7 @@ class LoRALinear(nn.Module):
         self.adapters = nn.ModuleDict()
         self.scales = {}
 
-    def add(self, name, rank, alpha, trainable, A=None, B=None, strength=1.0):
+    def add(self, name, rank, alpha, trainable, A=None, B=None, strength=1.0, trainable_dtype=torch.float32):
         a = LoRAFactor(self.base.in_features, rank, bias=False)
         b = LoRAFactor(rank, self.base.out_features, bias=False)
         if A is not None:
@@ -79,28 +96,85 @@ class LoRALinear(nn.Module):
             nn.init.kaiming_uniform_(a.weight, a=math.sqrt(5))
             nn.init.zeros_(b.weight)
         dev = getattr(self, "home", None) or self.base.weight.device   # a swapped block's base may sit on CPU
-        dt = torch.float32 if trainable else torch.bfloat16
+        dt = trainable_dtype if trainable else torch.bfloat16
         a.to(dev, dt).requires_grad_(trainable)
         b.to(dev, dt).requires_grad_(trainable)
         self.adapters[name] = nn.Sequential(a, b)
         self.scales[name] = alpha / rank * strength
 
-    def add_lokr(self, name, trainable, factor=8, w1=None, w2=None, scale=1.0):
+    def add_lokr(self, name, trainable, factor=8, w1=None, w2=None, scale=1.0, trainable_dtype=torch.float32):
         ad = LoKR(self.base.in_features, self.base.out_features, factor, w1, w2)
         dev = getattr(self, "home", None) or self.base.weight.device
-        ad.to(dev, torch.float32 if trainable else torch.bfloat16).requires_grad_(trainable)
+        ad.to(dev, trainable_dtype if trainable else torch.bfloat16).requires_grad_(trainable)
         self.adapters[name] = ad
         self.scales[name] = scale
+
+    def add_loha(self, name, w1a, w1b, w2a, w2b):
+        ad = LoHa(w1a, w1b, w2a, w2b)
+        dev = getattr(self, "home", None) or self.base.weight.device
+        ad.to(dev, torch.bfloat16).requires_grad_(False)
+        self.adapters[name] = ad
+        self.scales[name] = 1.0
 
     def forward(self, x):
         out = self.base(x)
         for n, ad in self.adapters.items():
             s = self.scales.get(n, 0.0)
             if s:
-                if isinstance(ad, LoKR):
+                if isinstance(ad, (LoKR, LoHa)):
                     out = out + (s * ad(x)).to(out.dtype)
-                else:
-                    out = out + (s * ad(x.to(ad[0].weight.dtype))).to(out.dtype)
+                    continue
+                lx = ad(x.to(ad[0].weight.dtype))
+                if lx.dtype == out.dtype:
+                    # a frozen adapter in the model's dtype: ONE fused add, the strength formed in fp32 and the sum
+                    # rounded once - the old loaders' LoRAInfModule epilogue, so a preview at strength 0.75 matches them
+                    out = torch.add(out, lx, alpha=float(s))
+                else:                                # the fp32 trainable adapter: as before
+                    out = out + (s * lx).to(out.dtype)
+        return out
+
+
+class LoRAConv(nn.Module):
+    """A frozen LoRA on a Conv2d (LoCon, and speed LoRAs such as LCM / Lightning that also patch a UNet's resnets): down
+    = a conv with the base's kernel, stride and padding to `rank` channels, up = a 1x1 conv back, kohya's layout. The
+    same adapters / scales interface as LoRALinear, so loading, strengths, block switches and baking treat it alike.
+    Never trained: training targets the block map's Linears."""
+
+    def __init__(self, base: nn.Conv2d):
+        super().__init__()
+        self.base = base
+        self.adapters = nn.ModuleDict()
+        self.scales = {}
+
+    @property
+    def in_features(self):
+        return self.base.in_channels
+
+    @property
+    def out_features(self):
+        return self.base.out_channels
+
+    def add(self, name, rank, alpha, trainable, A=None, B=None, strength=1.0, trainable_dtype=torch.float32):
+        if trainable or A is None:
+            raise ValueError("a conv LoRA is frozen-only (loaded from a file)")
+        bc = self.base
+        down = nn.Conv2d(bc.in_channels, rank, tuple(A.shape[2:]) if A.dim() == 4 else 1, stride=bc.stride,
+                         padding=bc.padding if A.dim() == 4 and tuple(A.shape[2:]) == tuple(bc.kernel_size) else 0,
+                         dilation=bc.dilation, bias=False)
+        up = nn.Conv2d(rank, bc.out_channels, 1, bias=False)
+        down.weight.data.copy_(A.reshape(down.weight.shape))
+        up.weight.data.copy_(B.reshape(up.weight.shape))
+        dev = getattr(self, "home", None) or bc.weight.device
+        ad = nn.Sequential(down, up).to(dev, torch.bfloat16).requires_grad_(False)
+        self.adapters[name] = ad
+        self.scales[name] = alpha / rank * strength
+
+    def forward(self, x):
+        out = self.base(x)
+        for n, ad in self.adapters.items():
+            s = self.scales.get(n, 0.0)
+            if s:
+                out = torch.add(out, ad(x.to(ad[0].weight.dtype)).to(out.dtype), alpha=float(s))
         return out
 
 
@@ -115,7 +189,8 @@ class FamilyLoRA:
         self.device = torch.device(device) if device is not None else None
         self.desc = driver.description
         self.targets = set(driver.lora_target_names(dit))
-        self.linears = {n for n, m in dit.named_modules() if isinstance(m, nn.Linear)}
+        # every module a LoRA file can adapt: Linears, and Conv2d for frozen files (LoCon / UNet speed LoRAs)
+        self.linears = {n for n, m in dit.named_modules() if isinstance(m, (nn.Linear, nn.Conv2d))}
         self._flat = {n.replace(".", "_"): n for n in self.linears}
         self.wrapped = {}
         for full in sorted(self.targets):
@@ -139,7 +214,7 @@ class FamilyLoRA:
         as Fizgig's Krea 2 always saved it)."""
         f = self.desc.lora
         if f.kohya:
-            return f"diffusion_model.{full}" if lokr else f"lora_unet_{full.replace('.', '_')}"
+            return f"diffusion_model.{full}" if lokr and not f.lokr_kohya_stems else f"lora_unet_{full.replace('.', '_')}"
         return f"{f.file_prefix}{full}"
 
     def _wrap(self, full):
@@ -150,9 +225,12 @@ class FamilyLoRA:
         parent_name, _, leaf = full.rpartition(".")
         parent = self.dit.get_submodule(parent_name) if parent_name else self.dit
         child = getattr(parent, leaf, None)
-        if not isinstance(child, nn.Linear):
+        if isinstance(child, nn.Conv2d):
+            w = LoRAConv(child)
+        elif isinstance(child, nn.Linear):
+            w = LoRALinear(child)
+        else:
             return None
-        w = LoRALinear(child)
         if self.device is not None:
             w.home = self.device
         setattr(parent, leaf, w)
@@ -162,15 +240,17 @@ class FamilyLoRA:
     # ---- trainable ------------------------------------------------------------------------------
     def add_trainable(self, rank, alpha, blocks=None, kind="lora", factor=8):
         """blocks: optional set of block ids to train (None = every target). kind "lokr": a Kronecker adapter per
-        Linear (w1 about factor x factor, full w2); rank / alpha do not apply to it."""
+        Linear (w1 about factor x factor, full w2); rank / alpha do not apply to it. The adapter is fp32 unless the
+        description's trainable_dtype says otherwise (H3's old trainer trained its LoRA in bf16)."""
+        tdt = {"bf16": torch.bfloat16}.get(getattr(self.desc, "trainable_dtype", "fp32"), torch.float32)
         for full, w in self.wrapped.items():
             if full not in self.targets:
                 continue                    # extra Linears wrapped for a frozen file are never trained
             if blocks is None or self.driver.block_of(full) in blocks:
                 if kind == "lokr":
-                    w.add_lokr(TRAINABLE, True, factor)
+                    w.add_lokr(TRAINABLE, True, factor, trainable_dtype=tdt)
                 else:
-                    w.add(TRAINABLE, rank, alpha, True)
+                    w.add(TRAINABLE, rank, alpha, True, trainable_dtype=tdt)
         self.rank, self.alpha, self.kind, self.factor = rank, alpha, kind, factor
         self._trainable_scale = {full: w.scales[TRAINABLE] for full, w in self.wrapped.items()
                                  if TRAINABLE in w.adapters}
@@ -214,13 +294,23 @@ class FamilyLoRA:
     def read_file(self, path):
         """-> {module name: entry} for every Linear the file adapts in this model. A LoRA entry is
         ("lora", A, B, scale) with scale = alpha / rank; a LoKR entry is ("lokr", w1, w2, scale) with low-rank factors
-        multiplied out and the LyCORIS scale rule (lycoris_scale_from_keys). LoHa is refused."""
+        multiplied out and the LyCORIS scale rule (lycoris_scale_from_keys). A LoHa entry is
+        ("loha", (w1_a, w1_b), (w2_a, w2_b), scale), the LyCORIS scale rule as for LoKR."""
         from safetensors.torch import load_file
-        sd = load_file(path)
-        if any(re.search(r"\.hada_w1_a(\.|$)", k) for k in sd):
-            raise ValueError(f"{path}: LoHa files are not supported by the standard layer yet")
+        sd = self.driver.convert_lora_state_dict(load_file(path))
         out = {}
         for key in sd:
+            m = re.match(r"(.+)\.hada_w1_a$", key)
+            if m:
+                stem = m.group(1)
+                full = self._module_for(stem)
+                if full is None:
+                    continue
+                keys = {k[len(stem) + 1:]: v for k, v in sd.items() if k.startswith(stem + ".")}
+                from fizgig.networks.lora import lycoris_scale_from_keys
+                out[full] = ("loha", (keys["hada_w1_a"], keys["hada_w1_b"]), (keys["hada_w2_a"], keys["hada_w2_b"]),
+                             lycoris_scale_from_keys(keys))
+                continue
             m = re.match(r"(.+)\.lokr_w1(_a)?$", key)
             if m:
                 stem = m.group(1)
@@ -233,19 +323,26 @@ class FamilyLoRA:
                 from fizgig.networks.lora import lycoris_scale_from_keys
                 out[full] = ("lokr", w1, w2, lycoris_scale_from_keys(keys))
                 continue
-            m = re.match(r"(.+)\.(lora_A|lora_down)\.weight$", key)
+            m = re.match(r"(.+)\.(lora_A|lora_down|lora\.down)\.weight$", key)
             if not m:
                 continue
             stem, down = m.group(1), m.group(2)
-            up = "lora_B" if down == "lora_A" else "lora_up"
+            up = {"lora_A": "lora_B", "lora_down": "lora_up", "lora.down": "lora.up"}[down]
             if f"{stem}.{up}.weight" not in sd:
-                continue
-            full = self._module_for(stem)
-            if full is None:
                 continue
             A, B = sd[key], sd[f"{stem}.{up}.weight"]
             alpha = sd.get(f"{stem}.alpha")
-            out[full] = ("lora", A, B, (float(alpha.item()) if alpha is not None else float(A.shape[0])) / A.shape[0])
+            scale = (float(alpha.item()) if alpha is not None else float(A.shape[0])) / A.shape[0]
+            full = self._module_for(stem)
+            if full is None:
+                # a tensor the model file fuses (FTSpec.file_layout): each Linear takes its rows of the up matrix
+                from fizgig.families.lorafile import fused_parts
+                for ms, pt, n in fused_parts(self.driver, stem):
+                    fm = self._module_for(ms)
+                    if fm is not None:
+                        out[fm] = ("lora", A, B.chunk(n, dim=0)[pt], scale)
+                continue
+            out[full] = ("lora", A, B, scale)
         return out
 
     # ---- frozen adapters ------------------------------------------------------------------------
@@ -258,7 +355,15 @@ class FamilyLoRA:
             w = self._wrap(full)
             if w is None:
                 continue
-            if kind == "lokr":
+            if isinstance(w, LoRAConv):
+                if kind != "lora" or P.shape[1] != w.in_features or Q.shape[0] != w.out_features:
+                    continue                          # LoKR / LoHa on convs are not read
+                w.add(name, P.shape[0], P.shape[0], False, P, Q)
+            elif kind == "loha":
+                if P[0].shape[0] != w.base.out_features or P[1].shape[1] != w.base.in_features:
+                    continue
+                w.add_loha(name, P[0], P[1], Q[0], Q[1])
+            elif kind == "lokr":
                 if P.shape[0] * Q.shape[0] != w.base.out_features or P.shape[1] * Q.shape[1] != w.base.in_features:
                     continue
                 w.add_lokr(name, False, w1=P, w2=Q)
@@ -363,7 +468,8 @@ class FamilyLoRA:
         def params(full):
             ad = self.wrapped[full].adapters[name]
             return (ad.lokr_w1, ad.lokr_w2) if isinstance(ad, LoKR) else (ad[0].weight, ad[1].weight)
-        same = set(new) == set(st["alpha_rank"]) and all(
+        same = set(new) == set(st["alpha_rank"]) and not any(
+            new[f][0] == "loha" or isinstance(self.wrapped[f].adapters[name], LoHa) for f in new) and all(
             (new[f][0] == "lokr") == isinstance(self.wrapped[f].adapters[name], LoKR)
             and params(f)[0].shape == new[f][1].shape and params(f)[1].shape == new[f][2].shape for f in new)
         if same:
@@ -423,7 +529,7 @@ class FamilyLoRA:
             As, Bs = [], []
             for n, sc in live:
                 ad = w.adapters[n]
-                if isinstance(ad, LoKR):          # mixed with a LoRA: SVD the Kronecker delta to rank <= 64
+                if isinstance(ad, (LoKR, LoHa)):   # Kronecker / Hadamard delta: SVD to a rank <= 64 LoRA
                     U, S, Vh = torch.linalg.svd(ad.delta(), full_matrices=False)
                     k = min(64, S.numel())
                     root = S[:k].sqrt()

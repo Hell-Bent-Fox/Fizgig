@@ -43,13 +43,14 @@ def weight_stats(desc, lora_path):
     """-> {"blocks": {block: {"norm", "retained": {k: share}}}, "retained": {k: share}, "max_rank", "modules",
     "rank_for": {0.9/0.95/0.99: k}}. Block ids follow the family's block map; modules outside it are OUTSIDE."""
     from safetensors import safe_open
-    from fizgig.families.lorafile import block_of, lokr_factors, lokr_modules, lora_pairs
+    from fizgig.families.lorafile import (block_of, get_up, loha_delta, loha_modules, lokr_factors, lokr_modules,
+                                          lora_pairs)
     blocks = block_of(desc)
     mods = []                                    # (block, singular values, rank)
     with safe_open(lora_path, "pt") as f:
         for mod, down, up, alpha in lora_pairs(desc, f.keys()):
             d = f.get_tensor(down).float()
-            u = f.get_tensor(up).float()
+            u = get_up(f, up).float()
             d, u = d.reshape(d.shape[0], -1), u.reshape(u.shape[0], -1)
             r = d.shape[0]
             a = float(f.get_tensor(alpha).float().reshape(-1)[0]) if alpha else float(r)
@@ -58,6 +59,9 @@ def weight_stats(desc, lora_path):
             w1, w2, scale = lokr_factors(f, stem)
             s = torch.outer(torch.linalg.svdvals(w1.double()), torch.linalg.svdvals(w2.double())).flatten()
             s = torch.sort(s, descending=True).values * scale
+            mods.append((blocks.get(mod, OUTSIDE), s, int((s > s[0] * 1e-6).sum()) if len(s) else 0))
+        for mod, stem in loha_modules(desc, f.keys()):
+            s = torch.linalg.svdvals(loha_delta(f, stem).double())
             mods.append((blocks.get(mod, OUTSIDE), s, int((s > s[0] * 1e-6).sum()) if len(s) else 0))
     if not mods:
         raise RuntimeError(f"No LoRA modules found — is this a {desc.display_name} LoRA?")
@@ -168,6 +172,9 @@ def run_ablation(engine, *, prompt, class_prompt="", seeds=(1,), width=768, heig
            "seeds": list(seeds), "size": [width, height], "prompt": prompt, "class_prompt": class_prompt,
            "thumbs": {}, "pics": {}, "scores": {}}
     state = engine.default_state(width, height)
+    # exact attention for a measurement: comfy-kitchen's INT8 kernel (~1.6% per call) would ride on every score
+    _i8a_was = getattr(engine, "int8_attention", False)
+    engine.int8_attention = False
     try:
         for kind, text in prompts:
             res["pics"][kind], res["scores"][kind], res["thumbs"][kind] = {}, {}, {}
@@ -186,6 +193,7 @@ def run_ablation(engine, *, prompt, class_prompt="", seeds=(1,), width=768, heig
                     if on_progress:
                         on_progress(done, total, kind, cid)
     finally:
+        engine.int8_attention = _i8a_was
         engine.net.set_enabled(PRIMARY, True)
         engine.net.set_outside(PRIMARY, True)
         for bs in state.blocks.values():
@@ -289,7 +297,8 @@ th{color:#9aa0aa;font-weight:600;} .pill{display:inline-block;padding:2px 9px;bo
 """
 
 
-_CAT_COLOR = {"identity": "#70AD47", "look": "#5B9BD5", "style_ident_overlap": "#5BB3A6"}   # Repair Studio's
+_CAT_COLOR = {"identity": "#70AD47", "look": "#5B9BD5", "style_ident_overlap": "#5BB3A6",     # Repair Studio's
+              "style_composition": "#5B9BD5", "ident_details_overlap": "#B8A547", "details": "#ED7D31"}
 
 
 def _pct(x):
@@ -340,7 +349,7 @@ def _img(b64):
 
 def write_report(desc, lora_path, stats, abl, output_html, labels):
     """HTML report + Repair Studio sidecar. abl may be None (weights only)."""
-    from fizgig.profiler.visualize import compute_lora_hash
+    from fizgig.utils.lora_files import compute_lora_hash
     name = os.path.basename(lora_path)
     lora_hash = compute_lora_hash(lora_path)
     lab = lambda b: labels.get(b, "Outside the blocks" if b == OUTSIDE else b)

@@ -86,13 +86,14 @@ class RotationSchedule:
         entry is a bare prefix string (full depth) or a (prefix, lo, hi) depth-split."""
         w = self.window_at(epoch)
         if self.mode == "component":
-            return [self.components[w]]
+            c = self.components[w]
+            return list(c) if isinstance(c, list) else [c]     # a list: several parts trained together
         start = w * self.active
         return sorted(self.order[start:start + self.active])
 
     def describe(self) -> str:
         if self.mode == "component":
-            _names = [c if isinstance(c, str) else f"{c[0]}@{c[1]}-{c[2]}"
+            _names = ["+".join(c) if isinstance(c, list) else c if isinstance(c, str) else f"{c[0]}@{c[1]}-{c[2]}"
                       for c in self.components]
             return (f"component windows {_names} across all {self.n_blocks} blocks, "
                     f"rotating every {self.rotate_every} epoch(s) — {self.n_windows} windows, "
@@ -144,19 +145,31 @@ def snap_ft_epochs(max_epochs, cycle_epochs, start_window=0, rotate_every=1):
 
 def plan_component_windows(usable_gb, span, n_blocks, comp_gb, overhead_gb,
                            trunk_gb_per_block, slots_gb, allow_stream=True,
-                           max_sane_windows=12):
+                           max_sane_windows=12, spans=None, trunk_credit=True, pack_margin_gb=0.0,
+                           max_parts=0):
     """The family-agnostic component-window plan: (windows, stream, reasons).
 
     comp_gb: ordered (prefix -> bf16 GB per block). windows: RotationSchedule component
     entries — bare prefixes where the full span fits, (prefix, lo, hi) depth-splits where
-    it doesn't. stream: True when the frozen out-of-window blocks must stream from CPU to
+    it doesn't, and lists of prefixes where several whole parts fit one window (the fewest
+    windows the card holds; one list of every part = the whole model at once). stream: True when the frozen out-of-window blocks must stream from CPU to
     fit. Returns (None, stream, reasons) when the budget can't run FT at all.
 
     Depth-splitting trades the full-depth-per-window geometry (what makes component mode
     learn fast) for fit; streaming further trades step speed (PCIe) for residency. Both
     families feed their own calibrated constants; the trainer's per-window peak logs are
-    what refine them. Pure so the tier tables are pinnable without a card."""
+    what refine them. Pure so the tier tables are pinnable without a card.
+
+    spans: prefix -> the blocks that hold it, where a component lives in some blocks only (Klein: img_attn in the
+    double blocks, linear1 in the single ones); comp_gb is then per block OF ITS SPAN, and a depth-split divides
+    that span, never into blocks without it. trunk_credit / pack_margin_gb: how a window of several parts is sized
+    (H3's backend measured over the credited plan, so it packs without the credit and with a margin). max_parts:
+    the user's cap on parts per window (0 = as many as fit; 1 = one part per window, the most headroom)."""
     span = sorted(int(b) for b in span)
+    spans = {p: sorted(int(b) for b in s) for p, s in (spans or {}).items()}
+
+    def span_of(prefix):
+        return spans.get(prefix, span)
     usable = float(usable_gb)
     prefixes = list(comp_gb)
     fattest = max(comp_gb.values())
@@ -174,12 +187,42 @@ def plan_component_windows(usable_gb, span, n_blocks, comp_gb, overhead_gb,
         max_len = int(max_gb / g)
         if max_len < 1:
             return None
-        k = (len(span) + max_len - 1) // max_len
-        per = (len(span) + k - 1) // k
-        chunks = [span[i:i + per] for i in range(0, len(span), per)]
+        sp = span_of(prefix)
+        k = (len(sp) + max_len - 1) // max_len
+        per = (len(sp) + k - 1) // k
+        chunks = [sp[i:i + per] for i in range(0, len(sp), per)]
         if k == 1:
             return [prefix]                       # full span — bare prefix, full depth
         return [(prefix, c[0], c[-1]) for c in chunks]
+
+    # Packed plan: as many whole parts per window as fit, the fewest windows first. A trained Linear drops its
+    # quantised copy, so a window of several parts is credited their share of the trunk (measured 5 Oct at 1 MP:
+    # Anima and Qwen 2.1 trained whole within 0.2 / 0.7 GB under this); a one-part window keeps the calibrated
+    # overhead + its weights.
+    full = {p: len(span_of(p)) * comp_gb[p] for p in prefixes}
+    n_span = len(set().union(*spans.values())) if spans else len(span)
+    per_gb = trunk_gb_per_block * n_span / max(1e-9, sum(full.values()))    # trunk GB per bf16 GB trained
+
+    def need(group):
+        w = sum(full[p] for p in group)
+        if len(group) == 1:
+            return overhead_gb + w
+        return overhead_gb + w - (per_gb * w if trunk_credit else 0.0) + pack_margin_gb
+
+    groups = []
+    for p in sorted(prefixes, key=lambda q: -full[q]):        # first-fit decreasing
+        for g in groups:
+            if (not max_parts or len(g) < max_parts) and need(g + [p]) <= usable:
+                g.append(p)
+                break
+        else:
+            groups.append([p])
+    if len(groups) < len(prefixes) and all(need(g) <= usable for g in groups):
+        order = {p: i for i, p in enumerate(prefixes)}
+        groups = sorted((sorted(g, key=order.get) for g in groups), key=lambda g: order[g[0]])
+        reasons.append(f"{len(prefixes)} parts packed into {len(groups)} window(s), each at full depth (largest "
+                       f"~{max(need(g) for g in groups):.1f} GB of {usable:.1f} usable)")
+        return [g if len(g) > 1 else g[0] for g in groups], False, reasons
 
     # Full-speed plan: everything resident, split only what the budget forces. Viable
     # only when at least a 1-block window of the fattest component fits the cap.
@@ -194,9 +237,9 @@ def plan_component_windows(usable_gb, span, n_blocks, comp_gb, overhead_gb,
             plain.extend(_c)
     if plain and len(plain) <= max_sane_windows:
         for prefix in prefixes:
-            need = overhead_gb + len(span) * comp_gb[prefix]
+            need = overhead_gb + len(span_of(prefix)) * comp_gb[prefix]
             if need > usable:
-                reasons.append(f"{prefix} across {len(span)} block(s) would peak "
+                reasons.append(f"{prefix} across {len(span_of(prefix))} block(s) would peak "
                                f"~{need:.1f} GB vs {usable:.1f} usable — depth-split")
         return plain, False, reasons
 
@@ -691,17 +734,26 @@ class RotationOffloader:
         self.resident = new
         logger.info("[rotation-swap] resident blocks now %s (others stream from CPU)", sorted(new))
 
-    # -- interface the DiT forward calls -----------------------------------
-    def prepare_block_devices_before_forward(self, blocks):
+    def view(self, start: int, count: int) -> "OffloaderView":
+        """The offloader for one of the model's block lists when `blocks` is several of them end to end (Klein:
+        8 double then 24 single blocks, each list swapped by its own offloader counting from 0)."""
+        return OffloaderView(self, int(start), int(count))
+
+    def _place(self, idxs):
         for idx in list(self._futures):
             self._await(idx)
-        for i in range(len(blocks)):
+        for i in idxs:
             self._to(i, self.device if i in self.resident else self.cpu)
         if self.cuda:
             torch.cuda.synchronize(self.device)
             torch.cuda.empty_cache()
         # Warm the first streamed block so step 0 isn't a stall.
-        self._prefetch_next(0 if 0 not in self.resident else 1)
+        if idxs:
+            self._prefetch_next(idxs[0] if idxs[0] not in self.resident else idxs[0] + 1)
+
+    # -- interface the DiT forward calls -----------------------------------
+    def prepare_block_devices_before_forward(self, blocks):
+        self._place(range(len(blocks)))
 
     def wait_for_block(self, index: int):
         self._ensure_gpu(index)
@@ -736,3 +788,24 @@ class RotationOffloader:
         self._handles.clear()
         if self._pool is not None:
             self._pool.shutdown(wait=True)
+
+
+class OffloaderView:
+    """One block list inside a RotationOffloader that streams several lists end to end: the same interface the
+    forward calls, with the list's own block index shifted to its place in the streamer. Prefetch runs on across the
+    boundary (the last double block warms the first single block)."""
+
+    def __init__(self, owner: RotationOffloader, start: int, count: int):
+        self.owner, self.start, self.count = owner, start, count
+
+    def prepare_block_devices_before_forward(self, blocks):
+        self.owner._place(range(self.start, self.start + len(blocks)))
+
+    def wait_for_block(self, index: int):
+        self.owner.wait_for_block(self.start + index)
+
+    def submit_move_blocks_forward(self, blocks, index: int):
+        self.owner.submit_move_blocks_forward(None, self.start + index)
+
+    def set_forward_only(self, forward_only: bool):
+        self.owner.set_forward_only(forward_only)

@@ -42,10 +42,18 @@ def _clean(t, what, key):
     return t
 
 
-def save_latents(desc, item, latent, controls=()):
-    _, h, w = latent.shape
+def _latent_key(latent):
+    """A still (C, h, w) -> latent_{h}x{w}; a clip (C, T, h, w) -> latent_{T}x{h}x{w} (H3's rule - both start
+    `latent_`, which is all the dataset collate looks at)."""
+    return "latent_" + "x".join(str(d) for d in latent.shape[1:])
+
+
+def save_latents(desc, item, latent, controls=(), extra=None):
+    """extra: further tensors the driver stores beside the latent (e.g. a clip's audio rows), keyed as given."""
     os.makedirs(os.path.dirname(item.latent_cache_path), exist_ok=True)
-    sd = {f"latent_{h}x{w}": _clean(latent, "latent", item.item_key)}
+    sd = {_latent_key(latent): _clean(latent, "latent", item.item_key)}
+    for k, v in (extra or {}).items():
+        sd[k] = _clean(v, k, item.item_key)
     for i, c in enumerate(controls):
         sd[f"latent_control_{i}_{c.shape[-2]}x{c.shape[-1]}"] = _clean(c, "control latent", item.item_key)
     save_file(sd, item.latent_cache_path, metadata={
@@ -120,6 +128,8 @@ def main():
     p.add_argument("--slider", action="store_true",
                    help="the control_directory holds a slider's other pole: cache its latents, encode captions "
                         "plainly (not as edit pairs)")
+    p.add_argument("--aux", action="append", default=[], metavar="KEY=VALUE",
+                   help="a further model file or option for the family's own caching (e.g. audio_vae=PATH)")
     args = p.parse_args()
     from fizgig.families.quant import apply_vram_cap
     apply_vram_cap()                # FIZGIG_SIM_VRAM_GB: behave like a smaller card
@@ -143,6 +153,9 @@ def main():
             raise SystemExit(f"{len(many)} after-image(s) match more than one before-image (e.g. {', '.join(many[:3])}): "
                              f"keep one before-image per after-image, named the same")
 
+    aux = dict(a.split("=", 1) for a in args.aux if "=" in a)
+    if driver.cache_stage(args.stage, datasets, args, device, aux):
+        return                              # the family caches in its own layout (H3)
     if args.stage == "latents":
         from fizgig.scripts.cache_latents import encode_datasets
         vae = driver.load_vae(args.model, device)

@@ -30,7 +30,7 @@ def save_latent_cache_minimax(item_info: ItemInfo, latent: torch.Tensor,
                               audio_latent: torch.Tensor = None,
                               audio_only: bool = False,
                               still_latent: torch.Tensor = None,
-                              still_frame: int = None) -> None:
+                              still_frame: int = None, controls=()) -> None:
     """Save an H3 VAE latent to the item's cache file, optionally with the clip's audio.
 
     Two shapes, two keys, and the still one is unchanged on purpose:
@@ -82,6 +82,10 @@ def save_latent_cache_minimax(item_info: ItemInfo, latent: torch.Tensor,
         assert still_latent.dim() == 3, f"still_latent must be (C, H, W), got {tuple(still_latent.shape)}"
         sd["still_latent"] = still_latent.detach().cpu().contiguous()
         sd["still_frame"] = torch.tensor(int(still_frame if still_frame is not None else 0))
+    for i, c in enumerate(controls):
+        # a slider's other pole (a photo's pair, or a clip's pair clip), keyed as the shared loader reads it:
+        # latent_control_{i}_{dims} -> latents_control_{i}
+        sd[f"latent_control_{i}_{'x'.join(str(d) for d in c.shape[1:])}"] = c.detach().cpu().contiguous()
     for key, value in sd.items():
         if value.is_floating_point() and torch.isnan(value).any():
             logger.warning(f"NaN in {key} for {item_info.item_key} - replaced with 0")
@@ -210,6 +214,14 @@ def _encode_clip(vae, item: ItemInfo, audio_vae, device, dtype, clip_still: bool
         # the latent frame count match the DiT's clock and what keeps peak VRAM off the clip's
         # length. See MiniMaxH3VideoVAEEncoder.encode_clip.
         latent = vae.encode_clip(x.to(device, dtype=dtype))[0]   # (24, T', H/16, W/16)
+    controls = []
+    if item.control_content:
+        # a clip-pair slider: the other pole's clip, encoded the same way
+        pf = torch.from_numpy(np.stack(item.control_content))
+        px = pf.permute(3, 0, 1, 2).unsqueeze(0).float() / 127.5 - 1.0
+        with torch.no_grad():
+            ctrl = vae.encode_clip(px.to(device, dtype=dtype))[0]
+        controls.append(ctrl.cpu())
 
     still_latent, still_frame = None, None
     if clip_still:
@@ -271,7 +283,7 @@ def _encode_clip(vae, item: ItemInfo, audio_vae, device, dtype, clip_still: bool
                 f" + audio {tuple(audio_rows.shape)}" if audio_rows is not None else " (no audio)")
     save_latent_cache_minimax(item, latent.cpu(), audio_latent=audio_rows,
                               still_latent=None if still_latent is None else still_latent.cpu(),
-                              still_frame=still_frame)
+                              still_frame=still_frame, controls=controls)
 
 
 # --- audio-only voice items --------------------------------------------------
@@ -370,8 +382,15 @@ def encode_and_save_latents(vae, batch: List[ItemInfo], audio_vae=None,
     for b, item in enumerate(batch):
         latent = latents[b]                        # (24, 1, H/16, W/16)
         latent = latent.squeeze(1) if latent.dim() == 4 else latent  # -> (24, H/16, W/16)
-        logger.info(f"latent cache: {item.item_key} -> {tuple(latent.shape)}")
-        save_latent_cache_minimax(item, latent)
+        controls = []
+        for c in item.control_content or []:      # a photo-pair slider's other pole
+            cx = torch.from_numpy(np.asarray(c)[..., :3]).permute(2, 0, 1)[None].float() / 127.5 - 1.0
+            with torch.no_grad():
+                cz = vae.encode(cx.to(device, dtype=dtype))[0]
+            controls.append((cz.squeeze(1) if cz.dim() == 4 else cz).cpu())
+        logger.info(f"latent cache: {item.item_key} -> {tuple(latent.shape)}"
+                    + (f" + {len(controls)} pair image(s)" if controls else ""))
+        save_latent_cache_minimax(item, latent, controls=controls)
 
 
 @torch.no_grad()

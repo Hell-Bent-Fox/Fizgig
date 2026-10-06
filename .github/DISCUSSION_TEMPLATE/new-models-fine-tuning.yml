@@ -1,0 +1,36 @@
+title: "[Model] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This category is for a model you plan to add to Fizgig, or fine-tuning you plan to add to a model it already supports, and to send as a pull request. Bug reports, questions and feature requests go in [Issues](https://github.com/shootthesound/Fizgig/issues).
+
+        Read the [driver guide](https://github.com/shootthesound/Fizgig/tree/master/docs/drivers) first.
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: Its name and version, or the existing Fizgig model you want to add fine-tuning to.
+    validations:
+      required: true
+  - type: textarea
+    id: links
+    attributes:
+      label: Weights and reference implementation
+      description: Where the model files live (Hugging Face etc.) and the code you'll check parity against (diffusers, ComfyUI, the original repo). Note the licence.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: What you plan to build
+      description: LoRA training, sliders, edit training, fine-tuning, the workbench tabs... the guide's checklist lists what a finished model includes.
+    validations:
+      required: true
+  - type: checkboxes
+    id: pr
+    attributes:
+      label: Pull request
+      options:
+        - label: I plan to build this and send it as a pull request.
+          required: true

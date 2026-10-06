@@ -1,8 +1,8 @@
-<h1 align="center">Fizgig — LoRA & Fine-tune Studio for Klein 9B, Krea 2, MiniMax H3 & Qwen Image 2.1</h1>
+<h1 align="center">Fizgig — LoRA & Fine-tune Studio for Klein 9B, Krea 2, MiniMax H3, Qwen Image 2.1, SDXL & Anima</h1>
 
 <p align="center">
-  <strong>Fine-tune base models on consumer GPUs — down to 16 GB. Fix broken LoRAs without retraining. Remix any LoRA into new variations in seconds.</strong><br>
-  A train · fine-tune · repair · explore workbench built end-to-end for <strong>Flux 2 Klein 9B</strong>, <strong>Krea 2</strong>, <strong>MiniMax H3</strong> and <strong>Qwen Image 2.1</strong> — training on photos, video, sound and voices, from quick LoRAs to the full base model.
+  <strong>Fine-tune base models on consumer GPUs — down to 8 GB. Fix broken LoRAs without retraining. Remix any LoRA into new variations in seconds.</strong><br>
+  A train · fine-tune · repair · explore workbench built end-to-end for <strong>Flux 2 Klein 9B</strong>, <strong>Krea 2</strong>, <strong>MiniMax H3</strong>, <strong>Qwen Image 2.1</strong>, <strong>SDXL</strong> and <strong>Anima</strong> — training on photos, video, sound and voices, from quick LoRAs to the full base model.
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=yrz0l6URGGk"><img src="assets/hero.png" alt="Fizgig LoRA & Fine-tune Studio — watch the full video tutorial" width="600"></a>
+  <a href="https://www.youtube.com/watch?v=yrz0l6URGGk"><img src="logo.jpg" alt="Fizgig LoRA & Fine-tune Studio — watch the full video tutorial" width="600"></a>
 </p>
 
 <p align="center">
@@ -25,15 +25,15 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/models-Klein%209B%20%2B%20Krea%202%20%2B%20MiniMax%20H3%20%2B%20Qwen%20Image%202.1-blue?style=for-the-badge" alt="Klein 9B + Krea 2 + MiniMax H3 + Qwen Image 2.1">
+  <img src="https://img.shields.io/badge/models-Klein%209B%20%2B%20Krea%202%20%2B%20MiniMax%20H3%20%2B%20Qwen%20Image%202.1%20%2B%20SDXL%20%2B%20Anima-blue?style=for-the-badge" alt="Klein 9B + Krea 2 + MiniMax H3 + Qwen Image 2.1 + SDXL + Anima">
 </p>
 
 > ### 📰 Latest news
+> - **Fizgig 7.0 — Anima and SDXL arrive, fine-tuning for every model, and the driver system is complete - meaning the community can now add models to Fizgig (Docs included).** Anima and SDXL join with LoRA and LoKR training, sliders, fine-tuning and the full workbench. Every model fine-tunes on a 16 GB card (Anima and SDXL from 8 GB), and bigger cards train the whole model at once. [Release notes](docs/RELEASE_NOTES_v7.0.0.md) · [Add your own model](docs/drivers/README.md)
 > - **Fizgig 6.8 — Krea 2 sliders, Ultra mode and Qwen fine-tuning.** Slider LoRAs on Krea 2, with an Ultra mode that holds up at much higher strengths; full fine-tuning for Qwen Image 2.1 (a single character in as little as 30 minutes on a 5090); Repair Studio with nudge buttons, no strength limit and donor saves that look exactly as previewed; and Krea 2 on Fizgig's new driver system, with Klein and MiniMax H3 next. [Release notes](docs/RELEASE_NOTES_v6.8.1.md)
 > - **Fizgig 6.7 — Qwen slider LoRAs.** A LoRA whose strength is a dial between two looks (sad to happy, cool to warm), trained from a few photo pairs or from a few words. [Release notes](docs/RELEASE_NOTES_v6.7.0.md)
 > - **Fizgig 6.6 — Qwen edit LoRAs.** Teach Qwen Image 2.1 your own edit (a grade, a look, a relight) from pairs of original and edited photos, then apply it to any photo. [Release notes](docs/RELEASE_NOTES_v6.6.0.md)
 > - **Fizgig 6.5.1 — Klein on 10 GB cards.** Base precision on the Training tab for Klein, with Auto picking 4-bit on cards under 16 GB; plus Qwen preview fixes. [Release notes](docs/RELEASE_NOTES_v6.5.1.md)
-> - **Fizgig 6.5 — Qwen Image 2.1.** LoRA and LoKR training with Fizgig's own training adapter, turbo previews, the per-image loss watch and every workbench tool, on cards down to 10 GB. [Guide](docs/QWEN_IMAGE.md)
 >
 > [All releases →](https://github.com/shootthesound/Fizgig/releases)
 
@@ -47,7 +47,7 @@ A local trainer and workbench for image and video models. Every trainer makes Lo
 - **Explore** variations: the app mutates a LoRA, you pick favourites, it evolves.
 - **Find** the best epoch by eye: LoRA Royale renders every epoch on one seed with a crossfade, and exports shareable loops.
 - **Profile** which blocks carry identity, style and detail before you touch anything.
-- **Train beyond LoRAs:** LoKR, or the full base model itself on a 16 GB card. A LoRA extracted from a fine-tune came out better than one trained directly at the same rank.
+- **Train beyond LoRAs:** LoKR, or the full base model itself: Anima on an 8 GB card, the larger models on 16 GB. A LoRA extracted from a fine-tune came out better than one trained directly at the same rank.
 
 Memory plans itself: precision, block swap and previews size to your free VRAM, and if a preview can't fit, training keeps going. Fizgig loads kohya, PEFT, OneTrainer, AI-Toolkit and LyCORIS LoRAs, and saves `.safetensors` that drop straight into ComfyUI. Free and open source.
 
@@ -55,10 +55,12 @@ Memory plans itself: precision, block swap and previews size to your free VRAM, 
 
 | Model | Trains on | LoRA | LoKR | Slider / Edit LoRA | Full fine-tune | Smallest card | Guide |
 |---|---|---|---|---|---|---|---|
-| **Flux 2 Klein 9B** | photos | ✅ | — | coming | coming | 10 GB | [Klein 9B](docs/KLEIN.md) |
+| **Flux 2 Klein 9B** | photos | ✅ | ✅ | ✅ slider + edit | ✅ experimental | 10 GB | [Klein 9B](docs/KLEIN.md) |
 | **Krea 2** (12.9B) | photos | ✅ | ✅ | ✅ slider | ✅ experimental | 8 GB | [Krea 2](docs/KREA2.md) |
-| **MiniMax H3** (33B) | photos, video clips, sound, voice | ✅ | ✅ | slider coming | ✅ experimental | 16 GB | [MiniMax H3](docs/MINIMAX_H3.md) |
+| **MiniMax H3** (33B) | photos, video clips, sound, voice | ✅ | ✅ | ✅ slider | ✅ experimental | 16 GB | [MiniMax H3](docs/MINIMAX_H3.md) |
 | **Qwen Image 2.1** | photos | ✅ | ✅ | ✅ slider + edit | ✅ experimental | 10 GB | [Qwen Image 2.1](docs/QWEN_IMAGE.md) |
+| **SDXL** (any checkpoint), experimental | photos | ✅ | ✅ | ✅ slider | ✅ experimental | 8 GB | [7.0 notes](docs/RELEASE_NOTES_v7.0.0.md) |
+| **Anima** (2B), experimental | photos | ✅ | ✅ | ✅ slider | ✅ experimental | 8 GB | [7.0 notes](docs/RELEASE_NOTES_v7.0.0.md) |
 
 Every model gets all five workbench tools. MiniMax H3 also makes **RefMods**, tuned against H3 itself rather than a plain encode ([how do I…?](docs/REFMOD_HOWDOI.md)). Fizgig's Qwen training adapter is [free on Hugging Face](https://huggingface.co/ShootTheSound/Fizgig-Qwen-Image-2.1-Training-Adapter) for any trainer. Full fine-tuning has [its own guide](docs/FINETUNE.md).
 
@@ -75,13 +77,13 @@ Each tool works on your own runs **or any LoRA you've downloaded**, and they han
 ## Training features
 
 - **Presets per model**: pick a ✨ preset on the Training tab and go.
-- **Slider LoRAs** (Krea 2, Qwen Image 2.1): a LoRA whose strength is a dial between two looks, from photo pairs or three prompts. Krea 2's **Ultra mode** trains the composition blocks only, so the dial holds up at much higher strengths. It works best for sliders trained from prompts, and with photo pairs when the change is compositional.
-- **Edit LoRAs** (Qwen Image 2.1): teach an edit from pairs of original and edited photos, then apply it to any photo.
+- **Slider LoRAs** (Klein 9B, Krea 2, MiniMax H3, Qwen Image 2.1, SDXL, Anima): a LoRA whose strength is a dial between two looks, from photo pairs or three prompts. Krea 2's **Ultra mode** trains the composition blocks only, so the dial holds up at much higher strengths. It works best for sliders trained from prompts, and with photo pairs when the change is compositional.
+- **Edit LoRAs** (Klein 9B, Qwen Image 2.1): teach an edit from pairs of original and edited photos, then apply it to any photo.
 - **Adaptive LR**: a plateau tracker that raises or lowers the rate within your Min/Max, with rollback on instability.
 - **Weight averaging (EMA)**, on by default where it's measured to help.
 - **Context LoRA**: train on top of a frozen, active LoRA so the two coexist (a face on a style, an outfit on a character). No other trainer does this.
 - **Pause and resume** with full state, plus a **training queue** for back-to-back runs.
-- **The trainer curates your dataset while it trains** (Krea 2, Qwen Image 2.1). Every image starts as useful training data; the watch follows each one's loss, and only when an image stops teaching the model does it step in: throttle it, recaption it, and as a last resort set it aside. It also tells you when the whole run has plateaued. No other trainer does this.
+- **The trainer curates your dataset while it trains** (every model except MiniMax H3). Every image starts as useful training data; the watch follows each one's loss, and only when an image stops teaching the model does it step in: throttle it, recaption it, and as a last resort set it aside. It also tells you when the whole run has plateaued. No other trainer does this.
 - **A sample gallery that scores likeness** live, and a run visualiser to scrub epochs.
 - **Dataset prep**: AI captions with Qwen3-VL or Florence-2, bilingual captions, face crops, and a Look Consistency Filter.
 - **Gizmo** (MiniMax H3): cut clips with scene detection, crop to the subject, and record or segment a voice dataset with Whisper transcription.
@@ -151,7 +153,7 @@ Renting through the [RunPod link](https://console.runpod.io/deploy?type=GPU&gpu=
 
 Fizgig is open source under the **[Apache License 2.0](LICENSE)** — free to use, modify, and redistribute, including commercially, with attribution and no warranty. Third-party components under compatible permissive licenses (and other terms where noted) are listed in **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)**.
 
-The **Automagic v3 optimizer**, the Krea 2 **MMDiT backbone and flow-matching sampler**, and Ostris's MiniMax H3 **training adapter** all come from **[@ostris](https://github.com/ostris)** — the first two from [AI-Toolkit](https://github.com/ostris/ai-toolkit) under the MIT licence, the adapter downloaded as a model rather than bundled. The default H3 training adapter comes from **[circlestone-labs](https://huggingface.co/circlestone-labs)**, also downloaded as a model.
+The **Automagic v3 optimizer**, the Krea 2 **MMDiT backbone and flow-matching sampler**, and Ostris's MiniMax H3 **training adapter** all come from **[@ostris](https://github.com/ostris)** — the first two from [AI-Toolkit](https://github.com/ostris/ai-toolkit) under the MIT licence, the adapter downloaded as a model rather than bundled. The default H3 training adapter comes from **[circlestone-labs](https://huggingface.co/circlestone-labs)**, also downloaded as a model. Anima's model code is adapted from kohya-ss's [sd-scripts](https://github.com/kohya-ss/sd-scripts) under the Apache licence.
 
 Copyright © 2026 Peter Neill.
 

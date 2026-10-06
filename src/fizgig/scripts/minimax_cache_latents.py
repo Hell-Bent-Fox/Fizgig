@@ -90,7 +90,12 @@ def main():
         ImageDirectoryDatasource.captions_optional = True
         logger.info("[cache] captions optional — every image is taken, captioned or not")
     datasets = generate_dataset_group_by_blueprint(blueprint.dataset_group).datasets
+    cache_latents(args, datasets, device)
 
+
+def cache_latents(args, datasets, device):
+    """The latent stage over loaded datasets (args: vae, audio_vae, clip_still, skip_existing, keep_cache,
+    num_workers, batch_size) - this script's, and the H3 family driver's."""
     logger.info(f"Loading H3 video VAE from {args.vae}")
     vae = MiniMaxH3VideoVAEEncoder()
     with safe_open(args.vae, framework="pt", device="cpu") as f:
@@ -126,6 +131,17 @@ def main():
         from fizgig.dataset.image_dataset import ImageDataset as _ID
         args.needs_reencode = (lambda path: _ID.latent_cache_frames(path) > 1
                                and not _ID.latent_cache_has_still(path))
+    # a slider's pairs added (or removed) since the cache was written: those files go through the encoder again
+    pairs = any(getattr(ds, "has_control", False) for ds in datasets)
+    _rule = getattr(args, "needs_reencode", None)
+
+    def _has_controls(path):
+        try:
+            with safe_open(path, framework="pt") as f:
+                return any(k.startswith("latent_control_") for k in f.keys())
+        except Exception:
+            return False
+    args.needs_reencode = lambda path: _has_controls(path) != pairs or bool(_rule and _rule(path))
     encode_datasets(datasets, lambda batch: encode_and_save_latents(vae, batch, audio_vae,
                                                                     clip_still=args.clip_still), args)
 

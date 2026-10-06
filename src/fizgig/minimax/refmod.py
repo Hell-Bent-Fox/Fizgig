@@ -720,9 +720,9 @@ def plan_and_load_dit(dit_path: str, *, device, dtype, base_quant: str = "auto",
     the sequence plus the training still) — recompute is skipped only when that fits without
     it, as the trainer does; an explicit swap count keeps it on."""
     from fizgig.minimax.loader import load_minimax_h3_dit
-    from fizgig.minimax.trainer import (is_pruned_checkpoint, plan_base_quant, plan_vram,
+    from fizgig.minimax.common import (is_pruned_checkpoint, plan_base_quant, plan_vram,
                                         _INT8_TRANSIENT_GB)
-    from fizgig.minimax import trainer as _tr
+    from fizgig.minimax import common as _tr
     pruned = is_pruned_checkpoint(dit_path)
     mode, n_swap = base_quant, 0
     _ckpt = True
@@ -775,7 +775,7 @@ def refmod_step_loss(dit, mod: torch.Tensor, latents: torch.Tensor, text: torch.
     """One flow-matching loss with the mod riding as the reference block. `mod` is the
     parameter ([1, 24, T, gh, gw] fp32, requires_grad); grads reach it through the DiT's
     condition rows (the frozen base only supplies dX)."""
-    from fizgig.minimax.trainer import sample_sigmas
+    from fizgig.minimax.common import sample_sigmas
     x0 = latents.float()
     _pt, _ph, _pw = getattr(dit, "patch_size", (1, 2, 2))
     H, W = x0.shape[-2], x0.shape[-1]
@@ -829,7 +829,7 @@ def optimize_refmod(dit, group, mod0: torch.Tensor, *, steps: int, lr: float = D
     the training captions. uncond_frac of the steps use the empty-prompt embedding when the
     cache has one, so the mod learns to carry the subject without a particular caption."""
     from torch.utils.data import DataLoader
-    from fizgig.minimax.trainer import _Collator
+    from fizgig.minimax.common import _Collator
     from multiprocessing import Value
     if steps <= 0:
         return mod0.detach().clone()
@@ -909,7 +909,7 @@ def write_silent_mp4(path: str, frames: torch.Tensor, fps: int = 24) -> None:
     """Decoded frames [3, F, H, W] in [0, 1] -> a playable mp4 with no sound track (the mod is
     a visual reference; its previews carry no audio). Raises on any failure."""
     import subprocess
-    from fizgig.minimax.trainer import _find_ffmpeg
+    from fizgig.minimax.common import _find_ffmpeg
     ffmpeg = _find_ffmpeg()
     if not ffmpeg:
         raise RuntimeError("no ffmpeg available")
@@ -935,7 +935,7 @@ def render_previews(dit, mod: torch.Tensor, encoded_prompts, *, out_dir: str, ou
     `<name>_e<epoch>_<i>_<ts>_<seed>.png`."""
     from PIL import Image
     from fizgig.minimax import sampling
-    from fizgig.minimax.trainer import (park_dit_to_cpu, restore_parked_dit, turbo_adaln_patch,
+    from fizgig.minimax.common import (park_dit_to_cpu, restore_parked_dit, turbo_adaln_patch,
                                         turbo_adaln_unpatch, cap_preview_res_small_card)
     os.makedirs(out_dir, exist_ok=True)
     width, height = cap_preview_res_small_card(width, height)
@@ -1185,7 +1185,7 @@ def run_refmod(*, dataset_config: str, output_dir: str, output_name: str, dit_pa
         decoder = decoder.to(torch.float16).eval()
     turbo = None
     if encoded and turbo_lora_path:
-        from fizgig.minimax.trainer import load_preview_turbo
+        from fizgig.minimax.common import load_preview_turbo
         turbo = load_preview_turbo(dit, turbo_lora_path, turbo_lora_strength)
     sample_dir = os.path.join(output_dir, "sample")
 

@@ -32,6 +32,7 @@ from typing import Optional, Set
 import torch
 from PIL import Image
 
+from fizgig.families.video_workbench import ClipContract
 from fizgig.repair_studio.h3_blocks import block_regex_h3, extract_block_ids_h3
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,19 @@ H3_PREVIEW_FRAMES = 22          # shortest clip with real motion; ~7x a still, 1
 class _Loaded:
     def __init__(self):
         self.is_loaded = True
+
+
+def _locked(fn):
+    """Run under the engine's wiring lock: a LoRA is wired onto the live DiT before its weights reach the GPU, so a
+    render on another thread (the block library builder, a preview) must never run while one is being wired or
+    unwired - a donor swapped mid-library-build died in F.linear with its weights still on the CPU."""
+    import functools
+
+    @functools.wraps(fn)
+    def run(self, *a, **k):
+        with self._wire_lock:
+            return fn(self, *a, **k)
+    return run
 
 
 def _apply_lora(target, sd, multiplier, device, dtype):
@@ -127,8 +141,9 @@ def _collect_adaln_pairs(dit, sd):
     return out
 
 
-class H3RepairEngine:
+class H3RepairEngine(ClipContract):
     def __init__(self):
+        self._wire_lock = threading.RLock()   # renders vs LoRA wiring (see _locked)
         self.pipeline: Optional[_Loaded] = None
         self.dit = None
         self.decoder = None            # fp16 video VAE decoder, parked on CPU between decodes
@@ -293,7 +308,7 @@ class H3RepairEngine:
 
         if self._turbo_lora_path and os.path.exists(self._turbo_lora_path):
             try:
-                from fizgig.minimax.trainer import load_preview_turbo, turbo_adaln_patch
+                from fizgig.minimax.common import load_preview_turbo, turbo_adaln_patch
                 self._turbo_net, _folded = load_preview_turbo(
                     self.dit, self._turbo_lora_path, float(self._turbo_lora_strength))
                 self._turbo_net.to(device=self.device, dtype=self.dtype)
@@ -415,6 +430,7 @@ class H3RepairEngine:
         self.encoder = enc.to(torch.float32).eval()
         return self.encoder
 
+    @_locked
     def set_turbo_strength(self, strength: float) -> None:
         """Re-dial the built-in Turbo LoRA live. 0 switches it OFF — every module disabled
         and the AdaLN injection removed — so the render is the base plus your LoRAs at the
@@ -512,7 +528,7 @@ class H3RepairEngine:
         if not pairs:
             return
         try:
-            from fizgig.minimax.trainer import turbo_adaln_patch
+            from fizgig.minimax.common import turbo_adaln_patch
             turbo_adaln_patch(self.dit, pairs, self.device, self.dtype)
             self._adaln_installed = sig
         except Exception:
@@ -568,10 +584,12 @@ class H3RepairEngine:
             raise RuntimeError("Primary already loaded — call reset() to swap.")
         self._wire_primary(path)
 
+    @_locked
     def _wire_primary(self, path: str) -> None:
         from safetensors.torch import load_file
         from fizgig.networks.lora import ensure_kohya_lora_state_dict
-        sd = ensure_kohya_lora_state_dict(load_file(path))
+        from fizgig.minimax.reflora import lora_tensors
+        sd = ensure_kohya_lora_state_dict(lora_tensors(load_file(path)))     # a ReFLoRA: its weights
         self.primary_network = _apply_lora(self.dit, sd, 1.0, self.device, self.dtype)
         self.primary_path = path
         self.primary_block_ids = extract_block_ids_h3(self.primary_network)
@@ -585,7 +603,7 @@ class H3RepairEngine:
                         len(self._primary_adaln))
         self._invalidate_baseline_cache()
         try:
-            from fizgig.profiler.visualize import compute_lora_hash
+            from fizgig.utils.lora_files import compute_lora_hash
             self.primary_hash = compute_lora_hash(path)
         except Exception:
             self.primary_hash = None
@@ -598,8 +616,9 @@ class H3RepairEngine:
             raise RuntimeError("No primary loaded; call load_primary() first.")
         from fizgig.networks.lora import ensure_kohya_lora_state_dict
         from safetensors.torch import load_file
+        from fizgig.minimax.reflora import lora_tensors
         try:
-            sd = ensure_kohya_lora_state_dict(load_file(path))
+            sd = ensure_kohya_lora_state_dict(lora_tensors(load_file(path)))
         except Exception:
             logger.exception("swap_primary_weights: failed to load %s", path)
             return False
@@ -614,7 +633,7 @@ class H3RepairEngine:
         self.primary_path = path
         self.primary_block_ids = extract_block_ids_h3(self.primary_network)
         try:
-            from fizgig.profiler.visualize import compute_lora_hash
+            from fizgig.utils.lora_files import compute_lora_hash
             self.primary_hash = compute_lora_hash(path)
         except Exception:
             self.primary_hash = None
@@ -629,10 +648,12 @@ class H3RepairEngine:
             raise RuntimeError("Donor already loaded — unload_donor() or reset() first.")
         self._wire_donor(path)
 
+    @_locked
     def _wire_donor(self, path: str) -> None:
         from safetensors.torch import load_file
         from fizgig.networks.lora import ensure_kohya_lora_state_dict
-        sd = ensure_kohya_lora_state_dict(load_file(path))
+        from fizgig.minimax.reflora import lora_tensors
+        sd = ensure_kohya_lora_state_dict(lora_tensors(load_file(path)))
         net = _apply_lora(self.dit, sd, 1.0, self.device, self.dtype)
         net.set_enabled(False)  # donor blocks are opt-in per-slider
         self.donor_network = net
@@ -640,12 +661,27 @@ class H3RepairEngine:
         self.donor_path = path
         self.donor_block_ids = extract_block_ids_h3(net)
         try:
-            from fizgig.profiler.visualize import compute_lora_hash
+            from fizgig.utils.lora_files import compute_lora_hash
             self.donor_hash = compute_lora_hash(path)
         except Exception:
             self.donor_hash = None
         logger.info("H3 donor loaded: %s (%d blocks)", path, len(self.donor_block_ids))
 
+    @_locked
+    def unload_primary(self) -> None:
+        """Take the primary out without a full reset (RefMod Studio changing its LoRA): switched off for good,
+        like unload_donor, and its AdaLN rows dropped."""
+        if self.primary_network is not None:
+            self.primary_network.set_enabled(False)
+            self.primary_network = None
+            self.primary_path = None
+            self.primary_hash = None
+            self.primary_block_ids = set()
+            self._primary_adaln = []
+            self._reinstall_adaln()
+            self._invalidate_baseline_cache()
+
+    @_locked
     def unload_donor(self) -> None:
         if self.donor_network is not None:
             self.donor_network.set_enabled(False)
@@ -655,25 +691,6 @@ class H3RepairEngine:
             self.donor_block_ids = set()
             self._donor_adaln = []
             self._reinstall_adaln()
-
-    def cache_key_for(self, state, *, frames, regime, steps=None, turbo_strength=None,
-                      **_ignored) -> Optional[str]:
-        """The render-cache setup key for this state's render setup, or None before a
-        primary is loaded. Sound doesn't enter the key: audio rows are part of every entry."""
-        if self.primary_network is None or not self.primary_hash:
-            return None
-        from fizgig.repair_studio.h3_render_cache import setup_key
-        steps, strength = self.regime_params(regime, steps, turbo_strength)
-        frames = int(frames or getattr(state, "preview_frames", 0) or H3_PREVIEW_FRAMES)
-        return setup_key(primary_hash=self.primary_hash, donor_hash=self.donor_hash or "",
-                         prompt=state.prompt, seed=int(state.seed), frames=frames,
-                         width=int(state.preview_width), height=int(state.preview_height),
-                         steps=int(steps), turbo_strength=strength,
-                         keyframe_sig=self.keyframe_signature(state),
-                         int8_attention=bool(getattr(self, "int8_attention", False)),
-                         primary_scale=float(getattr(state, "primary_scale", 1.0)),
-                         donor_scale=float(getattr(state, "donor_scale", 1.0)),
-                         dit=os.path.basename(getattr(self, "dit_path", "") or ""))
 
     # ----- slider state ------------------------------------------------------
     def apply_state(self, state) -> None:
@@ -1092,6 +1109,7 @@ class H3RepairEngine:
                 pass
 
     # ----- preview -----------------------------------------------------------
+    @_locked
     def generate_preview(self, state, *, seed: Optional[int] = None,
                          prompt: Optional[str] = None, width: Optional[int] = None,
                          height: Optional[int] = None, steps: Optional[int] = None,
@@ -1190,6 +1208,7 @@ class H3RepairEngine:
         return Image.fromarray(arr)
 
     # ----- clip primitives (Repair Studio video mode / effect lattice) --------
+    @_locked
     def render_latent(self, state, *, seed: Optional[int] = None,
                       prompt: Optional[str] = None, width: Optional[int] = None,
                       height: Optional[int] = None, frames: Optional[int] = None,
@@ -1435,40 +1454,28 @@ class H3RepairEngine:
     # the soundtrack when an audio VAE is configured, and the middle frame (what the main
     # panel, the metrics strip and the Royale workers still judge). Dial = 4 steps at Turbo
     # 1.0 (the fast loop), Confirm = 6 at 0.75 (the render that matches training previews).
-    REGIMES = {"dial": (4, 1.0), "confirm": (6, 0.75)}
+    # The calls the tabs make (render_clip, baseline_clip, nolora_clip, clip_from_cache, ...) are
+    # the shared video contract (families/video_workbench.py ClipContract); these are H3's hooks.
+    default_clip_frames = H3_PREVIEW_FRAMES
+    supports_keyframes = supports_base_modes = supports_banks = True
 
-    def regime_params(self, regime: str, steps=None, turbo_strength=None):
-        """(steps, turbo_strength) for a regime name — the preset (Dial 4 @ 1.0, Confirm
-        6 @ 0.75) unless the caller dials its own numbers: `steps` and `turbo_strength`
-        override (0 = the Turbo switched off for the render). Without a Turbo LoRA loaded
-        the strength has nothing to dial (None) and the steps default to the plain 20."""
-        if self._turbo_net is None:
-            return (int(steps) if steps else self._steps), None
-        st, tu = self.REGIMES.get(regime, self.REGIMES["confirm"])
-        if steps:
-            st = max(1, int(steps))
-        if turbo_strength is not None:
-            tu = float(turbo_strength)
-        return st, tu
+    def _clip_regimes(self):
+        from fizgig.families.minimax import MINIMAX
+        return {n: (st, tu) for n, st, tu in MINIMAX.clip_regimes}
+
+    def _speed_loaded(self) -> bool:
+        return self._turbo_net is not None
+
+    def _plain_steps(self) -> int:
+        return self._steps
+
+    def _clip_base_state(self):
+        from fizgig.repair_studio.state import SliderState
+        return SliderState.default_h3()
 
     @staticmethod
-    def keyframe_signature(state):
-        """A hashable stand-in for state.keyframes (index + tensor fingerprint per entry) —
-        cheap enough for a cache key, specific enough that a different crop re-renders."""
-        kf = getattr(state, "keyframes", None) or []
-        refs = getattr(state, "references", None) or []
-        if not kf and not refs:
-            return ()
-        sig = []
-        for idx, lat in kf:
-            t = lat.float()
-            sig.append((int(idx), tuple(t.shape), round(float(t.sum()), 3),
-                        round(float(t.abs().mean()), 5)))
-        for i, (_img, lat) in enumerate(refs):
-            t = lat.float()
-            sig.append(("ref", i, tuple(t.shape), round(float(t.sum()), 3),
-                        round(float(t.abs().mean()), 5)))
-        return tuple(sig)
+    def block_label(bid: str) -> str:
+        return "Refiner " + bid.split("_")[2] if bid.startswith("h3_rf_") else "Block " + bid.split("_")[1]
 
     def _int8_tag(self) -> bool:
         """What a clip dict records as its attention: the studio asked for int8 AND the
@@ -1481,77 +1488,13 @@ class H3RepairEngine:
         except Exception:
             return False
 
-    def clip_key(self, state, *, frames, steps, turbo_strength, with_audio):
-        return (self.primary_path, self.donor_path, int(state.seed), state.prompt,
-                int(state.preview_width), int(state.preview_height), int(frames), int(steps),
-                turbo_strength, bool(with_audio), self.keyframe_signature(state),
-                round(float(getattr(state, "primary_scale", 1.0)), 4),
-                round(float(getattr(state, "donor_scale", 1.0)), 4),
-                bool(getattr(self, "int8_attention", False)))
-
-    def render_clip(self, state, *, frames: Optional[int] = None, regime: str = "confirm",
-                    with_audio: bool = True, cache=None, early_step: int = 0,
-                    on_early=None, no_lora: bool = False, steps=None, turbo_strength=None,
-                    decode: bool = True, **_ignored) -> dict:
-        """Render + decode one clip for the slider state. Returns
-        {"latent", "audio_rows", "frames": [PIL...], "wav": [2, L] or None, "middle": PIL,
-         "regime", "steps", "turbo_strength", "frames_n", "cached": bool}.
-
-        cache: a RenderCache for this setup — a state rendered before is served from it
-        (decode only, "cached": True); a fresh render is stored into it under the state's
-        signature. early_step + on_early: "show early" — after pass `early_step` the
-        clean-latent estimate's middle frame is decoded and handed to on_early(pil, step, n)
-        while the remaining passes run. Never fires on a cache hit. no_lora renders the
-        base model alone (see render_latent) under the "nolora" signature."""
-        from fizgig.repair_studio.h3_render_cache import signature, NOLORA_SIG
-        steps, strength = self.regime_params(regime, steps, turbo_strength)
-        frames = int(frames or getattr(state, "preview_frames", 0) or H3_PREVIEW_FRAMES)
-        sig = NOLORA_SIG if no_lora else signature(state)
-        hit = cache.get(sig) if cache is not None else None
-        if hit is not None:
-            lat, aud = hit
-            cached = True
-        else:
-            def _on_denoised(step, n, x0):
-                if on_early is None or step != int(early_step):
-                    return
-                img = self.decode_middle_frame_image(x0)
-                on_early(img, step, n)
-
-            lat, aud = self.render_latent(state, frames=frames, steps=steps,
-                                          turbo_strength=strength,
-                                          on_denoised=_on_denoised if early_step > 0 else None,
-                                          no_lora=no_lora)
-            cached = False
-        if decode:
-            imgs = self.decode_clip_frames(lat)
-            wav = self.decode_audio(aud) if (with_audio and frames > 1) else None
-            middle = imgs[len(imgs) // 2]
-        else:
-            # The library builder: the latent is the entry, a thumb is enough — and not even
-            # that if a cancel is already waiting (the render itself is never thrown away).
-            imgs, wav = [], None
-            _ev = getattr(self, "_cancel_event", None)
-            middle = (None if (_ev is not None and _ev.is_set())
-                      else self.decode_middle_frame_image(lat))
-        clip = {"latent": lat, "audio_rows": aud, "frames": imgs, "wav": wav,
-                "middle": middle, "regime": regime, "steps": steps,
-                "turbo_strength": strength, "frames_n": frames, "cached": cached, "sig": sig,
-                "int8_attention": self._int8_tag()}
-        if cache is not None and not cached:
-            try:
-                cache.put(sig, lat, aud, middle=clip["middle"], regime=regime,
-                          label="No LoRA" if no_lora else self.describe_state(state),
-                          state=None if no_lora else state.to_json())
-            except Exception:
-                logger.exception("render cache: put failed (render still shown)")
-        return clip
-
     def render_refmod(self, *, seed: int, prompt: str, width: int, height: int, frames: int = 1,
                       regime: str = "confirm", ref_latents=None, ref_schedule=None,
                       with_audio: bool = True, early_step: int = 0, on_early=None,
-                      steps=None, turbo_strength=None, ref_images=None, ref_items=None) -> dict:
-        """The RefMod Studio's render: the base model (no LoRA state) with bare reference
+                      steps=None, turbo_strength=None, ref_images=None, ref_items=None,
+                      no_lora: bool = False) -> dict:
+        """The RefMod Studio's render: the base model - with its LoRA when one is loaded (a ReFLoRA's weights; no_lora
+        leaves it out) at default sliders - and bare reference
         latents as condition rows, decoded to the same clip dict render_clip returns
         ({"latent", "audio_rows", "frames", "wav", "middle", "regime", "steps",
         "turbo_strength", "frames_n"}). frames=1 is a still (no sound). No render cache —
@@ -1573,30 +1516,13 @@ class H3RepairEngine:
                                       turbo_strength=strength,
                                       on_denoised=_on_denoised if early_step > 0 else None,
                                       ref_latents=ref_latents, ref_schedule=ref_schedule,
-                                      ref_images=ref_images, ref_items=ref_items)
+                                      ref_images=ref_images, ref_items=ref_items, no_lora=no_lora)
         imgs = self.decode_clip_frames(lat)
         wav = self.decode_audio(aud) if (with_audio and frames > 1) else None
         return {"latent": lat, "audio_rows": aud, "frames": imgs, "wav": wav,
                 "middle": imgs[len(imgs) // 2], "regime": regime, "steps": st,
                 "turbo_strength": strength, "frames_n": frames, "cached": False,
                 "sig": "refmod", "int8_attention": self._int8_tag()}
-
-    def clip_from_cache(self, cache, sig: str, *, regime: str = "dial",
-                        with_audio: bool = True, steps=None, turbo_strength=None) -> Optional[dict]:
-        """A clip dict straight from a cached entry (history strip, peeks, pinned baseline)
-        — decode only, no state needed. None when the entry isn't there."""
-        hit = cache.get(sig) if cache is not None else None
-        if hit is None:
-            return None
-        lat, aud = hit
-        steps, strength = self.regime_params(regime, steps, turbo_strength)
-        imgs = self.decode_clip_frames(lat)
-        wav = self.decode_audio(aud) if (with_audio and len(imgs) > 1) else None
-        return {"latent": lat, "audio_rows": aud, "frames": imgs, "wav": wav,
-                "middle": imgs[len(imgs) // 2], "regime": regime, "steps": steps,
-                "turbo_strength": strength, "frames_n": len(imgs), "cached": True,
-                "int8_attention": self._int8_tag(),
-                "sig": sig, "label": cache.info(sig).get("label", "")}
 
     @torch.no_grad()
     def decode_middle_frame_image(self, latent) -> Image.Image:
@@ -1608,83 +1534,6 @@ class H3RepairEngine:
         finally:
             self._decoder_after_use(dec)
         return Image.fromarray(arr)
-
-    @staticmethod
-    def describe_state(state) -> str:
-        """A short human label for a slider state ("Block 30 off", "3 blocks moved")."""
-        from fizgig.repair_studio.h3_render_cache import signature, BASE_SIG
-        sig = signature(state)
-        if sig == BASE_SIG:
-            return "Baseline"
-        if sig.startswith("off:"):
-            bid = sig[4:]
-            return ("Refiner " + bid.split("_")[2] if bid.startswith("h3_rf_")
-                    else "Block " + bid.split("_")[1]) + " off"
-        if sig.startswith("bank:"):
-            a, b = sig[5:].split("-")
-            return f"Blocks {a}–{b} off"
-        moved = [b for b, bs in state.blocks.items()
-                 if not (bs.primary_enabled and abs(bs.primary_strength - 1.0) < 1e-6
-                         and abs(bs.donor_strength) < 1e-6)]
-        return f"{len(moved)} block{'s' if len(moved) != 1 else ''} moved"
-
-    def baseline_clip(self, state, *, frames: Optional[int] = None, regime: str = "confirm",
-                      with_audio: bool = True, cache=None, steps=None, turbo_strength=None,
-                      **_ignored) -> dict:
-        """The clip for the primary at its load strength / all on, donor off — cached in
-        memory on everything the render depends on (a slider move never re-renders it; a
-        regime, length, size, seed, prompt, scale or keyframe change does) and, through
-        `cache`, on disk."""
-        from fizgig.repair_studio.state import SliderState
-        steps, strength = self.regime_params(regime, steps, turbo_strength)
-        frames = int(frames or getattr(state, "preview_frames", 0) or H3_PREVIEW_FRAMES)
-        key = self.clip_key(state, frames=frames, steps=steps, turbo_strength=strength,
-                            with_audio=with_audio)
-        if self._baseline_clip_key == key and self._baseline_clip is not None:
-            return self._baseline_clip
-        base = SliderState.default_h3()
-        base.seed = state.seed
-        base.prompt = state.prompt
-        base.preview_width = state.preview_width
-        base.preview_height = state.preview_height
-        base.preview_frames = frames
-        base.keyframes = getattr(state, "keyframes", None)
-        base.references = getattr(state, "references", None)
-        base.primary_scale = float(getattr(state, "primary_scale", 1.0))
-        base.donor_scale = float(getattr(state, "donor_scale", 1.0))
-        clip = self.render_clip(base, frames=frames, regime=regime, with_audio=with_audio,
-                                cache=cache, steps=steps, turbo_strength=strength)
-        self._baseline_clip_key = key
-        self._baseline_clip = clip
-        return clip
-
-    def nolora_clip(self, state, *, frames: Optional[int] = None, regime: str = "confirm",
-                    with_audio: bool = True, cache=None, steps=None, turbo_strength=None,
-                    **_ignored) -> dict:
-        """The same seed / prompt / canvas / length / keyframes rendered by the base model
-        with no LoRA at all — the player's third pane. Cached in memory like the baseline
-        (a slider move never re-renders it) and on disk under "nolora"."""
-        from fizgig.repair_studio.state import SliderState
-        steps, strength = self.regime_params(regime, steps, turbo_strength)
-        frames = int(frames or getattr(state, "preview_frames", 0) or H3_PREVIEW_FRAMES)
-        key = self.clip_key(state, frames=frames, steps=steps, turbo_strength=strength,
-                            with_audio=with_audio)
-        if (getattr(self, "_nolora_clip_key", None) == key
-                and getattr(self, "_nolora_clip", None) is not None):
-            return self._nolora_clip
-        base = SliderState.default_h3()
-        base.seed = state.seed
-        base.prompt = state.prompt
-        base.preview_width = state.preview_width
-        base.preview_height = state.preview_height
-        base.preview_frames = frames
-        base.keyframes = getattr(state, "keyframes", None)
-        base.references = getattr(state, "references", None)
-        clip = self.render_clip(base, frames=frames, regime=regime, with_audio=with_audio,
-                                cache=cache, no_lora=True, steps=steps, turbo_strength=strength)
-        self._nolora_clip_key = key
-        self._nolora_clip = clip
-        return clip
 
     def generate_baseline(self, state) -> Image.Image:
         """Baseline = primary at default 1.0 / all enabled, donor off. Cached on
@@ -1918,6 +1767,7 @@ class H3RepairEngine:
         return min(idxs)
 
     # ----- teardown ----------------------------------------------------------
+    @_locked
     def reset(self) -> None:
         """Full unload — drop networks (break forward-hook ref cycles), unpatch the Turbo's
         AdaLN forwards, then the DiT + decoder."""
@@ -1942,7 +1792,7 @@ class H3RepairEngine:
                 except Exception:
                     pass
         try:
-            from fizgig.minimax.trainer import turbo_adaln_unpatch
+            from fizgig.minimax.common import turbo_adaln_unpatch
             turbo_adaln_unpatch(self._turbo_adaln)
             turbo_adaln_unpatch([(m, a, b) for _n, m, a, b in
                                  (self._primary_adaln or []) + (self._donor_adaln or [])])
